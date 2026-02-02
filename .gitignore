@@ -1,0 +1,19 @@
+.env
+__pycache__/
+sql_app.db
+*.pyc
+
+# Python
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Docker
+postgres_data/
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,776 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Military Logistics System",
+        "version": "4.0 - Secured"
+    },
+    "paths": {
+        "/login": {
+            "post": {
+                "summary": "Login For Access Token",
+                "operationId": "login_for_access_token_login_post",
+                "requestBody": {
+                    "content": {
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Body_login_for_access_token_login_post"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Token"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/": {
+            "get": {
+                "summary": "Read Root",
+                "operationId": "read_root__get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/setup/initialize_system": {
+            "post": {
+                "summary": "Initialize System",
+                "operationId": "initialize_system_setup_initialize_system_post",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users/": {
+            "post": {
+                "summary": "Create User",
+                "description": "Register a new user.\n- Password is hashed.\n- First user ever -> MASTER.\n- All others -> USER.",
+                "operationId": "create_user_users__post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UserCreate"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/UserResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users/promote": {
+            "put": {
+                "summary": "Promote User",
+                "description": "Promote a user.\nRequirement: Current user must be MASTER.",
+                "operationId": "promote_user_users_promote_put",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PromoteUserRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/UserResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ]
+            }
+        },
+        "/users/me/equipment": {
+            "get": {
+                "summary": "Get My Equipment",
+                "description": "Get equipment held by the currently logged-in user.",
+                "operationId": "get_my_equipment_users_me_equipment_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/EquipmentResponse"
+                                    },
+                                    "type": "array",
+                                    "title": "Response Get My Equipment Users Me Equipment Get"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ]
+            }
+        },
+        "/equipment/": {
+            "post": {
+                "summary": "Create Equipment",
+                "operationId": "create_equipment_equipment__post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/EquipmentCreate"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EquipmentResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ]
+            }
+        },
+        "/equipment/assign_owner/": {
+            "post": {
+                "summary": "Assign Owner",
+                "operationId": "assign_owner_equipment_assign_owner__post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AssignOwnerRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ]
+            }
+        },
+        "/tickets/": {
+            "get": {
+                "summary": "Get All Tickets",
+                "operationId": "get_all_tickets_tickets__get",
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Status"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/TicketResponse"
+                                    },
+                                    "title": "Response Get All Tickets Tickets  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/analytics/unit_readiness": {
+            "get": {
+                "summary": "Get Unit Readiness",
+                "operationId": "get_unit_readiness_analytics_unit_readiness_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/UnitReadinessResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ]
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "AssignOwnerRequest": {
+                "properties": {
+                    "equipment_id": {
+                        "type": "integer",
+                        "title": "Equipment Id"
+                    },
+                    "owner_id": {
+                        "type": "integer",
+                        "title": "Owner Id"
+                    },
+                    "acting_user_id": {
+                        "type": "integer",
+                        "title": "Acting User Id"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "equipment_id",
+                    "owner_id",
+                    "acting_user_id"
+                ],
+                "title": "AssignOwnerRequest"
+            },
+            "Body_login_for_access_token_login_post": {
+                "properties": {
+                    "grant_type": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "pattern": "^password$"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Grant Type"
+                    },
+                    "username": {
+                        "type": "string",
+                        "title": "Username"
+                    },
+                    "password": {
+                        "type": "string",
+                        "format": "password",
+                        "title": "Password"
+                    },
+                    "scope": {
+                        "type": "string",
+                        "title": "Scope",
+                        "default": ""
+                    },
+                    "client_id": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Client Id"
+                    },
+                    "client_secret": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "format": "password",
+                        "title": "Client Secret"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "username",
+                    "password"
+                ],
+                "title": "Body_login_for_access_token_login_post"
+            },
+            "EquipmentCreate": {
+                "properties": {
+                    "catalog_name": {
+                        "type": "string",
+                        "title": "Catalog Name"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "catalog_name"
+                ],
+                "title": "EquipmentCreate"
+            },
+            "EquipmentResponse": {
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Type"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "smart_description": {
+                        "type": "string",
+                        "title": "Smart Description"
+                    },
+                    "compliance_check": {
+                        "type": "string",
+                        "title": "Compliance Check"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "type",
+                    "status",
+                    "smart_description",
+                    "compliance_check"
+                ],
+                "title": "EquipmentResponse"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "PromoteUserRequest": {
+                "properties": {
+                    "target_user_id": {
+                        "type": "integer",
+                        "title": "Target User Id"
+                    },
+                    "new_role": {
+                        "$ref": "#/components/schemas/UserRole"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "target_user_id",
+                    "new_role"
+                ],
+                "title": "PromoteUserRequest"
+            },
+            "TicketResponse": {
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    },
+                    "equipment_id": {
+                        "type": "integer",
+                        "title": "Equipment Id"
+                    },
+                    "fault_type_id": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Fault Type Id"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "description": {
+                        "type": "string",
+                        "title": "Description"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    },
+                    "closed_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Closed At"
+                    },
+                    "is_false_alarm": {
+                        "type": "boolean",
+                        "title": "Is False Alarm"
+                    },
+                    "tech_notes": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Tech Notes"
+                    },
+                    "timestamp": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Timestamp"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "equipment_id",
+                    "fault_type_id",
+                    "status",
+                    "description",
+                    "created_at",
+                    "closed_at",
+                    "is_false_alarm",
+                    "tech_notes",
+                    "timestamp"
+                ],
+                "title": "TicketResponse"
+            },
+            "Token": {
+                "properties": {
+                    "access_token": {
+                        "type": "string",
+                        "title": "Access Token"
+                    },
+                    "token_type": {
+                        "type": "string",
+                        "title": "Token Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "access_token",
+                    "token_type"
+                ],
+                "title": "Token"
+            },
+            "UnitReadinessResponse": {
+                "properties": {
+                    "total_equipment": {
+                        "type": "integer",
+                        "title": "Total Equipment"
+                    },
+                    "functional_count": {
+                        "type": "integer",
+                        "title": "Functional Count"
+                    },
+                    "readiness_score": {
+                        "type": "number",
+                        "title": "Readiness Score"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "total_equipment",
+                    "functional_count",
+                    "readiness_score"
+                ],
+                "title": "UnitReadinessResponse"
+            },
+            "UserCreate": {
+                "properties": {
+                    "personal_number": {
+                        "type": "string",
+                        "title": "Personal Number"
+                    },
+                    "full_name": {
+                        "type": "string",
+                        "title": "Full Name"
+                    },
+                    "battalion": {
+                        "type": "string",
+                        "title": "Battalion"
+                    },
+                    "company": {
+                        "type": "string",
+                        "title": "Company"
+                    },
+                    "is_active_duty": {
+                        "type": "boolean",
+                        "title": "Is Active Duty",
+                        "default": true
+                    },
+                    "role": {
+                        "$ref": "#/components/schemas/UserRole",
+                        "default": "user"
+                    },
+                    "password": {
+                        "type": "string",
+                        "title": "Password"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "personal_number",
+                    "full_name",
+                    "battalion",
+                    "company",
+                    "password"
+                ],
+                "title": "UserCreate"
+            },
+            "UserResponse": {
+                "properties": {
+                    "personal_number": {
+                        "type": "string",
+                        "title": "Personal Number"
+                    },
+                    "full_name": {
+                        "type": "string",
+                        "title": "Full Name"
+                    },
+                    "battalion": {
+                        "type": "string",
+                        "title": "Battalion"
+                    },
+                    "company": {
+                        "type": "string",
+                        "title": "Company"
+                    },
+                    "is_active_duty": {
+                        "type": "boolean",
+                        "title": "Is Active Duty",
+                        "default": true
+                    },
+                    "role": {
+                        "$ref": "#/components/schemas/UserRole",
+                        "default": "user"
+                    },
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "personal_number",
+                    "full_name",
+                    "battalion",
+                    "company",
+                    "id"
+                ],
+                "title": "UserResponse"
+            },
+            "UserRole": {
+                "type": "string",
+                "enum": [
+                    "master",
+                    "technician_manager",
+                    "technician",
+                    "manager",
+                    "user"
+                ],
+                "title": "UserRole"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        },
+        "securitySchemes": {
+            "OAuth2PasswordBearer": {
+                "type": "oauth2",
+                "flows": {
+                    "password": {
+                        "scopes": {},
+                        "tokenUrl": "login"
+                    }
+                }
+            }
+        }
+    }
+}

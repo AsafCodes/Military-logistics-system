@@ -1,0 +1,6 @@
+common used commands:
+.\venv\Scripts\activate
+python seed_data.py
+uvicorn main:app --reload
+cd frontend
+npm run dev
