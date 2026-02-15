@@ -1,0 +1,33 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Database
+*.db
+sql_app.db
+
+# IDE / Editor
+.cursor/
+.vscode/
+.idea/
+
+# Git
+.git/
+.github/
+.gitignore
+
+# Environment
+.env
+
+# Docs
+*.md
+LICENSE
+
+# Frontend (not needed in backend image)
+frontend/node_modules/
+frontend/dist/
