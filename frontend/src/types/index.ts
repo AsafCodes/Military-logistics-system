@@ -117,5 +117,5 @@ export interface FaultType {
 export interface UnitReadiness {
     total_items: number;
     functional_items: number;
-    readiness_score: number;
+    readiness_percentage: number;
 }

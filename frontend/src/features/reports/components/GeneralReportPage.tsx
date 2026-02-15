@@ -52,8 +52,6 @@ export default function GeneralReportPage() {
     const fetchReport = async () => {
         setLoading(true);
         try {
-            // Fetch everything and filter client-side for "Excel-style" speed
-            // Assuming endpoint supports returning all if no params, or widely scoped
             const res = await api.get(`/reports/query`);
             setItems(res.data);
             setLastUpdated(new Date().toLocaleString('he-IL'));
@@ -82,67 +80,38 @@ export default function GeneralReportPage() {
     // 3. Filtering Logic
     const filteredItems = useMemo(() => {
         return items.filter(item => {
-            // Type Filter (OR Logic)
-            if (filters.types.length > 0 && !filters.types.includes(item.item_type)) {
-                return false;
-            }
-
-            // Unit (Substring)
-            if (filters.unit && !item.unit_association.toLowerCase().includes(filters.unit.toLowerCase())) {
-                return false;
-            }
-
-            // Owner (Substring)
-            if (filters.owner && !item.designated_owner.toLowerCase().includes(filters.owner.toLowerCase())) {
-                return false;
-            }
-
-            // Location (Substring)
-            if (filters.location && !item.actual_location?.toLowerCase().includes(filters.location.toLowerCase())) {
-                return false;
-            }
-
-            // Serial (Substring)
-            if (filters.serial && !item.serial_number.toLowerCase().includes(filters.serial.toLowerCase())) {
-                return false;
-            }
-
-            // Reporter (Substring)
-            if (filters.reporter && !item.last_reporter.toLowerCase().includes(filters.reporter.toLowerCase())) {
-                return false;
-            }
-
-            // Status Logic
+            if (filters.types.length > 0 && !filters.types.includes(item.item_type)) return false;
+            if (filters.unit && !item.unit_association.toLowerCase().includes(filters.unit.toLowerCase())) return false;
+            if (filters.owner && !item.designated_owner.toLowerCase().includes(filters.owner.toLowerCase())) return false;
+            if (filters.location && !item.actual_location?.toLowerCase().includes(filters.location.toLowerCase())) return false;
+            if (filters.serial && !item.serial_number.toLowerCase().includes(filters.serial.toLowerCase())) return false;
+            if (filters.reporter && !item.last_reporter.toLowerCase().includes(filters.reporter.toLowerCase())) return false;
             if (filters.status !== "All") {
                 const isReported = item.reporting_status === 'Reported';
                 if (filters.status === "Reported" && !isReported) return false;
                 if (filters.status === "Issues" && isReported) return false;
             }
-
             return true;
         });
     }, [items, filters]);
 
     // Helpers
     const calculateDelay = (lastVerified?: string) => {
-        if (!lastVerified) return "No record";
+        if (!lastVerified) return "אין רשומה";
         const diffMs = new Date().getTime() - new Date(lastVerified).getTime();
         const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
         const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-
-        if (diffDays > 0) return `${diffDays}d ago`;
-        if (diffHours > 0) return `${diffHours}h ago`;
-        return "Just now";
+        if (diffDays > 0) return `לפני ${diffDays} ימים`;
+        if (diffHours > 0) return `לפני ${diffHours} שעות`;
+        return "הרגע";
     };
 
-    // --- New: Export & Print Features ---
     const handleExportExcel = () => {
         if (filteredItems.length === 0) {
-            alert("No items to export.");
+            alert("אין פריטים לייצוא.");
             return;
         }
-
-        const headers = ["ID", "Type", "Unit", "Owner", "Location", "Status", "Serial"];
+        const headers = ["ID", "סוג", "יחידה", "בעלים", "מיקום", "סטטוס", "צד״ק"];
         const rows = filteredItems.map(item => [
             item.id || "",
             item.item_type,
@@ -152,13 +121,9 @@ export default function GeneralReportPage() {
             item.reporting_status,
             item.serial_number
         ]);
-
-        // Escape CSV content (simple version)
         const csvContent = [headers, ...rows]
             .map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
             .join("\n");
-
-        // Add BOM for Hebrew support in Excel
         const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -173,42 +138,41 @@ export default function GeneralReportPage() {
         window.print();
     };
 
-    // Render
     return (
-        <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
+        <div className="flex flex-col h-full glass-card overflow-hidden animate-fade-in" dir="rtl">
             {/* Header / Meta / Actions */}
-            <div className="p-4 border-b border-gray-100 bg-gray-50/50 print:hidden">
+            <div className="p-4 border-b border-border/30 print:hidden">
                 <div className="flex justify-between items-center mb-4">
                     <div>
-                        <h2 className="text-xl font-bold text-gray-800">Inventory Status Report</h2>
-                        <p className="text-xs text-gray-500">Updated: {lastUpdated}</p>
+                        <h2 className="text-xl font-bold text-foreground">דוח מצב מלאי</h2>
+                        <p className="text-xs text-muted-foreground">עודכן: {lastUpdated}</p>
                     </div>
                     <div className="flex gap-2">
                         <button
                             onClick={handleExportExcel}
-                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-sm font-medium flex items-center gap-1 transition-colors"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
                         >
-                            📊 Export Excel
+                            📊 ייצוא Excel
                         </button>
                         <button
                             onClick={handlePrint}
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm font-medium flex items-center gap-1 transition-colors"
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
                         >
-                            🖨️ Print
+                            🖨️ הדפסה
                         </button>
                     </div>
                 </div>
 
                 {/* Counter & Refresh */}
                 <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-600 bg-gray-200 px-2 py-1 rounded">
-                        Showing {filteredItems.length} of {items.length} items
+                    <span className="font-semibold text-muted-foreground bg-accent px-2 py-1 rounded">
+                        מציג {filteredItems.length} מתוך {items.length} פריטים
                     </span>
                     <button
                         onClick={fetchReport}
-                        className="text-gray-500 hover:text-indigo-600 transition-colors text-xs"
+                        className="text-muted-foreground hover:text-primary transition-colors text-xs"
                     >
-                        🔄 Refresh Data
+                        🔄 רענן נתונים
                     </button>
                 </div>
             </div>
@@ -217,36 +181,39 @@ export default function GeneralReportPage() {
             <div className="flex-1 overflow-auto print:overflow-visible">
                 {loading ? (
                     <div className="flex justify-center items-center h-64">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
                     </div>
                 ) : (
-                    <table className="w-full text-left border-collapse">
-                        <thead className="sticky top-0 z-20 bg-gray-50 text-gray-500 shadow-sm print:static">
+                    <table className="w-full text-right border-collapse">
+                        <thead className="sticky top-0 z-20 bg-card shadow-sm print:static">
                             {/* Row 1: Labels */}
-                            <tr className="text-xs uppercase font-semibold border-b border-gray-200">
-                                <th className="px-4 py-3 min-w-[120px]">Type</th>
-                                <th className="px-4 py-3 min-w-[100px]">Serial</th>
-                                <th className="px-4 py-3 min-w-[180px]">Unit</th>
-                                <th className="px-4 py-3 min-w-[140px]">Owner</th>
-                                <th className="px-4 py-3 min-w-[140px]">Location</th>
-                                <th className="px-4 py-3 min-w-[120px]">Status</th>
-                                <th className="px-4 py-3 min-w-[140px]">Verified By</th>
+                            <tr className="text-xs uppercase font-semibold border-b border-border/40 text-muted-foreground">
+                                <th className="px-4 py-3 min-w-[120px]">סוג</th>
+                                <th className="px-4 py-3 min-w-[100px]">צד״ק</th>
+                                <th className="px-4 py-3 min-w-[180px]">יחידה</th>
+                                <th className="px-4 py-3 min-w-[140px]">בעלים</th>
+                                <th className="px-4 py-3 min-w-[140px]">מיקום</th>
+                                <th className="px-4 py-3 min-w-[120px]">סטטוס</th>
+                                <th className="px-4 py-3 min-w-[140px]">מאמת</th>
                             </tr>
                             {/* Row 2: Filters (Hidden on Print) */}
-                            <tr className="bg-white border-b border-gray-200 print:hidden">
+                            <tr className="border-b border-border/30 print:hidden">
                                 <td className="px-2 py-2">
                                     <SearchableMultiSelect
                                         options={uniqueTypes}
                                         selected={filters.types}
                                         onChange={(newTypes) => setFilters(prev => ({ ...prev, types: newTypes }))}
-                                        placeholder="Filter Types..."
+                                        placeholder="סנן סוגים..."
                                     />
                                 </td>
                                 <td className="px-2 py-2">
                                     <input
                                         type="text"
-                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none h-8"
-                                        placeholder="Search SN..."
+                                        className="w-full px-2 py-1 text-xs border border-border/50 rounded
+                                                   bg-background text-foreground
+                                                   focus:ring-1 focus:ring-primary/50 outline-none h-8
+                                                   placeholder:text-muted-foreground/50"
+                                        placeholder="חפש צד״ק..."
                                         value={filters.serial}
                                         onChange={e => setFilters(prev => ({ ...prev, serial: e.target.value }))}
                                     />
@@ -256,14 +223,17 @@ export default function GeneralReportPage() {
                                         options={uniqueUnits}
                                         value={filters.unit}
                                         onChange={(val) => setFilters(prev => ({ ...prev, unit: val }))}
-                                        placeholder="Filter Unit..."
+                                        placeholder="סנן יחידה..."
                                     />
                                 </td>
                                 <td className="px-2 py-2">
                                     <input
                                         type="text"
-                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none h-8"
-                                        placeholder="Filter Owner..."
+                                        className="w-full px-2 py-1 text-xs border border-border/50 rounded
+                                                   bg-background text-foreground
+                                                   focus:ring-1 focus:ring-primary/50 outline-none h-8
+                                                   placeholder:text-muted-foreground/50"
+                                        placeholder="סנן בעלים..."
                                         value={filters.owner}
                                         onChange={e => setFilters(prev => ({ ...prev, owner: e.target.value }))}
                                     />
@@ -271,75 +241,89 @@ export default function GeneralReportPage() {
                                 <td className="px-2 py-2">
                                     <input
                                         type="text"
-                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none h-8"
-                                        placeholder="Filter Loc..."
+                                        className="w-full px-2 py-1 text-xs border border-border/50 rounded
+                                                   bg-background text-foreground
+                                                   focus:ring-1 focus:ring-primary/50 outline-none h-8
+                                                   placeholder:text-muted-foreground/50"
+                                        placeholder="סנן מיקום..."
                                         value={filters.location}
                                         onChange={e => setFilters(prev => ({ ...prev, location: e.target.value }))}
                                     />
                                 </td>
                                 <td className="px-2 py-2">
                                     <select
-                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none h-8 bg-white"
+                                        className="w-full px-2 py-1 text-xs border border-border/50 rounded
+                                                   bg-background text-foreground
+                                                   focus:ring-1 focus:ring-primary/50 outline-none h-8"
                                         value={filters.status}
                                         onChange={e => setFilters(prev => ({ ...prev, status: e.target.value }))}
                                     >
-                                        <option value="All">All Statuses</option>
-                                        <option value="Reported">✅ reported</option>
-                                        <option value="Issues">⚠ Issues</option>
+                                        <option value="All">כל הסטטוסים</option>
+                                        <option value="Reported">✅ דווח</option>
+                                        <option value="Issues">⚠ בעיות</option>
                                     </select>
                                 </td>
                                 <td className="px-2 py-2">
                                     <input
                                         type="text"
-                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none h-8"
-                                        placeholder="Filter Reporter..."
+                                        className="w-full px-2 py-1 text-xs border border-border/50 rounded
+                                                   bg-background text-foreground
+                                                   focus:ring-1 focus:ring-primary/50 outline-none h-8
+                                                   placeholder:text-muted-foreground/50"
+                                        placeholder="סנן מאמת..."
                                         value={filters.reporter}
                                         onChange={e => setFilters(prev => ({ ...prev, reporter: e.target.value }))}
                                     />
                                 </td>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-100 text-sm">
+                        <tbody className="divide-y divide-border/20 text-sm">
                             {filteredItems.length > 0 ? (
                                 filteredItems.map((item, idx) => {
                                     const isReported = item.reporting_status === 'Reported';
                                     const delayTime = calculateDelay(item.last_verified_at);
 
                                     return (
-                                        <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                            <td className="px-4 py-3 font-medium text-gray-800">{item.item_type}</td>
-                                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{item.serial_number}</td>
-                                            <td className="px-4 py-3 text-gray-600 truncate max-w-[180px]" title={item.unit_association}>
+                                        <tr key={idx} className="hover:bg-accent/40 transition-colors">
+                                            <td className="px-4 py-3 font-medium text-foreground">{item.item_type}</td>
+                                            <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{item.serial_number}</td>
+                                            <td className="px-4 py-3 text-muted-foreground truncate max-w-[180px]" title={item.unit_association}>
                                                 {item.unit_association}
                                             </td>
-                                            <td className="px-4 py-3 text-gray-800">{item.designated_owner}</td>
-                                            <td className="px-4 py-3 text-gray-500 text-xs">{item.actual_location || "-"}</td>
+                                            <td className="px-4 py-3 text-foreground">{item.designated_owner}</td>
+                                            <td className="px-4 py-3 text-muted-foreground text-xs">{item.actual_location || "—"}</td>
                                             <td className="px-4 py-3">
                                                 {isReported ? (
-                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-800 border border-green-200">
-                                                        ✓ Reported
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold
+                                                                     text-emerald-700 dark:text-emerald-400
+                                                                     bg-emerald-100 dark:bg-emerald-500/10
+                                                                     border border-emerald-200 dark:border-emerald-500/20">
+                                                        ✓ דווח
                                                     </span>
                                                 ) : (
                                                     <div className="flex flex-col items-start gap-1">
-                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800 border border-red-200">
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold
+                                                                         text-red-700 dark:text-red-400
+                                                                         bg-red-100 dark:bg-red-500/10
+                                                                         border border-red-200 dark:border-red-500/20">
                                                             ⚠ {item.reporting_status}
                                                         </span>
-                                                        <span className="text-[10px] text-red-600 font-medium pl-1">
+                                                        <span className="text-[10px] text-red-600 dark:text-red-400 font-medium pr-1">
                                                             {delayTime}
                                                         </span>
                                                     </div>
                                                 )}
                                             </td>
-                                            <td className="px-4 py-3 text-gray-600 text-xs">
-                                                {item.last_reporter || "-"}
+                                            <td className="px-4 py-3 text-muted-foreground text-xs">
+                                                {item.last_reporter || "—"}
                                             </td>
                                         </tr>
                                     );
                                 })
                             ) : (
                                 <tr>
-                                    <td colSpan={7} className="px-6 py-12 text-center text-gray-400">
-                                        No items match the current filters.
+                                    <td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">
+                                        אין פריטים התואמים את הסינון הנוכחי.
                                     </td>
                                 </tr>
                             )}
@@ -348,8 +332,8 @@ export default function GeneralReportPage() {
                 )}
             </div>
 
-            <div className="p-2 border-t border-gray-100 bg-gray-50 text-[10px] text-gray-400 text-center print:hidden">
-                Displaying {filteredItems.length} records
+            <div className="p-2 border-t border-border/30 text-[10px] text-muted-foreground text-center print:hidden">
+                מציג {filteredItems.length} רשומות
             </div>
         </div>
     );

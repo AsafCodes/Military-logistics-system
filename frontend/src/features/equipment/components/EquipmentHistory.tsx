@@ -46,9 +46,9 @@ export default function EquipmentHistory({ equipmentId, isOpen, onClose }: Equip
 
     const getStatusColor = (status: string) => {
         switch (status.toLowerCase()) {
-            case 'functional': return 'bg-green-100 text-green-800';
-            case 'malfunctioning': return 'bg-red-100 text-red-800';
-            default: return 'bg-gray-100 text-gray-800';
+            case 'functional': return 'text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10';
+            case 'malfunctioning': return 'text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-500/10';
+            default: return 'text-muted-foreground bg-muted';
         }
     };
 
@@ -62,39 +62,72 @@ export default function EquipmentHistory({ equipmentId, isOpen, onClose }: Equip
         }
     };
 
+    const getReasonLabel = (reason: string) => {
+        switch (reason) {
+            case 'verification': return 'אימות';
+            case 'fault_report': return 'דיווח תקלה';
+            case 'repair': return 'תיקון';
+            case 'transfer': return 'העברה';
+            default: return reason;
+        }
+    };
+
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
-                <div className="p-4 border-b flex justify-between items-center">
-                    <h2 className="text-lg font-semibold">היסטוריית סטטוס ציוד #{equipmentId}</h2>
-                    <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+            <div className="glass-card w-full max-w-2xl max-h-[80vh] overflow-hidden animate-scale-in" dir="rtl">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-border/30">
+                    <h2 className="text-lg font-bold text-foreground">📜 היסטוריית ציוד #{equipmentId}</h2>
+                    <button
+                        onClick={onClose}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        ✕
+                    </button>
                 </div>
 
-                <div className="p-4 overflow-y-auto max-h-[60vh]">
+                <div className="p-6 overflow-y-auto max-h-[60vh]">
                     {loading ? (
-                        <div className="text-center py-8">טוען...</div>
+                        <div className="text-center py-8">
+                            <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent mx-auto" />
+                            <p className="text-sm text-muted-foreground mt-2">טוען...</p>
+                        </div>
                     ) : history.length === 0 ? (
-                        <div className="text-center py-8 text-gray-500">אין היסטוריה זמינה</div>
+                        <div className="text-center py-8 text-muted-foreground">אין היסטוריה זמינה</div>
                     ) : (
-                        <div className="space-y-4">
+                        <div className="space-y-3">
                             {history.map((item) => (
-                                <div key={item.id} className="border-r-4 border-blue-500 pr-4 py-2">
-                                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                                <div
+                                    key={item.id}
+                                    className="border-r-4 border-primary/50 pr-4 py-3 rounded-lg
+                                               bg-accent/30 hover:bg-accent/50 transition-colors"
+                                >
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                         <span>{getReasonIcon(item.change_reason)}</span>
-                                        <span>{new Date(item.created_date).toLocaleString('he-IL')}</span>
-                                        {item.user_name && <span>• {item.user_name}</span>}
+                                        <span className="font-medium text-foreground/80">
+                                            {getReasonLabel(item.change_reason)}
+                                        </span>
+                                        <span>•</span>
+                                        <span>
+                                            {new Date(item.created_date).toLocaleString('he-IL')}
+                                        </span>
+                                        {item.user_name && (
+                                            <>
+                                                <span>•</span>
+                                                <span className="text-foreground/60">{item.user_name}</span>
+                                            </>
+                                        )}
                                     </div>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(item.old_status)}`}>
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${getStatusColor(item.old_status)}`}>
                                             {item.old_status}
                                         </span>
-                                        <span>→</span>
-                                        <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(item.new_status)}`}>
+                                        <span className="text-muted-foreground">→</span>
+                                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${getStatusColor(item.new_status)}`}>
                                             {item.new_status}
                                         </span>
                                     </div>
                                     {item.notes && (
-                                        <p className="text-sm text-gray-600 mt-1">{item.notes}</p>
+                                        <p className="text-sm text-muted-foreground mt-1.5 pr-1">{item.notes}</p>
                                     )}
                                 </div>
                             ))}

@@ -1,15 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, ShieldCheck, ArrowRight } from "lucide-react";
+import { Loader2, ShieldCheck } from "lucide-react";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import NetworkGlobe from "@/components/ui/NetworkGlobe";
 
 // Shadcn UI Components
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import ParticlesBackground from "@/components/ui/ParticlesBackground";
+import { Form, FormControl, FormField, FormItem, FormMessage } from "@/components/ui/form";
 
 // 1. Schema
 const loginSchema = z.object({
@@ -31,6 +31,25 @@ interface LoginPageProps {
 export default function LoginPage({ onLogin }: LoginPageProps) {
     const [isLoading, setIsLoading] = useState(false);
     const [serverError, setServerError] = useState<string | null>(null);
+    const [isDark, setIsDark] = useState(false);
+
+    // Watch for theme changes to pass to Globe
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === "attributes" && mutation.attributeName === "class") {
+                    setIsDark(document.documentElement.classList.contains("dark"));
+                }
+            });
+        });
+
+        observer.observe(document.documentElement, { attributes: true });
+
+        // Initial check
+        setIsDark(document.documentElement.classList.contains("dark"));
+
+        return () => observer.disconnect();
+    }, []);
 
     // 2. React Hook Form
     const form = useForm<LoginFormValues>({
@@ -48,7 +67,6 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         try {
             await onLogin(values);
         } catch (error: any) {
-            // Error from server
             setServerError("שגיאת התחברות: בדוק את הפרטים או את החיבור לרשת.");
         } finally {
             setIsLoading(false);
@@ -56,111 +74,137 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     };
 
     return (
-        <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 dark:bg-slate-900 relative overflow-hidden" dir="rtl">
+        <div className="min-h-screen w-full flex flex-col bg-slate-50 dark:bg-[#020617] text-slate-900 dark:text-slate-50 transition-colors duration-500 overflow-hidden" dir="rtl">
 
-            {/* Layer 0: Particles Background (Bottom) */}
-            <ParticlesBackground className="absolute inset-0 z-0" />
+            {/* Navbar */}
+            <header className="w-full h-16 px-8 flex items-center justify-between z-50 fixed top-0 bg-transparent backdrop-blur-sm">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white">
+                        <div className="w-3 h-3 rounded-full bg-white animate-pulse" />
+                    </div>
+                    <span className="font-bold text-xl tracking-tight">LogicX <span className="text-indigo-600 dark:text-indigo-400">Vector</span></span>
+                </div>
 
-            {/* Layer 1: Decorative Background Blobs (Overlay) */}
-            <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
-                <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-blue-100/50 blur-3xl opacity-60 dark:bg-blue-900/20" />
-                <div className="absolute top-[40%] -right-[10%] w-[40%] h-[40%] rounded-full bg-indigo-100/50 blur-3xl opacity-60 dark:bg-indigo-900/20" />
-            </div>
+                <div className="flex items-center gap-6">
+                    <nav className="hidden md:flex gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
+                        <a href="#" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">Features</a>
+                        <a href="#" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">Solutions</a>
+                        <a href="#" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">Resources</a>
+                    </nav>
+                    <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800 hidden md:block" />
+                    <ThemeToggle />
+                </div>
+            </header>
 
-            {/* Layer 2: Login Card (Top - z-10 for interactivity) */}
-            <Card className="w-full max-w-md mx-4 shadow-2xl border-t-4 border-t-indigo-600 z-10 bg-white/80 backdrop-blur-sm dark:bg-slate-950/80">
-                <CardHeader className="space-y-1 text-center">
-                    <div className="flex justify-center mb-4">
-                        <div className="h-12 w-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
-                            <ShieldCheck size={28} />
+            {/* Main Content */}
+            <main className="flex-1 flex flex-col lg:flex-row relative">
+
+                {/* Left Column: Hero & Form */}
+                <div className="lg:w-[45%] w-full flex flex-col justify-center px-8 lg:px-24 pt-20 z-10">
+                    <div className="animate-in fade-in slide-in-from-bottom-8 duration-700">
+                        <h1 className="text-5xl lg:text-7xl font-bold tracking-tighter leading-[1.1] mb-6">
+                            Connect your world with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">Vector</span>
+                        </h1>
+                        <p className="text-lg text-slate-600 dark:text-slate-400 max-w-md mb-10 leading-relaxed">
+                            Build, track, and manage your logistics with a seamless platform designed for modern command.
+                        </p>
+
+                        <div className="w-full max-w-sm">
+                            <Form {...form}>
+                                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                                    <div className="flex gap-4">
+                                        <FormField
+                                            control={form.control}
+                                            name="personalNumber"
+                                            render={({ field }) => (
+                                                <FormItem className="flex-1">
+                                                    <FormControl>
+                                                        <Input
+                                                            placeholder="מספר אישי"
+                                                            {...field}
+                                                            className="bg-white/50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 h-11 transition-all focus:ring-2 focus:ring-indigo-500"
+                                                            disabled={isLoading}
+                                                        />
+                                                    </FormControl>
+                                                    <FormMessage />
+                                                </FormItem>
+                                            )}
+                                        />
+                                        <FormField
+                                            control={form.control}
+                                            name="password"
+                                            render={({ field }) => (
+                                                <FormItem className="flex-1">
+                                                    <FormControl>
+                                                        <Input
+                                                            type="password"
+                                                            placeholder="סיסמה"
+                                                            {...field}
+                                                            className="bg-white/50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 h-11 transition-all focus:ring-2 focus:ring-indigo-500"
+                                                            disabled={isLoading}
+                                                        />
+                                                    </FormControl>
+                                                    <FormMessage />
+                                                </FormItem>
+                                            )}
+                                        />
+                                    </div>
+
+                                    {serverError && (
+                                        <div className="text-sm text-red-500 bg-red-50 dark:bg-red-900/10 p-2 rounded border border-red-100 dark:border-red-900/20">
+                                            {serverError}
+                                        </div>
+                                    )}
+
+                                    <Button
+                                        type="submit"
+                                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white h-11 font-medium text-md shadow-lg shadow-indigo-500/20 transition-all hover:scale-[1.02]"
+                                        disabled={isLoading}
+                                    >
+                                        {isLoading ? <Loader2 className="animate-spin" /> : "Sign in / התחברות"}
+                                    </Button>
+                                </form>
+                            </Form>
+
+                            <div className="mt-8 flex items-center gap-2 text-xs text-slate-400">
+                                <ShieldCheck className="w-3 h-3" />
+                                <span>Military Grade Encryption</span>
+                                <span className="mx-2">•</span>
+                                <span>SSL/TLS Secured</span>
+                            </div>
                         </div>
                     </div>
-                    <CardTitle className="text-2xl font-bold tracking-tight">
-                        Military Logistics
-                    </CardTitle>
-                    <CardDescription>
-                        מערכת ניהול ובקרה לוגיסטית מאובטחת
-                    </CardDescription>
-                </CardHeader>
+                </div>
 
-                <CardContent>
-                    <Form {...form}>
-                        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                {/* Right Column: 3D Globe */}
+                <div className="lg:w-[55%] w-full h-[50vh] lg:h-auto absolute lg:relative top-0 right-0 opacity-20 lg:opacity-100 pointer-events-none lg:pointer-events-auto">
+                    <div className="w-full h-full absolute inset-0 bg-gradient-to-l from-transparent via-transparent to-slate-50 dark:to-[#020617] z-10" />
+                    <NetworkGlobe isDark={isDark} />
+                </div>
 
-                            {/* Personal Number Field */}
-                            <FormField
-                                control={form.control}
-                                name="personalNumber"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>מספר אישי</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                placeholder="הזן מספר אישי..."
-                                                {...field}
-                                                className="bg-white dark:bg-slate-900/50"
-                                                disabled={isLoading}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
+            </main>
 
-                            {/* Password Field */}
-                            <FormField
-                                control={form.control}
-                                name="password"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>סיסמה</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="password"
-                                                placeholder="••••••••"
-                                                {...field}
-                                                className="bg-white dark:bg-slate-900/50"
-                                                disabled={isLoading}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-
-                            {/* Server Error Message */}
-                            {serverError && (
-                                <div className="p-3 text-sm text-red-500 bg-red-50 rounded-md border border-red-100 flex items-center gap-2">
-                                    Alert: {serverError}
-                                </div>
-                            )}
-
-                            <Button
-                                type="submit"
-                                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white transition-all h-11 text-md shadow-md hover:shadow-lg"
-                                disabled={isLoading}
-                            >
-                                {isLoading ? (
-                                    <>
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                        מתחבר...
-                                    </>
-                                ) : (
-                                    <>
-                                        כניסה למערכת
-                                        <ArrowRight className="ml-2 h-4 w-4" />
-                                    </>
-                                )}
-                            </Button>
-                        </form>
-                    </Form>
-                </CardContent>
-
-                <CardFooter className="flex flex-col space-y-2 text-center text-xs text-gray-500">
-                    <p>חיבור מאובטח (SSL/TLS)</p>
-                    <p>גרסה 4.0 • סביבה מבצעית</p>
-                </CardFooter>
-            </Card>
+            {/* Bottom Stats Bar */}
+            <footer className="w-full py-8 border-t border-slate-200 dark:border-slate-800/50 bg-slate-50/50 dark:bg-[#020617]/50 backdrop-blur-sm z-20">
+                <div className="container mx-auto px-8 grid grid-cols-2 md:grid-cols-4 gap-8">
+                    <div>
+                        <div className="text-3xl font-bold text-slate-900 dark:text-white mb-1">87%</div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">Faster Logistics Flow</div>
+                    </div>
+                    <div>
+                        <div className="text-3xl font-bold text-slate-900 dark:text-white mb-1">10k+</div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">Assets Tracked</div>
+                    </div>
+                    <div>
+                        <div className="text-3xl font-bold text-slate-900 dark:text-white mb-1">24/7</div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">Automated Monitoring</div>
+                    </div>
+                    <div>
+                        <div className="text-3xl font-bold text-slate-900 dark:text-white mb-1">99.9%</div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">Uptime Guarantee</div>
+                    </div>
+                </div>
+            </footer>
         </div>
     );
 }

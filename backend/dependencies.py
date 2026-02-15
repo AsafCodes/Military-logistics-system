@@ -1,17 +1,17 @@
 """
 Authentication and Authorization Dependencies
 """
-
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session, joinedload
+from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from sqlalchemy.orm import Session, joinedload
-
-from . import models, schemas, security
 from .database import get_db
+from . import models
+from . import schemas
+from . import security
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
@@ -21,10 +21,7 @@ verify_password = security.verify_password
 get_password_hash = security.get_password_hash
 create_access_token = security.create_access_token
 
-
-async def get_current_user(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
-):
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -37,34 +34,26 @@ async def get_current_user(
             raise credentials_exception
         token_data = schemas.TokenData(personal_number=username)
     except JWTError:
-        raise credentials_exception from None
-
-    user = (
-        db.query(models.User)
-        .options(joinedload(models.User.profile))
-        .filter(models.User.personal_number == token_data.personal_number)
-        .first()
-    )
+        raise credentials_exception
+    
+    user = db.query(models.User).options(joinedload(models.User.profile)).filter(
+        models.User.personal_number == token_data.personal_number
+    ).first()
     if user is None:
         raise credentials_exception
     return user
 
-
-async def get_current_active_user(
-    current_user: models.User = Depends(get_current_user),
-):
+async def get_current_active_user(current_user: models.User = Depends(get_current_user)):
     if not current_user.is_active_duty:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
-
 def verify_admin_access(user: models.User):
     if user.role != models.UserRole.MASTER and user.role != "master":
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied. Only MASTER can perform this action.",
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Permission denied. Only MASTER can perform this action."
         )
-
 
 def get_daily_status(last_verified_at: Optional[datetime]) -> str:
     now_utc = datetime.utcnow()

@@ -42,24 +42,33 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
-                <div className="p-4 border-b flex justify-between items-center">
-                    <h2 className="text-lg font-semibold">דיווח מצב ציוד #{equipmentId}</h2>
-                    <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+            <div className="glass-card w-full max-w-md animate-scale-in" dir="rtl">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-border/30">
+                    <h2 className="text-lg font-bold text-foreground">🔍 דיווח מצב ציוד #{equipmentId}</h2>
+                    <button
+                        onClick={onClose}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        ✕
+                    </button>
                 </div>
 
-                <form onSubmit={handleSubmit} className="p-4 space-y-4">
+                <form onSubmit={handleSubmit} className="p-6 space-y-4">
                     {error && (
-                        <div className="p-3 bg-red-100 text-red-700 rounded">{error}</div>
+                        <div className="p-3 rounded-lg bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 text-sm">
+                            {error}
+                        </div>
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">סוג דיווח</label>
+                        <label className="block text-sm font-medium text-foreground mb-1">סוג דיווח</label>
                         <select
                             value={formData.verification_type}
                             onChange={(e) => setFormData({ ...formData, verification_type: e.target.value })}
-                            className="w-full border rounded p-2"
+                            className="w-full px-3 py-2 rounded-lg border border-border/50
+                                       bg-background text-foreground
+                                       focus:ring-2 focus:ring-primary/50 outline-none transition-colors"
                         >
                             <option value="presence_check">בדיקת נוכחות</option>
                             <option value="condition_report">דיווח מצב</option>
@@ -68,11 +77,13 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">סטטוס מדווח</label>
+                        <label className="block text-sm font-medium text-foreground mb-1">סטטוס מדווח</label>
                         <select
                             value={formData.reported_status}
                             onChange={(e) => setFormData({ ...formData, reported_status: e.target.value })}
-                            className="w-full border rounded p-2"
+                            className="w-full px-3 py-2 rounded-lg border border-border/50
+                                       bg-background text-foreground
+                                       focus:ring-2 focus:ring-primary/50 outline-none transition-colors"
                         >
                             <option value="Functional">תקין</option>
                             <option value="Malfunctioning">תקול</option>
@@ -82,11 +93,15 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">הערות (אופציונלי)</label>
+                        <label className="block text-sm font-medium text-foreground mb-1">הערות (אופציונלי)</label>
                         <textarea
                             value={formData.findings}
                             onChange={(e) => setFormData({ ...formData, findings: e.target.value })}
-                            className="w-full border rounded p-2 h-24"
+                            className="w-full px-3 py-2 rounded-lg border border-border/50
+                                       bg-background text-foreground
+                                       focus:ring-2 focus:ring-primary/50 outline-none
+                                       h-24 resize-none transition-colors
+                                       placeholder:text-muted-foreground/50"
                             placeholder="תיאור הממצאים..."
                         />
                     </div>
@@ -97,22 +112,29 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
                             id="action_required"
                             checked={formData.action_required}
                             onChange={(e) => setFormData({ ...formData, action_required: e.target.checked })}
+                            className="rounded border-border/50 text-primary
+                                       focus:ring-primary/50"
                         />
-                        <label htmlFor="action_required" className="text-sm">נדרש טיפול נוסף</label>
+                        <label htmlFor="action_required" className="text-sm text-foreground">
+                            נדרש טיפול נוסף
+                        </label>
                     </div>
 
-                    <div className="flex gap-2 pt-2">
+                    <div className="flex gap-3 pt-2">
                         <button
                             type="submit"
                             disabled={loading}
-                            className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+                            className="flex-1 py-2 rounded-lg bg-primary text-primary-foreground
+                                       hover:bg-primary/90 disabled:opacity-50 font-bold
+                                       transition-colors"
                         >
                             {loading ? 'שומר...' : 'שלח דיווח'}
                         </button>
                         <button
                             type="button"
                             onClick={onClose}
-                            className="px-4 py-2 border rounded hover:bg-gray-50"
+                            className="px-4 py-2 rounded-lg border border-border/50
+                                       text-foreground hover:bg-accent transition-colors"
                         >
                             ביטול
                         </button>

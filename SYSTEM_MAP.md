@@ -1,6 +1,6 @@
 # 🗺️ SYSTEM MAP — Military Logistics ("Marker System")
 
-> **Last Updated:** 2026-02-13
+> **Last Updated:** 2026-02-14
 > **Solo Dev Reference.** Read this before touching anything.
 
 ---
@@ -49,6 +49,28 @@ It answers three questions at any moment:
 - **Responsibility:** 20+ boolean flags that control what each role can do (view, transfer, fix, report, etc.). Seeded with 8 predefined profiles (Master → Soldier).
 - **⚠️ Non-Obvious Detail:** The `Profile` class uses `BaseModel := Base` walrus operator assignment (line 203 of `models.py`). This is intentional — don't refactor it.
 
+### Module G: Login Page & 3D Globe ("Orbital" Design)
+- **Files:** `LoginPage.tsx`, `NetworkGlobe.tsx`, `ThemeToggle.tsx`, `r3f.d.ts`
+- **Responsibility:** Full-screen login page with an Orbital-style layout: hero text + inline login form (left 45%), animated 3D particle globe (right 55%), stats bar (bottom), navbar with dark/light theme toggle.
+- **How it works:** `NetworkGlobe.tsx` uses React Three Fiber (`@react-three/fiber`) + drei helpers (`Points`, `PointMaterial`) to render 3,000 uniformly-distributed particles on a sphere — an abstract visual representing data nodes connected by the system. A `<torus>` ring orbits the sphere. Colors, particle size, ring opacity, and glow opacity are all **theme-aware** — dark mode uses electric blue (`#3b82f6`), light mode uses deep violet (`#7c3aed`) with larger particles and higher opacity for visibility on white backgrounds. `ThemeToggle.tsx` toggles `.dark` class on `<html>`, persists to `localStorage`, and `LoginPage.tsx` watches for class changes via `MutationObserver` to pass `isDark` to the globe.
+- **⚠️ Non-Obvious Detail:** The `r3f.d.ts` file must declare every Three.js JSX element used (e.g., `mesh`, `torusGeometry`, `ambientLight`) — missing declarations cause TypeScript build failures.
+
+### Module H: Orbital Dashboard Shell & Page Architecture
+- **Files:** `App.tsx`, `AppShell.tsx`, `index.css` (design tokens)
+- **Responsibility:** Provides the authenticated layout (sidebar + top bar + content area) and React Router page routing for all features.
+- **How it works:** After login, `App.tsx` renders `<AppShell>` wrapping `<Routes>`. `AppShell.tsx` provides a collapsible sidebar (Dashboard, Equipment, Maintenance, Reports, Admin), top bar with user name + role badge + theme toggle + sign out, and a content area that renders the active route's page component. All pages use shared design tokens defined in `index.css` — CSS variables (`--foreground`, `--background`, `--card`, `--primary`, `--border`, `--accent`, etc.) with separate `:root` (light) and `.dark` (dark) values. The `.glass-card` utility class uses `backdrop-blur` + themed borders for glassmorphism.
+- **⚠️ Non-Obvious Detail:** The sidebar's Admin link is conditional on `user.role === 'master'`. The current route is synced via React Router's `useLocation()` + `useNavigate()`, not component state.
+
+**Frontend Route → Page Component Map:**
+
+| Route | Component | Source File |
+|-------|-----------|-------------|
+| `/dashboard` | `DashboardPage` | `features/dashboard/components/DashboardPage.tsx` |
+| `/equipment` | `EquipmentPage` | `features/equipment/components/EquipmentPage.tsx` |
+| `/maintenance` | `MaintenancePage` | `features/maintenance/components/MaintenancePage.tsx` |
+| `/reports` | `GeneralReportPage` | `features/reports/components/GeneralReportPage.tsx` |
+| `/admin` | `AdminPanel` | `features/dashboard/components/AdminPanel.tsx` |
+
 ---
 
 ## 3. 🩸 The Memory & Data Flow (The "Blood")
@@ -89,10 +111,14 @@ It answers three questions at any moment:
 | `solution_types` | Fix categories (Replace, Fix) |
 
 ### Output (Where data goes)
-- **Dashboard UI** → Equipment table, stats grid, compliance badges
-- **Reports** → `GET /reports/query` with dynamic filters → CSV export
-- **Admin Panel** → User management, role promotion, profile assignment
+- **Login Page** → Orbital-style landing with 3D globe, theme toggle, inline login form
+- **Dashboard** (`/dashboard`) → Welcome card, stats grid (4 stat cards with animated rings), equipment preview (top 5), activity feed (last 8 events)
+- **Equipment** (`/equipment`) → Full equipment table with search/filter (by serial, type, status), expandable inline history rows, action modals (Report Fault with fault type picker + "other", Transfer with person/location toggle, Assign Owner with user search), Verification Form, full History modal
+- **Maintenance** (`/maintenance`) → Ticket management: 4 summary stat cards, filter tabs (All/Open/In Progress/Closed), ticket cards with equipment name + fault type + dates, manager "close & fix" action
+- **Reports** (`/reports`) → `GET /reports/query` with dynamic filters → table display, CSV export, print support
+- **Admin** (`/admin`) → User search, role promotion, profile assignment
 - **API Docs** → FastAPI auto-generated at `/docs`
+- **All pages** → Full dark/light theme support via CSS variables (`.glass-card`, `text-foreground`, `bg-background`, etc.), Hebrew-first labels, RTL layout
 
 ---
 
@@ -138,3 +164,5 @@ It answers three questions at any moment:
 17. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
 18. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
+
+19. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. The file `src/r3f.d.ts` provides TypeScript JSX intrinsic element declarations (`mesh`, `group`, `torusGeometry`, etc.) for React Three Fiber — if you add a new Three.js element to the globe, you must also declare it in `r3f.d.ts`. Don't remove these packages or the declaration file.
