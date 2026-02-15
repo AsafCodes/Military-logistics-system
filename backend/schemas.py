@@ -1,6 +1,8 @@
-from pydantic import BaseModel
-from typing import Optional, List
 from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel
+
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -8,34 +10,40 @@ class UnitReadinessResponse(BaseModel):
     functional_items: int
     readiness_percentage: float
 
+
 # --- Token ---
 class Token(BaseModel):
     access_token: str
     token_type: str
 
+
 class TokenData(BaseModel):
     personal_number: Optional[str] = None
     role: Optional[str] = None
 
+
 # --- User ---
 class ProfileResponse(BaseModel):
-    name: str 
+    name: str
     can_view_company_realtime: bool = False
-    can_view_battalion_realtime: bool = False # Added
+    can_view_battalion_realtime: bool = False  # Added
     can_change_maintenance_status: bool = False
     can_change_assignment_others: bool = False
     can_add_category: bool = False
 
+
 class UserBase(BaseModel):
     personal_number: str
     full_name: str
-    role: Optional[str] = "user" 
+    role: Optional[str] = "user"
     battalion: Optional[str] = None
     company: Optional[str] = None
+
 
 class UserCreate(UserBase):
     password: str
     is_active_duty: bool = True
+
 
 class UserResponse(UserBase):
     id: int
@@ -46,66 +54,77 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
+
 class UserLogin(BaseModel):
     personal_number: str
     password: str
+
 
 class PromoteUserRequest(BaseModel):
     target_user_id: int
     new_role: str
 
+
 class UpdateProfileRequest(BaseModel):
     profile_id: int
 
+
 # --- Equipment ---
 class EquipmentCreate(BaseModel):
-    catalog_name: str # e.g. "M4"
+    catalog_name: str  # e.g. "M4"
     serial_number: Optional[str] = None
+
 
 class EquipmentResponse(BaseModel):
     id: int
-    type: str # Computed from catalog
+    type: str  # Computed from catalog
     serial_number: Optional[str]
     status: str
-    
+
     holder_user_id: Optional[int]
     custom_location: Optional[str]
     actual_location_id: Optional[int]
-    
+
     sensitivity: str = "UNCLASSIFIED"
-    
+
     # Smart fields
     item_name: str
     current_state_description: str
     compliance_level: str
     report_status: str
-    compliance_check: str 
+    compliance_check: str
 
     class Config:
         from_attributes = True
+
 
 # --- Actions ---
 class TransferPossessionRequest(BaseModel):
     equipment_id: int
     to_holder_id: Optional[int] = None
-    to_location: Optional[str] = None # e.g. "Armory"
+    to_location: Optional[str] = None  # e.g. "Armory"
+
 
 class AssignOwnerRequest(BaseModel):
     equipment_id: int
     owner_id: int
 
+
 class ReportFaultRequest(BaseModel):
     equipment_id: int
-    fault_name: str 
+    fault_name: str
     description: str
+
 
 class EquipmentVerifyRequest(BaseModel):
     equipment_id: int
-    verification_code: Optional[str] = None 
+    verification_code: Optional[str] = None
+
 
 # --- Setup ---
 class FaultTypeCreate(BaseModel):
     name: str
+
 
 class FaultTypeResponse(BaseModel):
     id: int
@@ -115,23 +134,25 @@ class FaultTypeResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class TicketResponse(BaseModel):
     id: int
     equipment_id: int
     fault_type_id: int
-    
+
     status: str
     description: str
     created_at: Optional[datetime] = None  # Alias for timestamp
     closed_at: Optional[datetime] = None
-    
+
     is_false_alarm: bool = False
     tech_notes: Optional[str] = None
-    
-    timestamp: Optional[datetime] = None # DB field name
+
+    timestamp: Optional[datetime] = None  # DB field name
 
     class Config:
         from_attributes = True
+
 
 class DailyActivityItem(BaseModel):
     timestamp: datetime
@@ -142,6 +163,7 @@ class DailyActivityItem(BaseModel):
 
     class Config:
         from_attributes = True
+
 
 class InventoryReportItem(BaseModel):
     id: int
