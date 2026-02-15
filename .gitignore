@@ -1,15 +1,17 @@
-.env
-__pycache__/
-sql_app.db
-*.pyc
-
 # Python
+__pycache__/
+*.py[cod]
+*$py.class
 venv/
+.env
 .pytest_cache/
+.coverage
+htmlcov/
 
 # Node
 node_modules/
-frontend/node_modules/
+dist/
+coverage/
 
 # Docker
 postgres_data/
@@ -17,3 +19,9 @@ postgres_data/
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
