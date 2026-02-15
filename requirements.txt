@@ -7,10 +7,3 @@ psycopg2-binary
 python-dotenv
 sqlalchemy
 bcrypt==3.2.2
-pytest
-httpx
-python-multipart
-pandas
-openpyxl
-reportlab
-pytz
