@@ -17,5 +17,11 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args)
 # יצירת ה-Session (דרכו אנחנו שומרים ושולפים נתונים)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# המחלקה הבסיסית שכל הטבלאות יירשו ממנה
-Base = declarative_base()
+# --- Dependency ---
+def get_db():
+    """FastAPI dependency for database sessions."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

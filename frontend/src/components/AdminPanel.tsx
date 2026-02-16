@@ -22,7 +22,7 @@ interface AdminPanelProps {
     onClose: () => void;
 }
 
-export default function AdminPanel({ onClose }: AdminPanelProps) {
+export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
     const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
 
     // Search State
@@ -68,7 +68,7 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
     const handleUserSelect = (user: User) => {
         setSelectedUser(user);
         setSelectedProfileId(user.profile?.id.toString() || "");
-        setSearchTerm(""); // Clear search to show "Editor Mode" clearly
+        setSearchTerm("");
         setSearchResults([]);
     };
 
@@ -78,126 +78,149 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
             await api.put(`/users/${selectedUser.id}/profile`, {
                 profile_id: parseInt(selectedProfileId)
             });
-            alert("User profile updated successfully!");
-            setSelectedUser(null); // Return to search
+            alert("פרופיל עודכן בהצלחה!");
+            setSelectedUser(null);
         } catch (err) {
-            alert("Failed to update profile.");
+            alert("עדכון הפרופיל נכשל.");
         }
     };
 
     return (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
-                <div className="bg-slate-900 text-white p-6 flex justify-between items-center">
-                    <div>
-                        <h2 className="text-2xl font-bold">🛡️ Master Admin Panel</h2>
-                        <p className="text-slate-400 text-sm">User Role & Profile Management</p>
+        <div className="space-y-6 animate-fade-in" dir="rtl">
+            {/* Header */}
+            <div className="glass-card p-6">
+                <h2 className="text-xl font-bold text-foreground mb-1">🛡️ ניהול מערכת</h2>
+                <p className="text-sm text-muted-foreground">ניהול תפקידים ופרופילים</p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Left Panel: Find User */}
+                <div className="glass-card overflow-hidden">
+                    <div className="px-6 py-4 border-b border-border/30">
+                        <h3 className="font-bold text-foreground">חיפוש משתמש</h3>
                     </div>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white">✕ Close</button>
-                </div>
+                    <div className="p-6 space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-muted-foreground mb-1">
+                                חיפוש לפי שם או מספר אישי
+                            </label>
+                            <input
+                                type="text"
+                                value={searchTerm}
+                                onChange={e => setSearchTerm(e.target.value)}
+                                className="w-full px-3 py-2 rounded-lg border border-border/50
+                                           bg-background text-foreground
+                                           focus:ring-2 focus:ring-primary/50 outline-none
+                                           placeholder:text-muted-foreground/50
+                                           transition-colors"
+                                placeholder="התחל להקליד..."
+                            />
+                        </div>
 
-                <div className="p-8 overflow-auto flex-1 bg-gray-50 flex gap-8">
-
-                    {/* Left Panel: Find User */}
-                    <div className="w-1/2 bg-white p-6 rounded-xl shadow border border-gray-100 flex flex-col h-full">
-                        <h3 className="text-lg font-bold text-gray-800 mb-4 border-b pb-2">Find User</h3>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Search by Name or ID</label>
-                                <input
-                                    type="text"
-                                    value={searchTerm}
-                                    onChange={e => setSearchTerm(e.target.value)}
-                                    className="w-full border rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                                    placeholder="Start typing..."
-                                />
-                            </div>
-
-                            <div className="flex-1 overflow-y-auto min-h-[200px] border rounded bg-gray-50 p-2 space-y-2">
-                                {isSearching ? (
-                                    <div className="text-center text-gray-400 p-4">Searching...</div>
-                                ) : searchResults.length > 0 ? (
-                                    searchResults.map(u => (
-                                        <div
-                                            key={u.id}
-                                            onClick={() => handleUserSelect(u)}
-                                            className="bg-white p-3 rounded border border-gray-100 cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all group"
-                                        >
-                                            <div className="font-bold text-gray-800 group-hover:text-blue-700">{u.full_name}</div>
-                                            <div className="text-xs text-gray-500">
-                                                ID: {u.personal_number} • Role: {u.role}
-                                            </div>
-                                            <div className="text-xs text-indigo-600 mt-1">
-                                                Current Profile: {u.profile?.name || "None"}
-                                            </div>
+                        <div className="min-h-[200px] border border-border/30 rounded-lg bg-background/50 p-2 space-y-2 overflow-y-auto max-h-[300px]">
+                            {isSearching ? (
+                                <div className="text-center text-muted-foreground p-4">מחפש...</div>
+                            ) : searchResults.length > 0 ? (
+                                searchResults.map(u => (
+                                    <div
+                                        key={u.id}
+                                        onClick={() => handleUserSelect(u)}
+                                        className="p-3 rounded-lg border border-border/30 cursor-pointer
+                                                   hover:border-primary/50 hover:bg-accent/40
+                                                   transition-all group"
+                                    >
+                                        <div className="font-bold text-foreground group-hover:text-primary">
+                                            {u.full_name}
                                         </div>
-                                    ))
-                                ) : (
-                                    searchTerm.length > 2 && <div className="text-center text-gray-400 p-4">No users found.</div>
-                                )}
-                                {!searchTerm && !selectedUser && (
-                                    <div className="text-center text-gray-400 p-4 text-sm mt-10">
-                                        Use the search bar to find a user to edit.
+                                        <div className="text-xs text-muted-foreground">
+                                            מ.א: {u.personal_number} • תפקיד: {u.role}
+                                        </div>
+                                        <div className="text-xs text-primary mt-1">
+                                            פרופיל נוכחי: {u.profile?.name || "ללא"}
+                                        </div>
                                     </div>
-                                )}
-                            </div>
+                                ))
+                            ) : (
+                                searchTerm.length > 2 && (
+                                    <div className="text-center text-muted-foreground p-4">לא נמצאו משתמשים.</div>
+                                )
+                            )}
+                            {!searchTerm && !selectedUser && (
+                                <div className="text-center text-muted-foreground p-4 text-sm mt-10">
+                                    השתמש בחיפוש למעלה למציאת משתמש לעריכה.
+                                </div>
+                            )}
                         </div>
                     </div>
+                </div>
 
-                    {/* Right Panel: Edit User */}
-                    <div className="w-1/2 bg-white p-6 rounded-xl shadow border border-gray-100 flex flex-col h-full">
-                        <h3 className="text-lg font-bold text-gray-800 mb-4 border-b pb-2">Edit User Profile</h3>
-
-                        {selectedUser ? (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-                                    <div className="text-sm text-blue-800 font-bold">Selected User</div>
-                                    <div className="text-2xl font-bold text-blue-900">{selectedUser.full_name}</div>
-                                    <div className="text-blue-700 font-mono text-sm">{selectedUser.personal_number}</div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Matrix Profile</label>
-                                    <p className="text-xs text-gray-500 mb-2">Determines permissions and hierarchy access.</p>
-                                    <select
-                                        value={selectedProfileId}
-                                        onChange={e => setSelectedProfileId(e.target.value)}
-                                        className="w-full border rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium"
-                                        size={10} // Show list style
-                                    >
-                                        <option value="" disabled>-- Select a Profile --</option>
-                                        {profiles.map(p => (
-                                            <option key={p.id} value={p.id} className="py-1">
-                                                {p.name}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                <div className="flex gap-3 mt-auto pt-6">
-                                    <button
-                                        onClick={() => setSelectedUser(null)}
-                                        className="flex-1 px-4 py-2 border rounded hover:bg-gray-50"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={handleSaveProfile}
-                                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-bold shadow-md"
-                                    >
-                                        Save Changes
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 opacity-50">
-                                <div className="text-6xl mb-4">👤</div>
-                                <h4 className="text-xl font-medium text-gray-400">No User Selected</h4>
-                                <p className="text-sm text-gray-400 mt-2">Select a user from the left panel to edit their profile.</p>
-                            </div>
-                        )}
+                {/* Right Panel: Edit User */}
+                <div className="glass-card overflow-hidden">
+                    <div className="px-6 py-4 border-b border-border/30">
+                        <h3 className="font-bold text-foreground">עריכת פרופיל</h3>
                     </div>
 
+                    {selectedUser ? (
+                        <div className="p-6 space-y-6 animate-fade-in">
+                            <div className="p-4 rounded-lg bg-primary/5 dark:bg-primary/10 border border-primary/20">
+                                <div className="text-sm text-primary font-bold">משתמש נבחר</div>
+                                <div className="text-2xl font-bold text-foreground">{selectedUser.full_name}</div>
+                                <div className="text-sm font-mono text-muted-foreground">{selectedUser.personal_number}</div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-muted-foreground mb-1">
+                                    פרופיל מטריצה
+                                </label>
+                                <p className="text-xs text-muted-foreground/70 mb-2">
+                                    קובע הרשאות וגישה לנתוני היררכיה.
+                                </p>
+                                <select
+                                    value={selectedProfileId}
+                                    onChange={e => setSelectedProfileId(e.target.value)}
+                                    className="w-full px-3 py-2 rounded-lg border border-border/50
+                                               bg-background text-foreground
+                                               focus:ring-2 focus:ring-primary/50 outline-none
+                                               transition-colors"
+                                    size={Math.min(profiles.length + 1, 8)}
+                                >
+                                    <option value="" disabled>-- בחר פרופיל --</option>
+                                    {profiles.map(p => (
+                                        <option key={p.id} value={p.id} className="py-1">
+                                            {p.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="flex gap-3 pt-4">
+                                <button
+                                    onClick={() => setSelectedUser(null)}
+                                    className="flex-1 px-4 py-2 rounded-lg border border-border/50
+                                               text-foreground hover:bg-accent transition-colors"
+                                >
+                                    ביטול
+                                </button>
+                                <button
+                                    onClick={handleSaveProfile}
+                                    className="flex-1 px-4 py-2 rounded-lg
+                                               bg-primary text-primary-foreground
+                                               hover:bg-primary/90 font-bold shadow-md
+                                               transition-colors"
+                                >
+                                    שמור שינויים
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center p-8 opacity-50">
+                            <div className="text-6xl mb-4">👤</div>
+                            <h4 className="text-xl font-medium text-muted-foreground">לא נבחר משתמש</h4>
+                            <p className="text-sm text-muted-foreground mt-2">
+                                בחר משתמש מהפאנל השמאלי לעריכת הפרופיל שלו.
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

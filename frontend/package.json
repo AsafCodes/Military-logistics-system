@@ -11,16 +11,28 @@
     "generate-client": "openapi --input ./openapi.json --output ./src/client --client axios"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
     "@tanstack/react-query": "^5.90.20",
     "axios": "^1.13.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-hook-form": "^7.71.1",
+    "react-router-dom": "^7.13.0",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss-animate": "^1.0.7",
+    "three": "^0.182.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.182.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.23",
     "eslint": "^9.39.1",
