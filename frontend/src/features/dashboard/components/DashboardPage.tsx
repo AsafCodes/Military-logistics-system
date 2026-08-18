@@ -6,12 +6,8 @@ import api from '@/api';
 import StatsGrid from './StatsGrid';
 import DailyActivityTable from './DailyActivityTable';
 
-// Interfaces
-interface UnitReadiness {
-    total_items: number;
-    functional_items: number;
-    readiness_score: number;
-}
+// Hooks
+import { useDashboardData } from '../hooks/useDashboardData';
 
 // Types
 import type { User } from '@/types';
