@@ -1,14 +1,19 @@
 """
 Equipment Verification & Status History Router
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import List
 
 from ..database import get_db
 from .. import models, schemas
-from ..dependencies import get_current_user
+from ..dependencies import (
+    get_current_active_user,
+    get_current_user,
+    get_scoped_equipment_or_404,
+    verify_can_report_status,
+)
 
 router = APIRouter(prefix="/verifications", tags=["Verifications"])
 
@@ -17,20 +22,18 @@ router = APIRouter(prefix="/verifications", tags=["Verifications"])
 async def create_verification(
     data: schemas.VerificationCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_active_user)
 ):
     """Create a verification record. Updates equipment status if changed."""
-    equipment = db.query(models.Equipment).filter(
-        models.Equipment.id == data.equipment_id
-    ).first()
-    
-    if not equipment:
-        raise HTTPException(status_code=404, detail="Equipment not found")
-    
+    equipment = get_scoped_equipment_or_404(db, current_user, data.equipment_id)
+    verify_can_report_status(current_user, equipment)
+
+    reported_status = data.reported_status.value
+
     verification = models.Verification(
         equipment_id=data.equipment_id,
         verification_type=data.verification_type,
-        reported_status=data.reported_status,
+        reported_status=reported_status,
         findings=data.findings,
         action_required=data.action_required,
         created_by=current_user.id
@@ -39,12 +42,12 @@ async def create_verification(
     db.flush()
     
     old_status = equipment.status
-    if data.reported_status != old_status:
-        equipment.status = data.reported_status
+    if reported_status != old_status:
+        equipment.status = reported_status
         history = models.EquipmentStatusHistory(
             equipment_id=data.equipment_id,
             old_status=old_status,
-            new_status=data.reported_status,
+            new_status=reported_status,
             change_reason="verification",
             verification_id=verification.id,
             notes=data.findings,

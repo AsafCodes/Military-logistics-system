@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+from .enums import EquipmentStatus
+
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
     total_items: int
@@ -165,7 +167,7 @@ class InventoryReportItem(BaseModel):
 class VerificationCreate(BaseModel):
     equipment_id: int
     verification_type: str
-    reported_status: str
+    reported_status: EquipmentStatus
     findings: Optional[str] = None
     action_required: bool = False
 

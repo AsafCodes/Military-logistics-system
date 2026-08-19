@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from ..database import get_db
-from ..dependencies import get_current_active_user, get_daily_status
+from ..dependencies import get_current_active_user, get_daily_status, scope_equipment_query
 from .. import models
 from .. import schemas
 
@@ -22,40 +22,10 @@ def get_accessible_equipment(
 ):
     """
     Get ALL equipment the user is allowed to see (Matrix Security).
-    CRITICAL: Hierarchical Data Scoping Logic
     """
-    q = db.query(models.Equipment)
-    
-    # 1. Apply Security Filter (Hierarchical Scoping)
-    # Use unit_hierarchy for matching (e.g., "188/53" matches equipment with "188/53/A")
-    user_hierarchy = current_user.unit_hierarchy or current_user.unit_path
-    
-    # MASTER role always sees everything
-    if current_user.role == models.UserRole.MASTER or current_user.role == "master":
-        pass  # All
-    elif current_user.profile and current_user.profile.can_view_all_equipment:
-        pass  # All
-        
-    elif current_user.profile and current_user.profile.can_view_battalion_realtime:
-        if user_hierarchy:
-            parts = user_hierarchy.split('/')
-            if len(parts) >= 2:
-                bat_path = "/".join(parts[:2])
-                q = q.filter(models.Equipment.unit_hierarchy.startswith(bat_path))
-            else:
-                q = q.filter(models.Equipment.unit_hierarchy.startswith(user_hierarchy))
-        else:
-            q = q.filter(models.Equipment.holder_user_id == current_user.id)
+    q = scope_equipment_query(db.query(models.Equipment), current_user)
 
-    elif current_user.profile and current_user.profile.can_view_company_realtime:
-        if user_hierarchy:
-            q = q.filter(models.Equipment.unit_hierarchy.startswith(user_hierarchy))
-        else:
-            q = q.filter(models.Equipment.holder_user_id == current_user.id)
-    else:
-        q = q.filter(models.Equipment.holder_user_id == current_user.id)
-    
-    # 2. Optional text filter 
+    # Optional text filter
     if query_str:
         search = f"%{query_str}%"
         q = q.join(models.CatalogItem).filter(

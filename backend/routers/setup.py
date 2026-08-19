@@ -1,30 +1,12 @@
 """Setup Router - System initialization and fault types"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
 
 from ..database import get_db
-from ..dependencies import get_current_active_user, verify_admin_access
+from ..dependencies import get_current_active_user
 from .. import models
-from .. import security
 
 router = APIRouter(tags=["setup"])
-
-@router.post("/setup/initialize_system")
-def initialize_system(db: Session = Depends(get_db)):
-    """Initialize system with default data (run once)"""
-    if db.query(models.Profile).count() > 0:
-        return {"status": "System already initialized"}
-    
-    # Create default profiles
-    profiles = [
-        models.Profile(name="Master", name_he="מאסטר", can_assign_roles=True, can_view_all_equipment=True),
-        models.Profile(name="Soldier", name_he="חייל", holds_equipment=True, must_report_presence=True)
-    ]
-    db.add_all(profiles)
-    db.commit()
-    
-    return {"status": "System initialized with default profiles"}
 
 @router.get("/profiles")
 def list_profiles(

@@ -9,7 +9,7 @@ import time
 
 # Internal Modules - relative imports within backend package
 from .database import engine
-from . import models
+from .migrations import run_migrations
 
 # Routers
 from .routers import auth, users, equipment, maintenance, setup, reports, analytics, verifications
@@ -30,7 +30,7 @@ def wait_for_db():
     raise Exception("Database connection failed after multiple retries")
 
 wait_for_db()
-models.Base.metadata.create_all(bind=engine)
+run_migrations()
 
 # --- FastAPI App ---
 app = FastAPI(title="Military Logistics System", version="4.1 - Modular")

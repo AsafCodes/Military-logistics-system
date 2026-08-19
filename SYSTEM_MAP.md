@@ -229,7 +229,9 @@ Marker_System/
 
 ### Seed Accounts (Created by `seed_data.py`)
 
-> **All accounts use password: `secret`**
+> **Passwords are generated per account at seed time and printed once to stdout.**
+> They are not stored in plaintext and are not recoverable — capture them from the
+> seed output. Seeding requires `SEED_ENABLED=1`.
 
 | Username | Full Name | Role | Profile | Hierarchy | What they see |
 |----------|-----------|------|---------|-----------|---------------|
@@ -311,32 +313,34 @@ Marker_System/
 
 7. **The `Profile` model uses `BaseModel := Base` (walrus operator).** This is intentional. Don't "fix" it.
 
-8. **`seed_data.py` uses `DROP SCHEMA public CASCADE` then `create_all()`.** This was changed from `drop_all()` because PostgreSQL has tables (`compliance_logs`, `inventory_audits`) with foreign keys not tracked by SQLAlchemy models — `drop_all()` can't resolve the drop order and crashes. Running seed **destroys all data**. Never run in production.
+8. **`seed_data.py` requires `SEED_ENABLED=1` and a local `DATABASE_URL`, and only drops the schema with `--reset`.** Plain `python -m backend.seed_data` runs migrations and populates an empty database, refusing if profile/user rows already exist. `--reset` first runs `DROP SCHEMA public CASCADE` then recreates — this **destroys all data**. The drop uses CASCADE rather than `drop_all()` because PostgreSQL has tables (`compliance_logs`, `inventory_audits`) with foreign keys not tracked by SQLAlchemy models, which `drop_all()` can't order correctly. The host in `DATABASE_URL` must be local (`localhost`, `127.0.0.1`, `::1`, or the compose service `db`); anything else is refused, because `SEED_ENABLED` travels in shell profiles and `.env` files while `DATABASE_URL` is what picks the victim.
 
-9. **`compliance_level` and `current_state_description` are computed properties,** not database columns. Don't try to query/filter by them directly in SQL.
+9. **Schema changes go through Alembic — never `create_all()`.** `backend/migrations.py:run_migrations()` runs `alembic upgrade head` at startup, at seed time, and in the admin bootstrap. To change the schema: edit `backend/models.py`, then `alembic revision --autogenerate -m "what changed"`, review the generated file in `alembic/versions/`, and commit it. `alembic check` reports drift between the models and head. A pre-Alembic database with tables but no `alembic_version` is stamped automatically if it already matches the models, and refused with a diff if it is missing anything they declare — `create_all()` never added columns to existing tables, so older databases can be behind.
 
-10. **The `erasableSyntaxOnly` tsconfig option was removed** because the TypeScript version doesn't support it. Don't add it back.
+10. **`compliance_level` and `current_state_description` are computed properties,** not database columns. Don't try to query/filter by them directly in SQL.
 
-11. **DO NOT define duplicate Pydantic classes in `schemas.py`.** Python uses the **last** definition. A duplicate `UnitReadinessResponse` with `readiness_score` silently overrode the correct one with `readiness_percentage`, causing a 500 crash. Always search for existing classes before adding new ones.
+11. **The `erasableSyntaxOnly` tsconfig option was removed** because the TypeScript version doesn't support it. Don't add it back.
 
-12. **Stale `__pycache__` on Windows can silently use old code.** Python caches `.pyc` files and Windows locks them while any Python process runs. If a code change isn't taking effect, run these 3 steps **in order:**
+12. **DO NOT define duplicate Pydantic classes in `schemas.py`.** Python uses the **last** definition. A duplicate `UnitReadinessResponse` with `readiness_score` silently overrode the correct one with `readiness_percentage`, causing a 500 crash. Always search for existing classes before adding new ones.
+
+13. **Stale `__pycache__` on Windows can silently use old code.** Python caches `.pyc` files and Windows locks them while any Python process runs. If a code change isn't taking effect, run these 3 steps **in order:**
     1. `Get-Process python* | Stop-Process -Force`
     2. `Get-ChildItem -Recurse -Directory -Filter "__pycache__" -Path "c:\Users\asafs\Documents\Marker_System" | Where-Object { $_.FullName -notlike "*\venv\*" } | Remove-Item -Recurse -Force`
     3. `$env:PYTHONDONTWRITEBYTECODE="1"; .\venv\Scripts\python -m uvicorn backend.main:app --port 8000`
 
-13. **When a CORS error shows `Status code: 500`, the real bug is on the backend.** FastAPI's CORS middleware only adds headers to successful responses. A 500 crash means no CORS headers → the browser reports "CORS Missing" instead of "500 Internal Server Error". Always check the backend terminal for the real traceback.
+14. **When a CORS error shows `Status code: 500`, the real bug is on the backend.** FastAPI's CORS middleware only adds headers to successful responses. A 500 crash means no CORS headers → the browser reports "CORS Missing" instead of "500 Internal Server Error". Always check the backend terminal for the real traceback.
 
-14. **The `analytics.py` endpoint returns a plain dict**, not a Pydantic `response_model`. This was done intentionally to avoid `__pycache__` staleness issues with the `UnitReadinessResponse` schema.
+15. **The `analytics.py` endpoint returns a plain dict**, not a Pydantic `response_model`. This was done intentionally to avoid `__pycache__` staleness issues with the `UnitReadinessResponse` schema.
 
-15. **Frontend expects `GET /setup/fault_types/pending`** — this endpoint must exist in `setup.py`. Without it, `DashboardPage.tsx` gets a 405 and fails to set `isManager`, breaking the manager UI.
+16. **Frontend expects `GET /setup/fault_types/pending`** — this endpoint must exist in `setup.py`. Without it, `DashboardPage.tsx` gets a 405 and fails to set `isManager`, breaking the manager UI.
 
-16. **The `reports.py` endpoint returns a plain dict** matching the frontend `GeneralReportItem` interface (`item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. User model has `unit_hierarchy`, NOT `unit_path`.
+17. **The `reports.py` endpoint returns a plain dict** matching the frontend `GeneralReportItem` interface (`item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. User model has `unit_hierarchy`, NOT `unit_path`.
 
-17. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
+18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
-18. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
+19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
 
-19. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. The file `src/r3f.d.ts` provides TypeScript JSX intrinsic element declarations (`mesh`, `group`, `torusGeometry`, etc.) for React Three Fiber — if you add a new Three.js element to the globe, you must also declare it in `r3f.d.ts`. Don't remove these packages or the declaration file.
+20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. The file `src/r3f.d.ts` provides TypeScript JSX intrinsic element declarations (`mesh`, `group`, `torusGeometry`, etc.) for React Three Fiber — if you add a new Three.js element to the globe, you must also declare it in `r3f.d.ts`. Don't remove these packages or the declaration file.
 
 ---
 

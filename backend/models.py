@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, F
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
 from .database import Base # Use shared Base from backend package
+from .enums import EquipmentStatus
 
 # --- Users & Authentication ---
 class UserRole:
@@ -66,7 +67,7 @@ class Equipment(Base):
     serial_number = Column(String, unique=True, nullable=True) 
     
     catalog_item_id = Column(Integer, ForeignKey('catalog_items.id'), nullable=False)
-    status = Column(String, default="Functional") 
+    status = Column(String, default=EquipmentStatus.FUNCTIONAL.value)
     
     # Matrix Security Fields
     sensitivity = Column(String, default="UNCLASSIFIED") 

@@ -12,15 +12,13 @@ from .. import security
 router = APIRouter(tags=["users"])
 
 @router.post("/users/", response_model=schemas.UserResponse)
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def create_user(user: schemas.UserCreate, current_user: models.User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    verify_admin_access(current_user)
+
     if db.query(models.User).filter(models.User.personal_number == user.personal_number).first():
         raise HTTPException(status_code=400, detail="User already exists")
 
-    user_count = db.query(models.User).count()
-    assigned_role = "master" if user_count == 0 else "user"
-    target_profile_name = "Master" if user_count == 0 else "Soldier"
-        
-    profile = db.query(models.Profile).filter(models.Profile.name == target_profile_name).first()
+    profile = db.query(models.Profile).filter(models.Profile.name == "Soldier").first()
     profile_id = profile.id if profile else None
 
     new_user = models.User(
@@ -30,7 +28,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
         company=user.company, 
         password_hash=security.get_password_hash(user.password),
         is_active_duty=user.is_active_duty,
-        role=assigned_role,
+        role=models.UserRole.USER,
         profile_id=profile_id
     )
     db.add(new_user)
