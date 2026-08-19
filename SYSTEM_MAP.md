@@ -28,9 +28,13 @@ Marker_System/
 │   ├── database.py             # SQLAlchemy engine + session (SQLite/PostgreSQL)
 │   ├── models.py               # All ORM models (13 tables)
 │   ├── schemas.py              # All Pydantic request/response schemas
-│   ├── security.py             # JWT + password hashing + Matrix Security filter
-│   ├── dependencies.py         # Auth dependencies + compliance helper
-│   ├── seed_data.py            # Bulk-insert test data (⚠️ destructive)
+│   ├── security.py             # JWT + password hashing + password generation
+│   ├── dependencies.py         # Auth deps + Matrix Security scoping + compliance helper
+│   ├── enums.py                # Shared enumerated types (EquipmentStatus)
+│   ├── profiles.py             # Canonical profile/permission definitions
+│   ├── migrations.py           # Alembic runner; replaces create_all
+│   ├── bootstrap_admin.py      # Out-of-band initial MASTER (not reachable over HTTP)
+│   ├── seed_data.py            # Bulk-insert test data (⚠️ destructive with --reset)
 │   └── routers/                # Modular API endpoints
 │       ├── auth.py             # POST /login
 │       ├── users.py            # CRUD + /users/me + /users/promote
@@ -92,6 +96,8 @@ Marker_System/
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
 ├── Dockerfile.backend          # Python 3.10 + uvicorn
 ├── frontend/Dockerfile         # Node frontend container
+├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
+├── alembic/                    # Migration environment + versions/
 ├── requirements.txt            # Python dependencies
 ├── .env / .env.example         # SECRET_KEY configuration
 └── SYSTEM_MAP.md               # ← You are here
@@ -102,7 +108,7 @@ Marker_System/
 ## 3. 🧠 Core Logic Modules (The "Brains")
 
 ### Module A: Matrix Security Engine
-- **Files:** `security.py` → `get_visible_equipment()`, `equipment.py` → `get_accessible_equipment()`
+- **Files:** `dependencies.py` → `scope_equipment_query()` (the cascade itself), `equipment.py` → `get_accessible_equipment()` (caller)
 - **Responsibility:** Decides **who sees what** based on `unit_hierarchy` path matching.
 - **How it works:** A user with `unit_hierarchy = "188/53"` sees all equipment under `188/53/*`. A soldier only sees their own items.
 - **⚠️ Non-Obvious Detail:** The filter cascades: MASTER → `can_view_all` → `can_view_battalion` → `can_view_company` → personal only. Order matters — it goes broadest to narrowest and the first match wins.
@@ -167,7 +173,7 @@ Marker_System/
 ### Users (`routers/users.py`)
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/users/` | Create user (first user = master) |
+| `POST` | `/users/` | Create user (MASTER only; always creates a plain user) |
 | `PUT` | `/users/promote` | Promote user role (MASTER only) |
 | `GET` | `/users/me` | Current user profile |
 | `GET` | `/users/me/equipment` | Current user's held equipment |
@@ -199,7 +205,6 @@ Marker_System/
 ### Setup (`routers/setup.py`)
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/setup/initialize_system` | Create default profiles (run once) |
 | `GET` | `/profiles` | List all profiles |
 | `GET` | `/setup/fault_types` | List all fault types |
 | `GET` | `/setup/fault_types/pending` | List pending fault types (manager only) |
@@ -224,8 +229,26 @@ Marker_System/
 
 ### Input (Where data starts)
 - **Frontend Forms** → React components → Axios → FastAPI endpoints
-- **Seed Script** → `seed_data.py` bulk-inserts Profiles, Users, Catalogs, Equipment (⚠️ destroys all data first!)
+- **Seed Script** → `seed_data.py` bulk-inserts Profiles, Users, Catalogs, Equipment. Requires `SEED_ENABLED=1` and a local `DATABASE_URL`; only destroys data with `--reset`
 - **JWT Login** → `POST /login` → Token stored in `localStorage`
+
+### Bootstrapping a Fresh System
+
+There is deliberately **no HTTP path** that creates the first administrator. `POST /users/`
+requires an authenticated MASTER, and the old `POST /setup/initialize_system` was removed —
+both were anonymous takeover routes.
+
+To stand up an empty database, run once on the host:
+
+```bash
+BOOTSTRAP_ADMIN_ENABLED=1 python -m backend.bootstrap_admin <personal_number> "<full name>"
+```
+
+It applies migrations, creates the default Master/Soldier profiles from `backend/profiles.py`,
+and prints a generated password **once** — it is not stored in plaintext and cannot be
+recovered. It refuses if a MASTER already exists.
+
+For a populated demo environment instead, use the seed (see hazard note 8).
 
 ### Seed Accounts (Created by `seed_data.py`)
 
@@ -292,6 +315,8 @@ Marker_System/
 | `SECRET_KEY` | `.env` | JWT signing key (required, crashes if missing) |
 | `DATABASE_URL` | `docker-compose.yml` | PostgreSQL connection string |
 | `VITE_API_URL` | `docker-compose.yml` | Backend URL for frontend Axios |
+| `SEED_ENABLED` | shell, per-run | Must be `1` for `seed_data.py` to run at all |
+| `BOOTSTRAP_ADMIN_ENABLED` | shell, per-run | Must be `1` for `bootstrap_admin.py` to create the first MASTER |
 
 ---
 
@@ -303,7 +328,7 @@ Marker_System/
 
 2. **DO NOT remove the `unit_hierarchy` field or change its format.** The entire Matrix Security filter depends on slash-separated paths like `"188/53/A"`. Changing this breaks all visibility logic.
 
-3. **DO NOT change the order of the security filter cascade** in `equipment.py` (MASTER → battalion → company → personal). It's intentionally ordered from broadest to narrowest.
+3. **DO NOT change the order of the security filter cascade** in `dependencies.py` → `scope_equipment_query()` (MASTER → battalion → company → personal). It's intentionally ordered from broadest to narrowest.
 
 4. **DO NOT initialize React state that depends on API data with non-null defaults.** This caused a blank screen crash. Always use `null` initial state and guard with `if (loading)` checks.
 
