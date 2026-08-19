@@ -47,7 +47,9 @@ def run_migrations() -> None:
 
     A database created by the old create_all path has tables but no
     alembic_version, so `upgrade head` would fail trying to recreate them. If
-    such a schema already matches the models it is stamped as the baseline. If
+    such a schema is missing nothing the models declare, it is stamped as the
+    baseline. Note that only missing tables/columns/indexes are treated as
+    drift: a column of the wrong type or nullability will still be stamped. If
     it is missing anything the models declare, we refuse rather than stamp --
     stamping a drifted database records a version it does not actually have,
     and the missing columns then fail at query time instead of at startup.
@@ -60,7 +62,9 @@ def run_migrations() -> None:
         cfg.attributes["connection"] = conn
         inspector = inspect(conn)
 
-        if not inspector.has_table("alembic_version") and inspector.get_table_names():
+        # Gate on a model table, not on any table: a database holding only
+        # untracked legacy tables is not a pre-Alembic schema, it is an empty one.
+        if not inspector.has_table("alembic_version") and inspector.has_table("users"):
             drift = describe_drift(conn)
             if drift:
                 raise RuntimeError(

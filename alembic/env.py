@@ -1,6 +1,6 @@
 # Import the application's metadata so autogenerate sees every model.
-# backend.database calls load_dotenv() via backend.security, so DATABASE_URL
-# resolves the same way it does for the running app.
+# backend.database calls load_dotenv() itself, so DATABASE_URL resolves the
+# same way here as it does for the running app.
 import os
 import sys
 from logging.config import fileConfig

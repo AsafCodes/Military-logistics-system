@@ -1,6 +1,6 @@
 """
 Equipment Router - Equipment CRUD and transfer endpoints
-CRITICAL: Contains Hierarchical Data Scoping logic
+Scoping lives in dependencies.scope_equipment_query()
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload

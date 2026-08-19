@@ -8,10 +8,12 @@ import enum
 
 
 class EquipmentStatus(str, enum.Enum):
-    """The only statuses an equipment record may hold.
+    """The statuses an equipment record is meant to hold.
 
-    Analytics counts readiness by matching FUNCTIONAL exactly
-    (routers/analytics.py), so free-form values silently corrupt the metric.
+    Enforced on the verification write path only: the column is still a plain
+    String, and routers/maintenance.py assigns literals directly. Analytics
+    counts readiness by matching FUNCTIONAL exactly (routers/analytics.py),
+    so free-form values on the unconstrained paths still corrupt the metric.
 
     These are the four options the verification form offers
     (frontend VerificationForm.tsx); keep the two in sync.

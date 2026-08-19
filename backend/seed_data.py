@@ -61,6 +61,15 @@ def require_empty_database():
 def reset_schema():
     """Drop and recreate the schema. Destroys all data."""
     print("💣 Resetting schema -- all data will be destroyed...")
+
+    if engine.dialect.name != "postgresql":
+        # SQLite is the documented local fallback and has no schemas at all.
+        models.Base.metadata.drop_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+            conn.commit()
+        return
+
     # CASCADE drop to handle tables with FKs not tracked by SQLAlchemy models
     with engine.connect() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE"))

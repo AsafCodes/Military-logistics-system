@@ -43,12 +43,20 @@ def bootstrap_admin(personal_number: str, full_name: str) -> None:
 
     db = SessionLocal()
     try:
+        # Before the MASTER guard: a database can hold a MASTER and no profiles at
+        # all -- that is exactly what the old count-based registration produced, and
+        # such an account fails every profile permission check. Since
+        # /setup/initialize_system is gone, this is the only way to repair it.
+        ensure_default_profiles(db)
+
         if db.query(models.User).filter(models.User.role == models.UserRole.MASTER).first():
-            raise SystemExit("Refusing to run: a MASTER account already exists.")
+            raise SystemExit(
+                "A MASTER account already exists; no new one created. "
+                "Default profiles were verified."
+            )
         if db.query(models.User).filter(models.User.personal_number == personal_number).first():
             raise SystemExit(f"Refusing to run: user {personal_number} already exists.")
 
-        ensure_default_profiles(db)
         profile = db.query(models.Profile).filter(models.Profile.name == "Master").first()
         if profile is None:
             raise SystemExit(

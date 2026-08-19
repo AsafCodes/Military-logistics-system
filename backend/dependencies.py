@@ -63,8 +63,10 @@ def verify_admin_access(user: models.User):
 def scope_equipment_query(q, user: models.User):
     """Restrict an Equipment query to what `user` is allowed to see.
 
-    Single source of truth for hierarchical data scoping — used by the
-    equipment listing and by every per-item access check.
+    The intended single definition of hierarchical data scoping. Note that
+    routers/reports.py still carries its own copy of this ladder, and that
+    copy has already drifted (it omits the unit_path fallback below) — see
+    SEC-H2/DATA-H9. Fix both, or neither.
     """
     profile = user.profile
     if is_master(user) or (profile and profile.can_view_all_equipment):
@@ -90,7 +92,8 @@ def get_scoped_equipment_or_404(db: Session, user: models.User, equipment_id: in
     """Resolve one equipment item within the user's scope.
 
     Returns 404 rather than 403 for out-of-scope items so that IDs cannot be
-    enumerated to discover the existence of assets in other units.
+    enumerated through THIS lookup. Sibling endpoints that still resolve
+    equipment by raw ID remain oracles until they route through here.
 
     An item the user holds is always in scope. The listing scope replaces the
     holder filter with a hierarchy filter, so a held item whose unit_hierarchy
