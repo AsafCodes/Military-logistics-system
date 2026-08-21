@@ -1,0 +1,113 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  # Long-lived remediation branches are covered by neither trigger above.
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          # Throwaway credentials for a per-run container on the runner's
+          # loopback. Deliberately literal -- this is not a deployment, so the
+          # ${VAR:?} treatment docker-compose.yml uses does not apply here.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vector_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
+      SECRET_KEY: ci_test_secret
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # 3.10 matches Dockerfile.backend and backend/pyproject.toml's
+    # target-version, not the newer interpreter used for local development.
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff pytest httpx
+
+    # WAIVER (DATA-L4): backend/ carries 42 pre-existing ruff findings. They
+    # still surface as inline annotations; they just do not fail the build yet.
+    # Delete this line when DATA-L4 clears them.
+    - name: Lint with ruff
+      continue-on-error: true
+      run: ruff check backend
+
+    # Hard gate. Proves the initial Alembic migration adopted in DATA-C1 still
+    # applies to a clean database -- nothing else in the repo verifies that.
+    - name: Apply migrations
+      run: alembic upgrade head
+
+    # WAIVER (INF-C3): no tests exist yet, and bare pytest exits 5 on an empty
+    # collection. Forgive *only* exit 5 -- a genuine test failure must fail the
+    # build from the day the first test lands. Delete this guard with INF-C3.
+    - name: Run tests
+      run: |
+        set +e
+        pytest
+        code=$?
+        set -e
+        if [ "$code" -eq 5 ]; then
+          echo "::notice::No tests collected yet - see INF-C3"
+          exit 0
+        fi
+        exit $code
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    # WAIVER (frontend lint backlog): 17 pre-existing ESLint errors. Same
+    # arrangement as the ruff waiver above -- annotated, not enforced, yet.
+    - name: Lint with ESLint
+      continue-on-error: true
+      run: npm run lint
+
+    # Hard gate. `npm run build` is `tsc -b && vite build`, so this covers
+    # typecheck and build in one step. It passes today, which is what makes it
+    # usable as a gate.
+    - name: Typecheck and build
+      run: npm run build
