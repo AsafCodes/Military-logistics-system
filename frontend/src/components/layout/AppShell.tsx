@@ -23,7 +23,6 @@ interface NavItem {
     path: string;
     label: string;
     icon: React.ReactNode;
-    requiredRole?: string;
 }
 
 interface AppShellProps {
@@ -41,7 +40,7 @@ const NAV_ITEMS: NavItem[] = [
     { path: '/equipment', label: 'ציוד', icon: <Package size={20} /> },
     { path: '/maintenance', label: 'תחזוקה', icon: <Wrench size={20} /> },
     { path: '/reports', label: 'דוחות', icon: <FileBarChart size={20} /> },
-    { path: '/admin', label: 'ניהול מערכת', icon: <Shield size={20} />, requiredRole: 'master' },
+    { path: '/admin', label: 'ניהול מערכת', icon: <Shield size={20} /> },
 ];
 
 // ============================================================
@@ -72,25 +71,15 @@ export default function AppShell({ user, onLogout, children }: AppShellProps) {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    // Filter nav items by user role
-    const visibleItems = NAV_ITEMS.filter(item => {
-        if (!item.requiredRole) return true;
-        return user?.role === item.requiredRole;
-    });
+    // Nav items are the same for every user -- MANAGE_PERSONNEL (the admin
+    // route's real gate) is a grant, not a role, and there is no per-user
+    // capability signal on the frontend to filter by (SEC-H10, deferred). The
+    // backend already refuses what it should; showing the link to everyone
+    // costs an unauthorized visitor a 403, not a hole.
+    const visibleItems = NAV_ITEMS;
 
     // Current page label
     const currentPageLabel = visibleItems.find(i => location.pathname.startsWith(i.path))?.label || 'לוח בקרה';
-
-    // Role label in Hebrew
-    const getRoleLabel = (role: string) => {
-        switch (role) {
-            case 'master': return 'מנהל ראשי';
-            case 'manager': return 'מפקד';
-            case 'technician_manager': return 'קצין טכני';
-            case 'user': return 'חייל';
-            default: return role;
-        }
-    };
 
     return (
         <div className="flex h-screen overflow-hidden bg-background" dir="rtl">
@@ -185,7 +174,6 @@ export default function AppShell({ user, onLogout, children }: AppShellProps) {
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <p className="text-sm font-medium text-foreground truncate">{user?.full_name || 'משתמש'}</p>
-                                    <p className="text-xs text-muted-foreground truncate">{getRoleLabel(user?.role || 'user')}</p>
                                 </div>
                             </div>
                             <button

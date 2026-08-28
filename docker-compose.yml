@@ -2,13 +2,11 @@ services:
   db:
     image: postgres:15-alpine
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=military_db
+      - POSTGRES_USER=${POSTGRES_USER:?set POSTGRES_USER in .env (see .env.example)}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      - POSTGRES_DB=${POSTGRES_DB:-military_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
 
   backend:
     build:
@@ -19,8 +17,8 @@ services:
     depends_on:
       - db
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/military_db
-      - SECRET_KEY=${SECRET_KEY} # Pass through from host env or .env file if used
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-military_db}
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env (see .env.example)}
     volumes:
       - ./:/app
     # Ensure hot reload works well by overriding default restart policy if needed

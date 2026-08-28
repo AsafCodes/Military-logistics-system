@@ -5,15 +5,13 @@ interface User {
     id: number;
     full_name: string;
     personal_number: string;
-    role: string;
-    profile?: {
+    group?: {
         id: number;
         name: string;
     };
-    unit_path?: string;
 }
 
-interface ProfileSummary {
+interface GroupSummary {
     id: number;
     name: string;
 }
@@ -23,7 +21,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
-    const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+    const [groups, setGroups] = useState<GroupSummary[]>([]);
 
     // Search State
     const [searchTerm, setSearchTerm] = useState("");
@@ -32,10 +30,10 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
 
     // Selection & Edit State
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
-    const [selectedProfileId, setSelectedProfileId] = useState("");
+    const [selectedGroupId, setSelectedGroupId] = useState("");
 
     useEffect(() => {
-        fetchProfiles();
+        fetchGroups();
     }, []);
 
     // Search Users Effect
@@ -56,32 +54,32 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
         return () => clearTimeout(delayDebounceFn);
     }, [searchTerm]);
 
-    const fetchProfiles = async () => {
+    const fetchGroups = async () => {
         try {
-            const res = await api.get('/profiles');
-            setProfiles(res.data);
+            const res = await api.get('/groups');
+            setGroups(res.data);
         } catch (err) {
-            console.error("Failed to fetch profiles", err);
+            console.error("Failed to fetch groups", err);
         }
     };
 
     const handleUserSelect = (user: User) => {
         setSelectedUser(user);
-        setSelectedProfileId(user.profile?.id.toString() || "");
+        setSelectedGroupId(user.group?.id?.toString() || "");
         setSearchTerm("");
         setSearchResults([]);
     };
 
-    const handleSaveProfile = async () => {
-        if (!selectedUser || !selectedProfileId) return;
+    const handleSaveGroup = async () => {
+        if (!selectedUser || !selectedGroupId) return;
         try {
-            await api.put(`/users/${selectedUser.id}/profile`, {
-                profile_id: parseInt(selectedProfileId)
+            await api.put(`/users/${selectedUser.id}/group`, {
+                group_id: parseInt(selectedGroupId)
             });
-            alert("פרופיל עודכן בהצלחה!");
+            alert("קבוצה עודכנה בהצלחה!");
             setSelectedUser(null);
         } catch (err) {
-            alert("עדכון הפרופיל נכשל.");
+            alert("עדכון הקבוצה נכשל.");
         }
     };
 
@@ -90,7 +88,7 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
             {/* Header */}
             <div className="glass-card p-6">
                 <h2 className="text-xl font-bold text-foreground mb-1">🛡️ ניהול מערכת</h2>
-                <p className="text-sm text-muted-foreground">ניהול תפקידים ופרופילים</p>
+                <p className="text-sm text-muted-foreground">שיוך משתמשים לקבוצות</p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -133,10 +131,10 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
                                             {u.full_name}
                                         </div>
                                         <div className="text-xs text-muted-foreground">
-                                            מ.א: {u.personal_number} • תפקיד: {u.role}
+                                            מ.א: {u.personal_number}
                                         </div>
                                         <div className="text-xs text-primary mt-1">
-                                            פרופיל נוכחי: {u.profile?.name || "ללא"}
+                                            קבוצה נוכחית: {u.group?.name || "ללא"}
                                         </div>
                                     </div>
                                 ))
@@ -157,7 +155,7 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
                 {/* Right Panel: Edit User */}
                 <div className="glass-card overflow-hidden">
                     <div className="px-6 py-4 border-b border-border/30">
-                        <h3 className="font-bold text-foreground">עריכת פרופיל</h3>
+                        <h3 className="font-bold text-foreground">שיוך לקבוצה</h3>
                     </div>
 
                     {selectedUser ? (
@@ -170,24 +168,24 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
 
                             <div>
                                 <label className="block text-sm font-medium text-muted-foreground mb-1">
-                                    פרופיל מטריצה
+                                    קבוצה
                                 </label>
                                 <p className="text-xs text-muted-foreground/70 mb-2">
-                                    קובע הרשאות וגישה לנתוני היררכיה.
+                                    קובעת היכן המשתמש נמצא בעץ הארגוני, ומה נראה לו כתוצאה מכך.
                                 </p>
                                 <select
-                                    value={selectedProfileId}
-                                    onChange={e => setSelectedProfileId(e.target.value)}
+                                    value={selectedGroupId}
+                                    onChange={e => setSelectedGroupId(e.target.value)}
                                     className="w-full px-3 py-2 rounded-lg border border-border/50
                                                bg-background text-foreground
                                                focus:ring-2 focus:ring-primary/50 outline-none
                                                transition-colors"
-                                    size={Math.min(profiles.length + 1, 8)}
+                                    size={Math.min(groups.length + 1, 8)}
                                 >
-                                    <option value="" disabled>-- בחר פרופיל --</option>
-                                    {profiles.map(p => (
-                                        <option key={p.id} value={p.id} className="py-1">
-                                            {p.name}
+                                    <option value="" disabled>-- בחר קבוצה --</option>
+                                    {groups.map(g => (
+                                        <option key={g.id} value={g.id} className="py-1">
+                                            {g.name}
                                         </option>
                                     ))}
                                 </select>
@@ -202,7 +200,7 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
                                     ביטול
                                 </button>
                                 <button
-                                    onClick={handleSaveProfile}
+                                    onClick={handleSaveGroup}
                                     className="flex-1 px-4 py-2 rounded-lg
                                                bg-primary text-primary-foreground
                                                hover:bg-primary/90 font-bold shadow-md

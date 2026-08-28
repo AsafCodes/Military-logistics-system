@@ -43,7 +43,7 @@ export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
             const userRes = await api.get('/users/me');
             const currentUser = userRes.data;
             setUser(currentUser);
-            await fetchData(currentUser);
+            await fetchData();
         } catch (err) {
             console.error("Failed to init", err);
             setError("טעינת לוח הבקרה נכשלה. נסה לרענן.");
@@ -53,16 +53,6 @@ export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
     };
 
     // ── Helpers ──
-    const getRoleLabel = (role: string) => {
-        switch (role) {
-            case 'master': return 'מנהל ראשי';
-            case 'manager': return 'מפקד';
-            case 'technician_manager': return 'קצין טכני';
-            case 'user': return 'חייל';
-            default: return role;
-        }
-    };
-
     const getGreeting = () => {
         const hour = new Date().getHours();
         if (hour < 12) return 'בוקר טוב';
@@ -112,7 +102,7 @@ export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
                             {getGreeting()}, {user?.full_name || 'משתמש'} 👋
                         </h2>
                         <p className="text-sm text-muted-foreground">
-                            {getRoleLabel(user?.role || 'user')} • {user?.battalion || ''} {user?.company ? `/ ${user.company}` : ''}
+                            {user?.group?.name || ''}
                         </p>
                     </div>
                     <button
@@ -139,7 +129,7 @@ export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
                         <div className="flex items-center gap-2">
                             <Package size={18} className="text-primary" />
                             <h3 className="font-bold text-foreground">
-                                {user?.profile?.can_view_company_realtime ? 'ציוד יחידה' : 'הציוד שלי'}
+                                ציוד
                             </h3>
                         </div>
                         <span className="text-xs text-muted-foreground">
