@@ -57,6 +57,29 @@ class UserLogin(BaseModel):
 class UpdateUserGroupRequest(BaseModel):
     group_id: int
 
+class CapabilitiesResponse(BaseModel):
+    """What the caller may do. SEC-H10 -- the frontend's first way to ask.
+
+    Named `system`/`anywhere` rather than `global`/`scoped`: `global` is a
+    Python keyword, and `anywhere` is chosen to say what it means at the
+    point a consumer reads it, not just at the point it's declared.
+
+    `system` is EXACT -- one may_global() call per entry, the same boolean
+    the routes that gate on it already compute. Absence here means the
+    server will refuse.
+
+    `anywhere` is NOT a gate. Authority in this model is positional
+    (authz.may): holding a verb over one group is not holding it over
+    another. `anywhere` answers "does the caller hold this verb over ANY
+    group" -- a superset of what they may act on. It over-shows: a consumer
+    may offer a control for an item the caller cannot actually reach, and
+    the backend will still refuse it. It never hides a control the caller
+    is entitled to use. That asymmetry is why over-showing is the safe
+    reading and under-showing would not be.
+    """
+    system: List[str]
+    anywhere: List[str]
+
 # --- Equipment ---
 class EquipmentCreate(BaseModel):
     catalog_name: str # e.g. "M4"

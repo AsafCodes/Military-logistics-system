@@ -105,3 +105,19 @@ class Capability(str, enum.Enum):
     # setup.py's fault-type routes. Global vocabulary: held over every root.
     MANAGE_PERSONNEL = "MANAGE_PERSONNEL"
     # users.create_user, update_user_group, setup.list_groups. Also every root.
+
+
+# SEC-H10. Which verbs answer to a flat yes/no (authz.require_global, asked
+# over every root) and which are positional (authz.require, scoped by group)
+# is a fact about each member above -- already stated as prose next to
+# MANAGE_CATALOG and MANAGE_PERSONNEL. This is where it becomes something code
+# can read, in the same file as that prose, so a new member's classification
+# is decided once, here, rather than left implicit in which authz.py call a
+# future router happens to use and cross-checked by hand against this file.
+#
+# _GLOBAL is the one place a member is named; both public tuples are pure
+# derivations of it and of Capability's own declaration order, so nothing
+# downstream can drift by editing only one of the two.
+_GLOBAL = frozenset({Capability.MANAGE_PERSONNEL, Capability.MANAGE_CATALOG})
+GLOBAL_CAPABILITIES = tuple(c for c in Capability if c in _GLOBAL)
+SCOPED_CAPABILITIES = tuple(c for c in Capability if c not in _GLOBAL)

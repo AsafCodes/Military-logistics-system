@@ -383,6 +383,7 @@ def test_no_get_route_changes_state(client):
         "/tickets/",
         "/users",
         "/users/me",
+        "/users/me/capabilities",
         "/users/me/equipment",
         "/verifications/equipment/{equipment_id}",
     }

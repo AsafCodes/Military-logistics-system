@@ -82,6 +82,33 @@ def get_my_equipment(current_user: models.User = Depends(get_current_active_user
 def read_users_me(current_user: models.User = Depends(get_current_active_user)):
     return current_user
 
+@router.get("/users/me/capabilities", response_model=schemas.CapabilitiesResponse)
+def read_my_capabilities(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """SEC-H10. The caller's authority, for a frontend that otherwise has no
+    way to ask "what may I do" -- see schemas.CapabilitiesResponse for the
+    exact/anywhere distinction this composes.
+
+    Composed from may_global() and may_any() verbatim, never re-derived: a
+    hand-written join here would be a DATA-H9 inside the answer to what the
+    gate believes, and this route's whole value is that it cannot disagree
+    with authz.require/authz.require_global. Caller-only -- one user's
+    authority is not another's to read, so there is no /users/{id} form.
+    """
+    system = [
+        capability.value
+        for capability in authz.GLOBAL_CAPABILITIES
+        if authz.may_global(db, current_user.id, capability)
+    ]
+    anywhere = [
+        capability.value
+        for capability in authz.SCOPED_CAPABILITIES
+        if authz.may_any(db, current_user.id, capability)
+    ]
+    return schemas.CapabilitiesResponse(system=system, anywhere=anywhere)
+
 @router.get("/users", response_model=List[schemas.UserResponse])
 def list_all_users(q: Optional[str] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     # SEC-H5, and the leak H1-10 deferred here by name: this route had no gate

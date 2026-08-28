@@ -71,7 +71,16 @@ from sqlalchemy.orm import Session, relationship
 from sqlalchemy.sql import Select
 
 from .database import Base
-from .enums import Capability, GroupKind
+from .enums import (
+    Capability,
+    GroupKind,
+    # Re-exported so callers keep spelling these authz.GLOBAL_CAPABILITIES /
+    # authz.SCOPED_CAPABILITIES -- the algebra module, not the enum module, is
+    # where callers already look for authority questions. Declared in enums.py
+    # itself; see the comment there for why.
+    GLOBAL_CAPABILITIES,
+    SCOPED_CAPABILITIES,
+)
 
 
 class Group(Base):
@@ -562,6 +571,22 @@ def may(db: Session, user_id: int, capability: Capability, group_id: int | None)
     return db.execute(
         select(literal(1)).where(literal(group_id).in_(extent(user_id, capability)))
     ).first() is not None
+
+
+def may_any(db: Session, user_id: int, capability: Capability) -> bool:
+    """Does `user` hold `capability` over AT LEAST ONE group?
+
+    Not a gate -- there is no resource here to authorise, only a question
+    about the shape of the caller's grants. Composed from extent() exactly as
+    may() is, because that idiom -- "is anything in this Select" -- already
+    has one definition in this module and should not get a second, ad hoc
+    one at whichever call site needs it next. SEC-H10's capabilities endpoint
+    is that first caller: it answers "might the caller act on SOMETHING with
+    this verb", which is what a client with no per-resource context can
+    usefully show as "offer this control" -- see schemas.CapabilitiesResponse
+    for why that answer is an over-showing approximation, not a promise.
+    """
+    return db.execute(extent(user_id, capability).limit(1)).first() is not None
 
 
 EQUIPMENT_CAPABILITIES = (

@@ -199,6 +199,7 @@ Marker_System/
 | `POST` | `/users/` | Create user (`MANAGE_PERSONNEL`; requires `group_id`) |
 | `PUT` | `/users/{user_id}/group` | Reassign a user's group (`MANAGE_PERSONNEL`) |
 | `GET` | `/users/me` | Current user profile |
+| `GET` | `/users/me/capabilities` | Caller's own authority (SEC-H10, see below) |
 | `GET` | `/users/me/equipment` | Current user's held equipment |
 | `GET` | `/users` | List all users (searchable, limit 50) |
 
@@ -258,6 +259,7 @@ Marker_System/
   - The `Authorization: Bearer` path still works and takes precedence when it carries a usable token — that is how the pytest suite, Swagger, and any non-browser client authenticate. A malformed or non-Bearer header falls through to the cookie rather than shadowing it.
   - CSRF rests on `SameSite=Lax`, which is sufficient **only while every `GET` route stays read-only**; `tests/test_cookie_auth.py` pins that with an allowlist. `POST /logout` is forgeable cross-site by design (availability only) — see its docstring.
   - **Deployment constraint:** the SPA and the API must be **same-site**. A cookie set by the API is withheld from a frontend on a different registrable domain, so login returns 200 and no session is established. This is why `localhost` and `127.0.0.1` cannot be mixed across the two (see the note on `main.py`'s origins list), and it is a real constraint on any future split-domain deployment.
+- **Capabilities** → `GET /users/me/capabilities` (SEC-H10) is how a client asks "what may I do," since authority in this model is positional (`authz.may`) and cannot otherwise be read off the session. The response has two fields with different truth values, and neither is optional reading for a caller: `system` is **exact** — one `may_global()` result per entry, the same boolean the routes gating on it already compute. `anywhere` is **not a gate** — it says the caller holds the verb over *some* group, which over-shows (a control may still 403 on a specific item) but never hides an action the caller is entitled to take. No route exists to read another user's capabilities.
 
 ### Bootstrapping a Fresh System
 
