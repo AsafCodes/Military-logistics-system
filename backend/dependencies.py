@@ -1,8 +1,9 @@
 """
 Authentication and Authorization Dependencies
 """
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 from jose import JWTError, jwt
@@ -16,7 +17,64 @@ from . import models
 from . import schemas
 from . import security
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+class OAuth2PasswordBearerWithCookie(OAuth2PasswordBearer):
+    """Read the session token from the cookie, falling back to the header.
+
+    SEC-H9 moved the browser's copy of the token into an httpOnly cookie. The
+    header path is NOT legacy tolerance to be removed later -- it is the only
+    way a non-browser client can authenticate at all, and it is what the entire
+    pytest suite and Swagger's Authorize button use. Removing it breaks both.
+
+    Subclassed rather than written as a fresh SecurityBase so that tokenUrl,
+    the OpenAPI security metadata that drives `npm run generate-client`, and the
+    401 + WWW-Authenticate shape all stay exactly as they were.
+
+    An explicit Authorization header WINS over the cookie. The precedence is
+    deliberate and pinned by tests/test_cookie_auth.py. Cookie-first is the
+    tempting order and it sets an operational trap: this scheme returns the
+    cookie unvalidated, so a stale or tampered one shadows a perfectly good
+    header, and the request 401s with no hint that the browser's leftover cookie
+    is the reason. After a SECRET_KEY rotation a fresh token pasted into Swagger
+    fails until the operator thinks to clear their cookies.
+
+    The header cannot arrive by accident -- a caller had to attach it -- while
+    the cookie is sent ambiently by the browser on every request. Explicit
+    intent beats ambient state. Browsers send no header, so they are unaffected.
+
+    "Wins" means a header CARRYING A USABLE BEARER TOKEN, which is not the same
+    as the header being present. Testing for mere presence -- the obvious way to
+    write this -- means an empty `Authorization:`, a `Basic` credential, or a
+    truncated `Bearer` locks out a browser holding a perfectly good cookie.
+    Proxies and gateways inject exactly those, and the resulting 401 would look
+    like a broken session with nothing to point at the header.
+    """
+
+    async def __call__(self, request: Request) -> Optional[str]:
+        # FastAPI's own parser, the one OAuth2PasswordBearer uses internally, so
+        # "what counts as a Bearer header" cannot drift from the parent class.
+        scheme, param = get_authorization_scheme_param(
+            request.headers.get("Authorization", "")
+        )
+        if scheme.lower() == "bearer" and param:
+            return param
+
+        token = request.cookies.get(security.COOKIE_NAME)
+        if token:
+            return token
+
+        # Nothing usable anywhere. super() raises the 401 with its
+        # WWW-Authenticate header, so the framework keeps owning that shape.
+        return await super().__call__(request)
+
+
+# scheme_name pinned to the ORIGINAL class name on purpose. FastAPI derives the
+# securitySchemes key in openapi.json from the class, so subclassing silently
+# renamed it to "OAuth2PasswordBearerWithCookie" -- a published contract change,
+# visible to `npm run generate-client`, in exchange for nothing. The transport
+# changed; the scheme did not.
+oauth2_scheme = OAuth2PasswordBearerWithCookie(
+    tokenUrl="login", scheme_name="OAuth2PasswordBearer"
+)
 
 SECRET_KEY = security.SECRET_KEY
 ALGORITHM = security.ALGORITHM

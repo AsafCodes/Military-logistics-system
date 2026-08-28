@@ -1,12 +1,17 @@
 import { Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { readLocal, writeLocal } from "@/lib/safeStorage";
 
 export function ThemeToggle() {
     const [theme, setTheme] = useState<"light" | "dark" | null>(null);
 
     useEffect(() => {
-        const stored = localStorage.getItem("theme") as "light" | "dark" | null;
+        // Guarded: this runs in a mount effect, so a throwing storage accessor
+        // is a failed RENDER, not a failed read. It took down the whole app --
+        // and the ErrorBoundary added by SEC-H9 turned that from a blank page
+        // into a permanent crash screen, which is better but still a lockout.
+        const stored = readLocal("theme") as "light" | "dark" | null;
         const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
         
         const initial = stored ?? (prefersDark ? "dark" : "light");
@@ -22,7 +27,7 @@ export function ThemeToggle() {
     const toggleTheme = () => {
         const newTheme = theme === "light" ? "dark" : "light";
         setTheme(newTheme);
-        localStorage.setItem("theme", newTheme);
+        writeLocal("theme", newTheme);
         
         if (newTheme === "dark") {
             document.documentElement.classList.add("dark");

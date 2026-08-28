@@ -36,6 +36,18 @@ run_migrations()
 app = FastAPI(title="Military Logistics System", version="0.5.0")
 
 # --- CORS Middleware (Strict Origins) ---
+# SEC-H9 CAVEAT, and it costs an hour if you meet it without warning: since the
+# session became a SameSite=Lax cookie, CORS approval is no longer sufficient to
+# make an origin usable. `localhost` and `127.0.0.1` are different SITES to a
+# browser, so a page served from http://127.0.0.1:3000 talking to an API on
+# http://localhost:8000 is refused the cookie -- login returns 200, no session
+# is established, and nothing in the console says why.
+#
+# The 127.0.0.1 entries are kept because they are legitimate for the
+# Authorization-header clients (Swagger, curl, the test suite), which are
+# unaffected. For a BROWSER, match the host on both ends: browse to
+# http://localhost:3000 against http://localhost:8000, or set VITE_API_URL to
+# the 127.0.0.1 form if you prefer that host.
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",

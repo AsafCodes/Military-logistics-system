@@ -19,15 +19,12 @@ export interface Group {
     kind: string;
 }
 
-export interface LoginCredentials {
-    username: string;
-    password: string;
-}
-
-export interface TokenResponse {
-    access_token: string;
-    token_type: string;
-}
+// LoginCredentials and TokenResponse lived here and are gone with SEC-H9.
+// TokenResponse described a token this client no longer receives, holds, or
+// stores. LoginCredentials was never imported by anything and its shape
+// ({ username, password }) disagreed with the live one in auth.service.ts
+// ({ personalNumber, password }) -- two same-named types, one importable by
+// mistake from '@/types'.
 
 // ============ EQUIPMENT ============
 export interface Equipment {

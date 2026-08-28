@@ -190,7 +190,8 @@ Marker_System/
 ### Auth (`routers/auth.py`)
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/login` | OAuth2 password login → JWT token |
+| `POST` | `/login` | OAuth2 password login → sets the `access_token` httpOnly cookie; also returns the JWT in the body for non-browser clients |
+| `POST` | `/logout` | Clears the session cookie. Unauthenticated by design — an expired cookie is exactly what needs clearing |
 
 ### Users (`routers/users.py`)
 | Method | Path | Description |
@@ -252,7 +253,11 @@ Marker_System/
 ### Input (Where data starts)
 - **Frontend Forms** → React components → Axios → FastAPI endpoints
 - **Seed Script** → `seed_data.py` builds the group graph, then bulk-inserts Users, Catalogs, Equipment. Requires `SEED_ENABLED=1` and a local `DATABASE_URL`; only destroys data with `--reset`
-- **JWT Login** → `POST /login` → Token stored in `localStorage`
+- **JWT Login** → `POST /login` → token set as an **httpOnly, SameSite=Lax cookie** (SEC-H9). Nothing auth-related is **stored** in `localStorage`; the browser attaches the cookie itself, so both axios clients send `withCredentials` and neither sets an `Authorization` header. Identity comes from `GET /users/me` on every load. `Secure` is on by default and downgraded only for the local http stack via `COOKIE_SECURE=false`.
+  - The login *response body* still contains the JWT, and page JavaScript can read it — `auth.service.ts` simply never touches it. What the fix guarantees is that the token is never **persisted**, so an XSS has no stored credential to steal and nothing survives a reload.
+  - The `Authorization: Bearer` path still works and takes precedence when it carries a usable token — that is how the pytest suite, Swagger, and any non-browser client authenticate. A malformed or non-Bearer header falls through to the cookie rather than shadowing it.
+  - CSRF rests on `SameSite=Lax`, which is sufficient **only while every `GET` route stays read-only**; `tests/test_cookie_auth.py` pins that with an allowlist. `POST /logout` is forgeable cross-site by design (availability only) — see its docstring.
+  - **Deployment constraint:** the SPA and the API must be **same-site**. A cookie set by the API is withheld from a frontend on a different registrable domain, so login returns 200 and no session is established. This is why `localhost` and `127.0.0.1` cannot be mixed across the two (see the note on `main.py`'s origins list), and it is a real constraint on any future split-domain deployment.
 
 ### Bootstrapping a Fresh System
 

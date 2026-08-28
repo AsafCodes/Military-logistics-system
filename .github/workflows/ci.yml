@@ -100,8 +100,9 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    # WAIVER (frontend lint backlog): 17 pre-existing ESLint errors. Same
+    # WAIVER (frontend lint backlog): 16 pre-existing ESLint errors. Same
     # arrangement as the ruff waiver above -- annotated, not enforced, yet.
+    # (Was 17; SEC-H9 cleared one by deleting a dead type.)
     - name: Lint with ESLint
       continue-on-error: true
       run: npm run lint
@@ -111,3 +112,9 @@ jobs:
     # usable as a gate.
     - name: Typecheck and build
       run: npm run build
+
+    # Hard gate from the day it lands, deliberately unlike the two lint waivers
+    # above. The frontend had no test framework at all until SEC-H9; there is no
+    # backlog to forgive, so a failure here is always a real regression.
+    - name: Run tests
+      run: npm run test

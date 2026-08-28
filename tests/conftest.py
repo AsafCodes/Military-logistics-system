@@ -16,9 +16,29 @@ os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
     tempfile.gettempdir(), "vector_test_import_sink.db"
 )
 os.environ.setdefault("SECRET_KEY", "test_secret_key")
+
+# --- SEC-H9 -----------------------------------------------------------------
+# The session cookie defaults to Secure (see security._cookie_secure_from_env),
+# and TestClient speaks http://testserver. A conforming cookie jar refuses to
+# return a Secure cookie over http, so leaving the default on would make every
+# cookie-authenticated request in the suite fail for a transport reason rather
+# than an authorization one.
+#
+# Downgraded here to mirror the local http stack. The default itself is pinned
+# directly in tests/test_cookie_auth.py, and the Secure attribute is asserted
+# there by monkeypatching the constant -- so turning it off here costs no
+# coverage of the thing that matters.
+#
+# ASSIGNED, not setdefault: the suite's correctness depends on this value, so it
+# must not yield to whatever the developer happens to have exported. With
+# setdefault, a shell carrying COOKIE_SECURE=true made three cookie tests fail
+# with a bare 401 and no indication why. Same reasoning as DATABASE_URL above;
+# SECRET_KEY differs precisely because any value works there.
+os.environ["COOKIE_SECURE"] = "false"
 # --------------------------------------------------------------------------
 
 import pytest
+from functools import lru_cache
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
@@ -109,6 +129,22 @@ def group_graph(db_session):
     return groups
 
 
+@lru_cache(maxsize=1)
+def _fixture_password_hash():
+    """The one bcrypt hash every fixture account shares.
+
+    Cached because bcrypt is deliberately slow -- ~240ms per call -- and this
+    used to run once per test from inside mock_matrix_db. That single line was
+    two thirds of the suite's total runtime: 54s dropped to ~18s when it stopped
+    being recomputed, with nothing observable changed, since all eleven accounts
+    already shared the one value and no test asserts on hash uniqueness.
+
+    Cached rather than a module-level constant so importing conftest does not
+    pay for it -- collection-only runs and `--collect-only` never hash at all.
+    """
+    return security.get_password_hash("secret")
+
+
 def revoke(db_session, user, *capabilities):
     """Delete a user's grants, all of them or only the named verbs.
 
@@ -153,7 +189,7 @@ def mock_matrix_db(db_session, group_graph):
     - Co A: Co Cmdr, Tech Soldier, Soldier (with items)
     - Co B: Co Cmdr, Tech Soldier, Soldier (with items)
     """
-    pw = security.get_password_hash("secret")
+    pw = _fixture_password_hash()
 
     # --- USERS ---
     # role, profile_id, battalion and company are gone (H1-12) along with
