@@ -17,3 +17,7 @@ postgres_data/
 # IDE
 .vscode/
 .idea/
+
+# Agent / tooling artifacts
+.claude/
+.playwright-mcp/

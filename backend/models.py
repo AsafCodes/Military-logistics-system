@@ -4,32 +4,51 @@ from datetime import datetime, timedelta
 from .database import Base # Use shared Base from backend package
 from .enums import EquipmentStatus
 
-# --- Users & Authentication ---
-class UserRole:
-    MASTER = "master"
-    MANAGER = "manager"
-    TECHNICIAN_MANAGER = "technician_manager"
-    TECHNICIAN = "technician"
-    USER = "user"
+# Imported for its side effect: it registers the group algebra tables on
+# Base.metadata, which is how alembic/env.py and the test suite's create_all()
+# reach them. authz has no dependency on this module -- its foreign keys are
+# declared by table-name string -- so the import direction is free. The
+# 'groups.id' target below is resolved lazily, when DDL is emitted or a join is
+# built, not at mapper configuration.
+from . import authz  # noqa: F401
 
+# --- Users & Authentication ---
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True, index=True)
     personal_number = Column(String, unique=True, index=True)
     password_hash = Column(String)
     full_name = Column(String)
-    role = Column(String, default="user") 
-    profile_id = Column(Integer, ForeignKey('profiles.id'), nullable=True) 
-    
-    # Hierarchy Fields
-    battalion = Column(String, nullable=True) # e.g. "Gedud 51"
-    company = Column(String, nullable=True)   # e.g. "Pluga B"
-    unit_path = Column(String, nullable=True) # e.g. "Golani/51/B" - Used for hierarchy permissions
-    unit_hierarchy = Column(String, index=True, nullable=True) # NEW: Materialized path
+
+    # Where a user SITS is a GroupMembership row, not a string on this table.
+    # unit_path and unit_hierarchy were dropped in H1-11; role, profile_id,
+    # battalion and company (the boolean permission matrix and the last two
+    # hierarchy strings) are dropped here in H1-12, together with the Profile
+    # and UserRole classes that gave them meaning. Nothing has read any of the
+    # four for an authorization decision since H1-10 -- authority is grants
+    # and group membership, and has been since H1-8.
+    #
+    # memberships (below) is the replacement for both role and the removed
+    # battalion/company label: it says where a user sits, which is the thing
+    # that actually decided what they could see even while the string columns
+    # pretended otherwise.
+    memberships = relationship("GroupMembership")
 
     # Status
     is_active_duty = Column(Boolean, default=True) # Is currently in service?
     last_seen = Column(DateTime, default=datetime.utcnow)
+
+    @property
+    def group(self):
+        """The group this user sits in, or None if they belong to nowhere.
+
+        Every write path this entry builds (creation, reassignment) maintains
+        exactly one membership row per user, so "first" is safe here even
+        though group_memberships is many-to-many in general -- see
+        authz.primary_group_id's min() handling of genuinely incomparable
+        memberships, a generality nothing here needs.
+        """
+        return self.memberships[0].group if self.memberships else None
 
 class CatalogItem(Base):
     """
@@ -52,9 +71,6 @@ class Location(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True) # e.g. "Main Armory", "Pluga B Safe"
     type = Column(String) # "Armory", "Container", "Room"
-    
-    # Hierarchy
-    unit_path = Column(String, nullable=True) # Who owns this location?
 
     @property
     def location_name(self):
@@ -70,8 +86,31 @@ class Equipment(Base):
     status = Column(String, default=EquipmentStatus.FUNCTIONAL.value)
     
     # Matrix Security Fields
-    sensitivity = Column(String, default="UNCLASSIFIED") 
-    unit_hierarchy = Column(String, index=True, nullable=True) # NEW: Materialized path
+    sensitivity = Column(String, default="UNCLASSIFIED")
+
+    # The group this item belongs to -- the single representation, since
+    # H1-11 dropped the unit_hierarchy path string that used to sit above.
+    #
+    # NOT NULL as of H1-11. Every write path already refused to produce a NULL
+    # -- creation fails closed when the creator has no group (H1-6), and both
+    # move routes leave the group alone rather than clearing it -- so the
+    # column was mandatory in fact and optional in the schema, which is the
+    # kind of gap this phase exists to close. An item in no group is visible
+    # to no commander, so there is no benign NULL to preserve.
+    #
+    # Deliberately no ondelete rule: deleting a group that still holds equipment
+    # must fail rather than take the equipment with it. See the note in authz.py
+    # on why that only actually holds on Postgres.
+    #
+    # The constraint is named explicitly so the model and the migration agree:
+    # downgrade() drops it by name, which Postgres requires, and leaving it
+    # unnamed here would have create_all() and Alembic build different schemas.
+    group_id = Column(
+        Integer,
+        ForeignKey('groups.id', name='fk_equipment_group_id'),
+        nullable=False,
+        index=True,
+    )
     
     # --- Ownership vs Possession ---
     owner_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
@@ -92,6 +131,9 @@ class Equipment(Base):
     owner_location = relationship("Location", foreign_keys=[owner_location_id])
     holder = relationship("User", foreign_keys=[holder_user_id])
     location = relationship("Location", foreign_keys=[actual_location_id])
+    # Declared by class name, resolved lazily, like the groups.id FK above:
+    # authz imports nothing from this module, so the direction stays one-way.
+    group = relationship("Group")
 
     # --- Smart Functions ---
     @property
@@ -199,46 +241,6 @@ class MaintenanceLog(Base):
     
     equipment = relationship("Equipment")
     fault_type = relationship("FaultType")
-
-# --- Security Profile (Matrix Model) ---
-class Profile(BaseModel := Base): 
-    __tablename__ = 'profiles'
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True) # e.g. "Soldier", "Company Commander", "Technician"
-    name_he = Column(String, nullable=True) # Hebrew Name
-
-    # 1. View Permissions
-    can_view_all_equipment = Column(Boolean, default=False)
-    can_view_battalion_inventory = Column(Boolean, default=False) # Maps to can_view_battalion_realtime
-    can_view_battalion_realtime = Column(Boolean, default=False) # Alias/Specific
-    can_view_company_realtime = Column(Boolean, default=False) 
-    
-    # 2. Action Permissions
-    can_change_maintenance_status = Column(Boolean, default=False) # Fix/Report
-    can_mark_as_defective = Column(Boolean, default=False)
-    
-    # 3. Hierarchy/Transfer Permissions
-    can_assign_equipment = Column(Boolean, default=False) # Assign themselves
-    can_change_assignment_others = Column(Boolean, default=False) # Transfer from A to B
-    can_assign_roles = Column(Boolean, default=False) # Promote users
-    
-    # 4. Data Management
-    can_add_category = Column(Boolean, default=False) # Create new Catalog/Fault types
-    can_add_specific_item = Column(Boolean, default=False)
-    can_remove_category = Column(Boolean, default=False)
-    can_remove_specific_item = Column(Boolean, default=False)
-    can_manage_locations = Column(Boolean, default=False)
-
-    # 5. Reports
-    can_generate_battalion_report = Column(Boolean, default=False)
-    can_generate_company_report = Column(Boolean, default=False)
-
-    # 6. Logistics
-    holds_equipment = Column(Boolean, default=True)
-    must_report_presence = Column(Boolean, default=True)
-
-    # Relations
-    users = relationship("User", backref="profile")
 
 # --- Solution Types ---
 class SolutionType(Base):

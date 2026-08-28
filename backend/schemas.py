@@ -17,33 +17,35 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     personal_number: Optional[str] = None
-    role: Optional[str] = None
 
 # --- User ---
-class ProfileResponse(BaseModel):
-    name: str 
-    can_view_company_realtime: bool = False
-    can_view_battalion_realtime: bool = False # Added
-    can_change_maintenance_status: bool = False
-    can_change_assignment_others: bool = False
-    can_add_category: bool = False
+class GroupResponse(BaseModel):
+    id: int
+    name: str
+    kind: str
+
+    class Config:
+        from_attributes = True
 
 class UserBase(BaseModel):
     personal_number: str
     full_name: str
-    role: Optional[str] = "user" 
-    battalion: Optional[str] = None
-    company: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
     is_active_duty: bool = True
+    # Where the account sits, and required rather than derived: unlike
+    # equipment creation, MANAGE_PERSONNEL is global (the personnel table
+    # belongs to no unit), so there is no creator group to fall back to. H1-6
+    # left create_user issuing no GroupMembership at all; this closes that gap
+    # rather than carrying it forward again.
+    group_id: int
 
 class UserResponse(UserBase):
     id: int
     is_active_duty: bool
     last_seen: datetime
-    profile: Optional[ProfileResponse] = None
+    group: Optional[GroupResponse] = None
 
     class Config:
         from_attributes = True
@@ -52,17 +54,19 @@ class UserLogin(BaseModel):
     personal_number: str
     password: str
 
-class PromoteUserRequest(BaseModel):
-    target_user_id: int
-    new_role: str
-
-class UpdateProfileRequest(BaseModel):
-    profile_id: int
+class UpdateUserGroupRequest(BaseModel):
+    group_id: int
 
 # --- Equipment ---
 class EquipmentCreate(BaseModel):
     catalog_name: str # e.g. "M4"
     serial_number: Optional[str] = None
+
+    # The group the item belongs to. Omitted, it is derived from the creator's
+    # own membership -- the ordinary case, and the only one a client needs.
+    # Supplied, it is an explicit override that the route validates against the
+    # creator's extent, because unlike the derived value it is attacker-chosen.
+    group_id: Optional[int] = None
 
 class EquipmentResponse(BaseModel):
     id: int

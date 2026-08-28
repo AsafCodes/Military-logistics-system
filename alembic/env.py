@@ -10,7 +10,11 @@ from alembic import context
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import models  # noqa: F401  (registers every table on Base)
-from backend.database import DATABASE_URL, Base, engine
+from backend.database import DATABASE_URL, Base
+
+# The migration engine, not the application's: batch_alter_table cannot run
+# under SQLite foreign key enforcement. See backend/migrations.py.
+from backend.migrations import engine
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -78,8 +82,10 @@ def run_migrations_online() -> None:
             context.run_migrations()
         return
 
-    # Standalone CLI: use the application's engine, which already carries the
-    # right connect_args for the configured URL.
+    # Standalone CLI: use the migration engine, which carries the right
+    # connect_args for the configured URL and, on SQLite, deliberately does not
+    # enforce foreign keys -- batch_alter_table's drop-and-rename cannot run
+    # under enforcement.
     with engine.connect() as conn:
         context.configure(connection=conn, target_metadata=target_metadata)
         with context.begin_transaction():

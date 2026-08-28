@@ -10,9 +10,8 @@ from ..database import get_db
 from .. import models, schemas
 from ..dependencies import (
     get_current_active_user,
-    get_current_user,
     get_scoped_equipment_or_404,
-    verify_can_report_status,
+    require_status_authority,
 )
 
 router = APIRouter(prefix="/verifications", tags=["Verifications"])
@@ -26,12 +25,16 @@ async def create_verification(
 ):
     """Create a verification record. Updates equipment status if changed."""
     equipment = get_scoped_equipment_or_404(db, current_user, data.equipment_id)
-    verify_can_report_status(current_user, equipment)
+    require_status_authority(db, current_user, equipment)
 
     reported_status = data.reported_status.value
 
+    # equipment.id, not data.equipment_id, at both writes below. They are the
+    # same value today and only because the resolver filtered on it -- taking
+    # it from the resolved row is what keeps that a fact rather than a
+    # coincidence two edits from now.
     verification = models.Verification(
-        equipment_id=data.equipment_id,
+        equipment_id=equipment.id,
         verification_type=data.verification_type,
         reported_status=reported_status,
         findings=data.findings,
@@ -45,7 +48,7 @@ async def create_verification(
     if reported_status != old_status:
         equipment.status = reported_status
         history = models.EquipmentStatusHistory(
-            equipment_id=data.equipment_id,
+            equipment_id=equipment.id,
             old_status=old_status,
             new_status=reported_status,
             change_reason="verification",
@@ -76,11 +79,22 @@ async def create_verification(
 async def get_equipment_verifications(
     equipment_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_active_user)
 ):
     """Get all verifications for a specific equipment."""
+    # Resolve before reading. The filter below took the raw path parameter, so
+    # the observation history of any asset in the force -- who checked it, when,
+    # what they found -- was readable by any authenticated user who could count.
+    # That is SEC-H6's read half, at a route nothing else guarded.
+    #
+    # No require() follows, and the omission is deliberate rather than an
+    # oversight: this is a read, and the resolver IS the VIEW gate. Adding a
+    # verb here would demand authority to see history for an item the caller can
+    # already see, list, and hold.
+    item = get_scoped_equipment_or_404(db, current_user, equipment_id)
+
     verifications = db.query(models.Verification).filter(
-        models.Verification.equipment_id == equipment_id
+        models.Verification.equipment_id == item.id
     ).order_by(models.Verification.created_date.desc()).all()
     
     return [
@@ -105,11 +119,16 @@ history_router = APIRouter(prefix="/equipment", tags=["Equipment History"])
 async def get_equipment_status_history(
     equipment_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_active_user)
 ):
     """Get status change history for a specific equipment."""
+    # Same treatment, same reason as the verification list above: the raw path
+    # parameter leaked every status change an asset had ever undergone, with the
+    # user who made each one named.
+    item = get_scoped_equipment_or_404(db, current_user, equipment_id)
+
     history = db.query(models.EquipmentStatusHistory).filter(
-        models.EquipmentStatusHistory.equipment_id == equipment_id
+        models.EquipmentStatusHistory.equipment_id == item.id
     ).order_by(models.EquipmentStatusHistory.created_date.desc()).all()
     
     return [

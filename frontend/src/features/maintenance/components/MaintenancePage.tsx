@@ -69,20 +69,14 @@ export default function MaintenancePage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<FilterTab>('all');
-    const [canFix, setCanFix] = useState(false);
     const [fixingId, setFixingId] = useState<number | null>(null);
 
     const fetchTickets = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            const [ticketRes, userRes] = await Promise.all([
-                api.get('/tickets/'),
-                api.get('/users/me'),
-            ]);
+            const ticketRes = await api.get('/tickets/');
             setTickets(ticketRes.data);
-            const u = userRes.data;
-            setCanFix(u.role === 'master' || u.profile?.can_change_maintenance_status);
         } catch (err) {
             console.error(err);
             setError('טעינת כרטיסי תחזוקה נכשלה');
@@ -255,8 +249,9 @@ export default function MaintenancePage() {
                                     </div>
                                 </div>
 
-                                {/* Card Footer — Manager Actions */}
-                                {canFix && ticket.status !== 'Closed' && (
+                                {/* Card Footer — Manager Actions. The backend's RESOLVE_FAULT
+                                    gate is what actually decides this; nothing here does. */}
+                                {ticket.status !== 'Closed' && (
                                     <div className="px-5 py-3 border-t border-border/30 bg-accent/20">
                                         <button
                                             onClick={() => handleCloseTicket(ticket)}

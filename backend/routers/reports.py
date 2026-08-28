@@ -5,7 +5,12 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from ..database import get_db
-from ..dependencies import get_current_active_user, get_daily_status
+from ..dependencies import (
+    get_current_active_user,
+    get_daily_status,
+    scope_equipment_derived_query,
+    scope_equipment_query,
+)
 from .. import models
 
 router = APIRouter(tags=["reports"])
@@ -22,36 +27,17 @@ def get_inventory_report(
     q = db.query(models.Equipment).options(
         joinedload(models.Equipment.catalog_item),
         joinedload(models.Equipment.holder),
-        joinedload(models.Equipment.owner)
+        joinedload(models.Equipment.owner),
+        # Not optional. unit_association below reads the group's name, and
+        # a lazy load there is one query per row across the whole report.
+        joinedload(models.Equipment.group),
     )
 
-    # Apply Visibility Filters (Hierarchy Scoping)
-    user_hierarchy = current_user.unit_hierarchy
-    
-    # MASTER role always sees everything
-    if current_user.role == models.UserRole.MASTER or current_user.role == "master":
-        pass
-    elif current_user.profile and current_user.profile.can_view_all_equipment:
-        pass
-
-    elif current_user.profile and current_user.profile.can_view_battalion_realtime:
-        if user_hierarchy:
-            parts = user_hierarchy.split('/')
-            if len(parts) >= 2:
-                bat_path = "/".join(parts[:2])
-                q = q.filter(models.Equipment.unit_hierarchy.startswith(bat_path))
-            else:
-                q = q.filter(models.Equipment.unit_hierarchy.startswith(user_hierarchy))
-        else:
-            q = q.filter(models.Equipment.holder_user_id == current_user.id)
-
-    elif current_user.profile and current_user.profile.can_view_company_realtime:
-        if user_hierarchy:
-            q = q.filter(models.Equipment.unit_hierarchy.startswith(user_hierarchy))
-        else:
-            q = q.filter(models.Equipment.holder_user_id == current_user.id)
-    else:
-        q = q.filter(models.Equipment.holder_user_id == current_user.id)
+    # Visibility, from the one definition. This route used to carry its own
+    # copy of the scoping ladder, and that copy had already drifted from the
+    # original (it omitted the unit_path fallback) -- DATA-H9. A second
+    # implementation is the defect; sharing the first one is the fix.
+    q = scope_equipment_query(q, current_user)
 
     # Apply user filters
     if equipment_type:
@@ -76,7 +62,16 @@ def get_inventory_report(
         result.append({
             "id": item.id,
             "item_type": item.catalog_item.name if item.catalog_item else "Unknown",
-            "unit_association": item.unit_hierarchy or "",
+            # The group name, since H1-11 dropped the path string this used
+            # to read. Same value for every seeded item -- the paths WERE the
+            # group names -- but now it comes from the thing that actually
+            # decides who sees the row rather than from a column beside it.
+            # The `else` is not reachable through this application -- group_id is
+            # NOT NULL and the app engine enforces the foreign key -- but it
+            # matches how every other line here treats a relationship, and a
+            # database migrated in from elsewhere is exactly where a dangling id
+            # would come from.
+            "unit_association": item.group.name if item.group else "",
             "designated_owner": item.owner.full_name if item.owner else (item.holder.full_name if item.holder else "Unassigned"),
             "actual_location": item.custom_location or "",
             "serial_number": item.serial_number or "",
@@ -94,10 +89,20 @@ def get_daily_movement_report(
 ):
     cutoff = datetime.utcnow() - timedelta(hours=24)
     
-    logs = db.query(models.TransactionLog).options(
-        joinedload(models.TransactionLog.equipment)
-    ).filter(
-        models.TransactionLog.timestamp >= cutoff
+    # SEC-H5. Every movement of every item, force-wide, to any authenticated
+    # user -- who holds what, when it changed hands, and where it went.
+    #
+    # Scoped through the EQUIPMENT the log refers to, not through the log: a
+    # transaction is only as visible as the item it describes. The join is
+    # inner on purpose here, unlike DATA-M10's complaint about optional
+    # filters -- a log whose equipment row is gone describes nothing anyone
+    # can be authorised to see.
+    logs = scope_equipment_derived_query(
+        db.query(models.TransactionLog)
+        .options(joinedload(models.TransactionLog.equipment))
+        .filter(models.TransactionLog.timestamp >= cutoff),
+        models.TransactionLog,
+        current_user,
     ).order_by(models.TransactionLog.timestamp.desc()).all()
     
     return [{

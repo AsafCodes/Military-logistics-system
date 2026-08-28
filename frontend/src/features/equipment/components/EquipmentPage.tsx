@@ -399,10 +399,6 @@ export default function EquipmentPage() {
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
-    // ── Permissions ──
-    const canManageAssets = user?.profile?.can_change_assignment_others || user?.role === 'master';
-    const userRole = user?.role || 'user';
-
     // ── Derived Data ──
     const uniqueTypes = useMemo(() => {
         const types = new Set(equipment.map(e => e.type));
@@ -534,7 +530,7 @@ export default function EquipmentPage() {
                     <table className="w-full text-right">
                         <thead>
                             <tr className="text-xs uppercase font-semibold border-b border-border/40 text-muted-foreground bg-card">
-                                {userRole === 'master' && <th className="px-4 py-3">#</th>}
+                                <th className="px-4 py-3">#</th>
                                 <th className="px-4 py-3">סוג</th>
                                 <th className="px-4 py-3">צד״ק</th>
                                 <th className="px-4 py-3">סטטוס</th>
@@ -556,8 +552,6 @@ export default function EquipmentPage() {
                                             key={item.id}
                                             item={item}
                                             user={user}
-                                            userRole={userRole}
-                                            canManageAssets={!!canManageAssets}
                                             status={status}
                                             compliance={compliance}
                                             isExpanded={isExpanded}
@@ -634,14 +628,12 @@ export default function EquipmentPage() {
 // ============================================================
 
 function EquipmentRow({
-    item, user, userRole, canManageAssets, status, compliance, isExpanded,
+    item, user, status, compliance, isExpanded,
     onToggleExpand, onVerifyPresence, onRepair, onReportFault, onTransfer,
     onAssign, onViewHistory, onVerifyForm
 }: {
     item: Equipment;
     user: User | null;
-    userRole: string;
-    canManageAssets: boolean;
     status: { label: string; cls: string };
     compliance: { icon: string; label: string; cls: string };
     isExpanded: boolean;
@@ -657,9 +649,7 @@ function EquipmentRow({
     return (
         <>
             <tr className="hover:bg-accent/40 transition-colors group">
-                {userRole === 'master' && (
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">#{item.id}</td>
-                )}
+                <td className="px-4 py-3 font-mono text-xs text-muted-foreground">#{item.id}</td>
                 <td className="px-4 py-3 font-medium text-foreground">{item.type}</td>
                 <td className="px-4 py-3 font-mono text-sm text-primary whitespace-nowrap">
                     {item.serial_number || '—'}
@@ -689,21 +679,17 @@ function EquipmentRow({
                         {item.holder_user_id === user?.id && (item.compliance_level === 'WARNING' || item.compliance_level === 'SEVERE') && (
                             <ActionBtn color="indigo" onClick={onVerifyPresence}>דווח נוכחות</ActionBtn>
                         )}
-                        {/* Repair */}
-                        {item.status === 'Malfunctioning' && user?.profile?.can_change_maintenance_status && (
+                        {/* Repair -- RESOLVE_FAULT is the backend's real gate, not this button */}
+                        {item.status === 'Malfunctioning' && (
                             <ActionBtn color="emerald" onClick={onRepair}>תקן</ActionBtn>
                         )}
                         {/* Report Fault */}
                         {item.status === 'Functional' && (
                             <ActionBtn color="red" onClick={onReportFault}>דווח תקלה</ActionBtn>
                         )}
-                        {/* Transfer & Assign */}
-                        {canManageAssets && (
-                            <>
-                                <ActionBtn color="blue" onClick={onTransfer}>העבר</ActionBtn>
-                                <ActionBtn color="violet" onClick={onAssign}>שייך</ActionBtn>
-                            </>
-                        )}
+                        {/* Transfer & Assign -- TRANSFER is the backend's real gate */}
+                        <ActionBtn color="blue" onClick={onTransfer}>העבר</ActionBtn>
+                        <ActionBtn color="violet" onClick={onAssign}>שייך</ActionBtn>
                         {/* Verify form */}
                         <ActionBtn color="gray" onClick={onVerifyForm}>🔍</ActionBtn>
                         {/* History */}

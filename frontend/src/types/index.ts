@@ -7,32 +7,16 @@ export interface User {
     id: number;
     personal_number: string;
     full_name: string;
-    role: string;
-    battalion?: string;
-    company?: string;
-    unit_path?: string;
-    unit_hierarchy?: string;
     is_active_duty: boolean;
-    profile?: Profile;
+    // Where the user sits, and the only statement of it (H1-12 -- role,
+    // battalion and company are gone, along with Profile/UserRole).
+    group?: Group;
 }
 
-export interface Profile {
+export interface Group {
     id: number;
     name: string;
-    name_he?: string;
-    can_view_all_equipment: boolean;
-    can_view_battalion_realtime: boolean;
-    can_view_company_realtime: boolean;
-    can_change_assignment_others: boolean;
-    can_change_maintenance_status: boolean;
-    can_manage_locations: boolean;
-    can_add_category: boolean;
-    can_add_specific_item: boolean;
-    can_remove_category: boolean;
-    can_remove_specific_item: boolean;
-    can_assign_roles: boolean;
-    holds_equipment: boolean;
-    must_report_presence: boolean;
+    kind: string;
 }
 
 export interface LoginCredentials {
@@ -92,7 +76,6 @@ export interface InventoryReportItem {
     status: string;
     holder_name?: string;
     location?: string;
-    unit_hierarchy?: string;
     last_verified?: string;
 }
 

@@ -33,7 +33,7 @@ wait_for_db()
 run_migrations()
 
 # --- FastAPI App ---
-app = FastAPI(title="Military Logistics System", version="4.1 - Modular")
+app = FastAPI(title="Military Logistics System", version="0.5.0")
 
 # --- CORS Middleware (Strict Origins) ---
 origins = [
