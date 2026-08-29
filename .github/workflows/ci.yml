@@ -77,7 +77,7 @@ jobs:
     - name: Run tests
       run: |
         set +e
-        pytest
+        python -m pytest
         code=$?
         set -e
         if [ "$code" -eq 5 ]; then
