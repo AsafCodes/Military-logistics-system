@@ -169,13 +169,22 @@ class TicketResponse(BaseModel):
 
     status: str
     description: str
-    created_at: Optional[datetime] = None  # Alias for timestamp
+
+    # DATA-H2. `opened_at` is the column's real name on MaintenanceLog. It was
+    # absent here while maintenance.py:57 passed it, and Pydantic v2 ignores
+    # unknown __init__ kwargs, so every ticket shipped with no open date at all
+    # while `created_at`/`timestamp` -- declared but never passed -- shipped as
+    # null. Optional, not required: the column is nullable in the database, and
+    # a required field fails validation on one NULL row and takes the whole
+    # list response with it (DATA-M12's shape).
+    opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
-    
+
+    # DATA-H2, named not fixed: neither exists on MaintenanceLog and neither is
+    # ever passed, so both are constants presented as data -- the same falsehood
+    # as the aliases removed above. Outside this ticket's stated fix.
     is_false_alarm: bool = False
     tech_notes: Optional[str] = None
-    
-    timestamp: Optional[datetime] = None # DB field name
 
     class Config:
         from_attributes = True

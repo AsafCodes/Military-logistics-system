@@ -479,7 +479,11 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
 
     tickets = client.get("/tickets/", headers=token_master)
     assert tickets.status_code == 200
+    # opened_at joined this sweep with DATA-H2. It was not omitted by choice
+    # before then -- the field was not on the wire at all, because
+    # TicketResponse declared two aliases for the column and not the column.
     collected += [t["closed_at"] for t in tickets.json() if t["closed_at"]]
+    collected += [t["opened_at"] for t in tickets.json() if t["opened_at"]]
 
     assert len(collected) >= 8, f"expected timestamps from every endpoint, got {collected}"
 
