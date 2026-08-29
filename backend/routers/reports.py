@@ -1,7 +1,7 @@
 """Reports Router - Inventory and daily movement reports"""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List, Optional
 
 from ..database import get_db
@@ -11,6 +11,7 @@ from ..dependencies import (
     scope_equipment_derived_query,
     scope_equipment_query,
 )
+from .. import clock
 from .. import models
 
 router = APIRouter(tags=["reports"])
@@ -77,7 +78,7 @@ def get_inventory_report(
             "serial_number": item.serial_number or "",
             "reporting_status": reporting_status,
             "last_reporter": item.holder.full_name if item.holder else "",
-            "last_verified_at": item.last_verified_at.isoformat() if item.last_verified_at else None,
+            "last_verified_at": clock.iso_z(item.last_verified_at),
         })
     
     return result
@@ -87,7 +88,7 @@ def get_daily_movement_report(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff = clock.utcnow() - timedelta(hours=24)
     
     # SEC-H5. Every movement of every item, force-wide, to any authenticated
     # user -- who holds what, when it changed hands, and where it went.
@@ -107,7 +108,7 @@ def get_daily_movement_report(
     
     return [{
         "id": log.id,
-        "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+        "timestamp": clock.iso_z(log.timestamp),
         "event_type": log.event_type,
         "serial_number": log.equipment.serial_number if log.equipment else None,
         "reporter_name": None,

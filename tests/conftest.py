@@ -44,10 +44,10 @@ from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.database import Base, get_db, _enforce_sqlite_foreign_keys
-from backend import authz, models
+from backend import authz, clock, models
 from backend.enums import Capability
 import backend.security as security
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy.pool import StaticPool
 
@@ -469,21 +469,21 @@ def mock_matrix_db(db_session, group_graph):
     items.append(models.Equipment(
         catalog_item_id=cat.id, status="Functional", **belongs_to("188/53/A"),
         holder_user_id=users["soldier_a"].id, owner_user_id=users["soldier_a"].id,
-        sensitivity="UNCLASSIFIED", serial_number="SA100", last_verified_at=datetime.utcnow()
+        sensitivity="UNCLASSIFIED", serial_number="SA100", last_verified_at=clock.utcnow()
     ))
 
     # Soldier B Item (Different Company)
     items.append(models.Equipment(
         catalog_item_id=cat.id, status="Functional", **belongs_to("188/53/B"),
         holder_user_id=users["soldier_b"].id, owner_user_id=users["soldier_b"].id,
-        sensitivity="UNCLASSIFIED", serial_number="SB200", last_verified_at=datetime.utcnow()
+        sensitivity="UNCLASSIFIED", serial_number="SB200", last_verified_at=clock.utcnow()
     ))
 
     # Tech A Item
     items.append(models.Equipment(
         catalog_item_id=cat.id, status="Functional", **belongs_to("188/53/A"),
         holder_user_id=users["company_tech_a"].id, owner_user_id=users["company_tech_a"].id,
-        sensitivity="UNCLASSIFIED", serial_number="TA300", last_verified_at=datetime.utcnow()
+        sensitivity="UNCLASSIFIED", serial_number="TA300", last_verified_at=clock.utcnow()
     ))
     
     for item in items:

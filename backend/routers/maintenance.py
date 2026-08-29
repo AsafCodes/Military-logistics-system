@@ -1,7 +1,6 @@
 """Maintenance Router - Tickets and fix endpoints"""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
-from datetime import datetime
 from typing import List, Optional
 
 from ..database import get_db
@@ -13,6 +12,7 @@ from ..dependencies import (
 )
 from ..enums import Capability
 from .. import authz
+from .. import clock
 from .. import models
 from .. import schemas
 
@@ -149,14 +149,14 @@ def fix_equipment(
     db.query(models.MaintenanceLog).filter(
         models.MaintenanceLog.equipment_id == item.id,
         models.MaintenanceLog.status != "Closed"
-    ).update({"status": "Closed", "closed_at": datetime.utcnow()}, synchronize_session=False)
-    
+    ).update({"status": "Closed", "closed_at": clock.utcnow()}, synchronize_session=False)
+
     # Log transaction
     log = models.TransactionLog(
         equipment_id=item.id,
         involved_user_id=current_user.id,
         event_type="FIX",
-        timestamp=datetime.utcnow()
+        timestamp=clock.utcnow()
     )
     db.add(log)
     

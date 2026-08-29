@@ -13,6 +13,7 @@ from typing import Optional
 from .database import get_db
 from .enums import Capability
 from . import authz
+from . import clock
 from . import models
 from . import schemas
 from . import security
@@ -321,7 +322,7 @@ def require_status_authority(db: Session, user: models.User, item: models.Equipm
 
 
 def get_daily_status(last_verified_at: Optional[datetime]) -> str:
-    now_utc = datetime.utcnow()
+    now_utc = clock.utcnow()
     if not last_verified_at:
         return "SEVERE"
     diff = now_utc - last_verified_at
