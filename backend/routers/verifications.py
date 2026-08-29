@@ -3,11 +3,10 @@ Equipment Verification & Status History Router
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from datetime import datetime
 from typing import List
 
 from ..database import get_db
-from .. import models, schemas
+from .. import clock, models, schemas
 from ..dependencies import (
     get_current_active_user,
     get_scoped_equipment_or_404,
@@ -58,7 +57,7 @@ async def create_verification(
         )
         db.add(history)
     
-    equipment.last_verified_at = datetime.utcnow()
+    equipment.last_verified_at = clock.utcnow()
     db.commit()
     db.refresh(verification)
     

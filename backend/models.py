@@ -1,8 +1,9 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float
 from sqlalchemy.orm import relationship
-from datetime import datetime, timedelta
+from datetime import timedelta
 from .database import Base # Use shared Base from backend package
 from .enums import EquipmentStatus
+from . import clock
 
 # Imported for its side effect: it registers the group algebra tables on
 # Base.metadata, which is how alembic/env.py and the test suite's create_all()
@@ -36,7 +37,7 @@ class User(Base):
 
     # Status
     is_active_duty = Column(Boolean, default=True) # Is currently in service?
-    last_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(clock.UtcDateTime, default=clock.utcnow)
 
     @property
     def group(self):
@@ -123,7 +124,7 @@ class Equipment(Base):
     actual_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
 
     # Verification
-    last_verified_at = Column(DateTime, default=datetime.utcnow)
+    last_verified_at = Column(clock.UtcDateTime, default=clock.utcnow)
 
     # Relationships
     catalog_item = relationship("CatalogItem")
@@ -178,7 +179,7 @@ class Equipment(Base):
         if not self.last_verified_at:
             return "SEVERE"
         
-        diff = datetime.utcnow() - self.last_verified_at
+        diff = clock.utcnow() - self.last_verified_at
         if diff < timedelta(hours=24):
             return "GOOD"
         elif diff < timedelta(hours=48):
@@ -191,7 +192,7 @@ class Equipment(Base):
         if not self.last_verified_at:
             return "מעולם לא דווח"
         
-        time_diff = datetime.utcnow() - self.last_verified_at
+        time_diff = clock.utcnow() - self.last_verified_at
         if time_diff > timedelta(hours=24):
             return f"חריגת דיווח! עברו {time_diff.days} ימים ו-{int(time_diff.seconds/3600)} שעות"
         return "דיווח תקין"
@@ -203,8 +204,8 @@ class TransactionLog(Base):
     equipment_id = Column(Integer, ForeignKey('equipment.id'))
     involved_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     involved_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    user_status_at_time = Column(Boolean, nullable=True) 
+    timestamp = Column(clock.UtcDateTime, default=clock.utcnow)
+    user_status_at_time = Column(Boolean, nullable=True)
     event_type = Column(String) 
     
     # Faults
@@ -234,8 +235,8 @@ class MaintenanceLog(Base):
     fault_type_id = Column(Integer, ForeignKey('fault_types.id'))
     description = Column(String)
     status = Column(String, default="Open") 
-    opened_at = Column(DateTime, default=datetime.utcnow)
-    closed_at = Column(DateTime, nullable=True)
+    opened_at = Column(clock.UtcDateTime, default=clock.utcnow)
+    closed_at = Column(clock.UtcDateTime, nullable=True)
     
     technician_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     
@@ -252,7 +253,7 @@ class SolutionType(Base):
 class DailyStats(Base):
     __tablename__ = 'daily_stats'
     id = Column(Integer, primary_key=True, index=True)
-    date = Column(DateTime, default=datetime.utcnow)
+    date = Column(clock.UtcDateTime, default=clock.utcnow)
     total_items = Column(Integer)
     functional_items = Column(Integer)
     readiness_score = Column(Float)
@@ -269,9 +270,9 @@ class Verification(Base):
     reported_status = Column(String, nullable=False)
     findings = Column(String, nullable=True)
     action_required = Column(Boolean, default=False)
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(clock.UtcDateTime, default=clock.utcnow)
     created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
-    
+
     equipment = relationship("Equipment", backref="verifications")
     reporter = relationship("User", foreign_keys=[created_by])
 
@@ -287,7 +288,7 @@ class EquipmentStatusHistory(Base):
     change_reason = Column(String, nullable=False)
     verification_id = Column(Integer, ForeignKey('verifications.id'), nullable=True)
     notes = Column(String, nullable=True)
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(clock.UtcDateTime, default=clock.utcnow)
     created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
     
     equipment = relationship("Equipment", backref="status_history")

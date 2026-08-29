@@ -4,7 +4,6 @@ Scoping lives in dependencies.scope_equipment_query()
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from datetime import datetime
 from typing import List, Optional
 
 from ..database import get_db
@@ -16,6 +15,7 @@ from ..dependencies import (
 )
 from ..enums import Capability
 from .. import authz
+from .. import clock
 from .. import models
 from .. import schemas
 
@@ -208,7 +208,7 @@ def assign_owner(
     if destination is not None:
         item.group_id = destination
     item.actual_location_id = None
-    item.last_verified_at = datetime.utcnow()
+    item.last_verified_at = clock.utcnow()
     item.custom_location = None
     
     db.commit()
@@ -336,7 +336,7 @@ def transfer_equipment(
             result_msg = {"status": "Transferred", "location": req.to_location}
 
         item.actual_location_id = None
-        item.last_verified_at = datetime.utcnow()
+        item.last_verified_at = clock.utcnow()
         
         db.commit()
         db.refresh(item)
@@ -376,14 +376,14 @@ def verify_equipment_daily(
     if item.holder_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Permission Denied: You can only verify equipment you hold.")
 
-    item.last_verified_at = datetime.utcnow()
+    item.last_verified_at = clock.utcnow()
     
     trans_log = models.TransactionLog(
         equipment_id=item.id,
         involved_user_id=current_user.id,
         event_type="VERIFICATION",
         user_status_at_time=current_user.is_active_duty,
-        timestamp=datetime.utcnow()
+        timestamp=clock.utcnow()
     )
     db.add(trans_log)
     

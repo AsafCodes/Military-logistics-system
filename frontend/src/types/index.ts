@@ -1,6 +1,7 @@
 /**
  * Shared TypeScript interfaces for the application
  */
+import type { Capabilities } from '@/lib/capabilities';
 
 // ============ USER & AUTH ============
 export interface User {
@@ -19,14 +20,19 @@ export interface Group {
     kind: string;
 }
 
-export interface LoginCredentials {
-    username: string;
-    password: string;
-}
+// LoginCredentials and TokenResponse lived here and are gone with SEC-H9.
+// TokenResponse described a token this client no longer receives, holds, or
+// stores. LoginCredentials was never imported by anything and its shape
+// ({ username, password }) disagreed with the live one in auth.service.ts
+// ({ personalNumber, password }) -- two same-named types, one importable by
+// mistake from '@/types'.
 
-export interface TokenResponse {
-    access_token: string;
-    token_type: string;
+// SEC-H10. What resolveSession() answers with: the user AND what they may
+// do, bundled so there is no render window where one exists without the
+// other -- see lib/capabilities.ts for why `anywhere` is not a gate.
+export interface Session {
+    user: User;
+    capabilities: Capabilities;
 }
 
 // ============ EQUIPMENT ============

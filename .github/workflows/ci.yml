@@ -36,6 +36,12 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
       SECRET_KEY: ci_test_secret
+      # DATA-H1-2. tests/conftest.py *assigns* DATABASE_URL to SQLite at import,
+      # so every other test runs on SQLite even here -- this second variable is
+      # the only way a test can reach the Postgres service above. It is what
+      # un-skips tests/test_utc_migration_postgres.py, which is the only check
+      # anywhere that the TIMESTAMPTZ migration preserves the instants it moves.
+      TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
 
     steps:
     - uses: actions/checkout@v4
@@ -71,7 +77,7 @@ jobs:
     - name: Run tests
       run: |
         set +e
-        pytest
+        python -m pytest
         code=$?
         set -e
         if [ "$code" -eq 5 ]; then
@@ -100,8 +106,9 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    # WAIVER (frontend lint backlog): 17 pre-existing ESLint errors. Same
+    # WAIVER (frontend lint backlog): 16 pre-existing ESLint errors. Same
     # arrangement as the ruff waiver above -- annotated, not enforced, yet.
+    # (Was 17; SEC-H9 cleared one by deleting a dead type.)
     - name: Lint with ESLint
       continue-on-error: true
       run: npm run lint
@@ -111,3 +118,9 @@ jobs:
     # usable as a gate.
     - name: Typecheck and build
       run: npm run build
+
+    # Hard gate from the day it lands, deliberately unlike the two lint waivers
+    # above. The frontend had no test framework at all until SEC-H9; there is no
+    # backlog to forgive, so a failure here is always a real regression.
+    - name: Run tests
+      run: npm run test

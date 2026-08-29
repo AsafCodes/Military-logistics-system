@@ -19,6 +19,17 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-military_db}
       - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env (see .env.example)}
+      # SEC-H9. The session cookie defaults to Secure, so it would never reach
+      # the browser over this stack's plain http.
+      #
+      # Note what this line does: it INVERTS security.py's fail-secure default
+      # for anything started from this file, so here "unset" means insecure.
+      # That is correct for what this file is -- the local http development
+      # stack, with hardcoded localhost CORS origins and the repository bind-
+      # mounted over /app (SEC-M15) -- and it is wrong for anything else. A real
+      # deployment must not be derived from this compose file; if one ever is,
+      # this default is the first line to delete.
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
     volumes:
       - ./:/app
     # Ensure hot reload works well by overriding default restart policy if needed

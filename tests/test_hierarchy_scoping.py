@@ -7,9 +7,7 @@ begin with the viewer's. "Foreign" is now a structural fact -- a group with no
 edge connecting it to the tree -- rather than a string that fails to match.
 """
 
-from datetime import datetime
-
-from backend import models
+from backend import clock, models
 from tests.conftest import create_auth_header, create_group
 
 
@@ -38,7 +36,7 @@ def test_hierarchy_scoping_logic(client, db_session, mock_matrix_db, group_graph
             group_id=group.id,  # The key scoping field
             serial_number=unique_id,
             holder_user_id=holder,
-            last_verified_at=datetime.utcnow()
+            last_verified_at=clock.utcnow()
         )
         db_session.add(item)
         return item
