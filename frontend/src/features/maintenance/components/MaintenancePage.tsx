@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Wrench, RefreshCw, AlertTriangle, CheckCircle, Clock, Inbox } from 'lucide-react';
 import api from '@/api';
+import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
 
 // ============================================================
 // Types
@@ -65,6 +66,10 @@ const formatDate = (dateStr: string | null | undefined) => {
 // ============================================================
 
 export default function MaintenancePage() {
+    // SEC-H10-3. Same real gate as EquipmentPage's תקן button (both hit
+    // POST /maintenance/fix/{id}) -- see EquipmentPage.tsx for why this stays
+    // a bare capability check with no possession arm.
+    const caps = useCapabilities();
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -250,8 +255,9 @@ export default function MaintenancePage() {
                                 </div>
 
                                 {/* Card Footer — Manager Actions. The backend's RESOLVE_FAULT
-                                    gate is what actually decides this; nothing here does. */}
-                                {ticket.status !== 'Closed' && (
+                                    gate is what actually decides this; this is now cosmetically
+                                    narrowed to match, still not the enforcement. */}
+                                {ticket.status !== 'Closed' && hasAnywhere(caps, CAPABILITY.RESOLVE_FAULT) && (
                                     <div className="px-5 py-3 border-t border-border/30 bg-accent/20">
                                         <button
                                             onClick={() => handleCloseTicket(ticket)}

@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import { createElement, type ReactNode } from 'react';
+import { CapabilitiesContext, type Capabilities } from '@/lib/capabilities';
 
 // jsdom implements no CSS media query engine, so window.matchMedia is simply
 // absent. ThemeToggle calls it in a mount effect, which means ANY test that
@@ -49,6 +51,21 @@ export const TEST_CAPABILITIES = {
 export const TEST_CAPABILITIES_NONE = { system: [], anywhere: [] };
 
 export const TEST_SESSION = { user: TEST_USER, capabilities: TEST_CAPABILITIES };
+
+/**
+ * Wraps `ui` in a `CapabilitiesContext.Provider`, or leaves it bare when
+ * `caps` is `null` -- the no-provider case a test uses to pin
+ * `useCapabilities()`'s fail-closed default. Written with `createElement`
+ * rather than JSX so this file can stay `.ts`.
+ *
+ * SEC-H10-3: extracted after EquipmentPage.test.tsx and
+ * MaintenancePage.test.tsx independently wrote the same few lines -- one
+ * definition here is what keeps a future change to how tests reach
+ * `CapabilitiesContext` from having to be found and repeated per file.
+ */
+export function withCapabilities(ui: ReactNode, caps: Capabilities | null): ReactNode {
+    return caps === null ? ui : createElement(CapabilitiesContext.Provider, { value: caps }, ui);
+}
 
 afterEach(() => {
     cleanup();

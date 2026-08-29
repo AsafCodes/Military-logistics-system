@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Package, Search, Filter, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '@/api';
+import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
 import type { Equipment, User, FaultType } from '@/types';
 import EquipmentHistory from './EquipmentHistory';
 import VerificationForm from './VerificationForm';
@@ -646,6 +647,12 @@ function EquipmentRow({
     onViewHistory: () => void;
     onVerifyForm: () => void;
 }) {
+    // SEC-H10-3. `anywhere` over-shows (holds the verb over SOME group, not
+    // necessarily this item's) -- but that only means a shown button can
+    // still 403, never that a hidden one was wrongly hidden. Every write
+    // handler here already alert()s on that 403.
+    const caps = useCapabilities();
+
     return (
         <>
             <tr className="hover:bg-accent/40 transition-colors group">
@@ -679,17 +686,29 @@ function EquipmentRow({
                         {item.holder_user_id === user?.id && (item.compliance_level === 'WARNING' || item.compliance_level === 'SEVERE') && (
                             <ActionBtn color="indigo" onClick={onVerifyPresence}>דווח נוכחות</ActionBtn>
                         )}
-                        {/* Repair -- RESOLVE_FAULT is the backend's real gate, not this button */}
-                        {item.status === 'Malfunctioning' && (
+                        {/* Repair -- RESOLVE_FAULT is the backend's real gate, not this button.
+                            fix_equipment deliberately grants no possession arm
+                            (dependencies.py) -- closing a fault is not something
+                            holding the item should confer, so this stays a bare
+                            capability check with no holder_user_id clause. */}
+                        {item.status === 'Malfunctioning' && hasAnywhere(caps, CAPABILITY.RESOLVE_FAULT) && (
                             <ActionBtn color="emerald" onClick={onRepair}>תקן</ActionBtn>
                         )}
-                        {/* Report Fault */}
-                        {item.status === 'Functional' && (
-                            <ActionBtn color="red" onClick={onReportFault}>דווח תקלה</ActionBtn>
-                        )}
+                        {/* Report Fault -- mirrors require_status_authority's OR
+                            (dependencies.py): possession, or REPORT_STATUS. Do NOT
+                            drop the holder clause -- that is the common case, a
+                            soldier reporting a fault on the item in their hands. */}
+                        {item.status === 'Functional' &&
+                            (item.holder_user_id === user?.id || hasAnywhere(caps, CAPABILITY.REPORT_STATUS)) && (
+                                <ActionBtn color="red" onClick={onReportFault}>דווח תקלה</ActionBtn>
+                            )}
                         {/* Transfer & Assign -- TRANSFER is the backend's real gate */}
-                        <ActionBtn color="blue" onClick={onTransfer}>העבר</ActionBtn>
-                        <ActionBtn color="violet" onClick={onAssign}>שייך</ActionBtn>
+                        {hasAnywhere(caps, CAPABILITY.TRANSFER) && (
+                            <>
+                                <ActionBtn color="blue" onClick={onTransfer}>העבר</ActionBtn>
+                                <ActionBtn color="violet" onClick={onAssign}>שייך</ActionBtn>
+                            </>
+                        )}
                         {/* Verify form */}
                         <ActionBtn color="gray" onClick={onVerifyForm}>🔍</ActionBtn>
                         {/* History */}
