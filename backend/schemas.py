@@ -73,9 +73,24 @@ class CapabilitiesResponse(BaseModel):
     another. `anywhere` answers "does the caller hold this verb over ANY
     group" -- a superset of what they may act on. It over-shows: a consumer
     may offer a control for an item the caller cannot actually reach, and
-    the backend will still refuse it. It never hides a control the caller
-    is entitled to use. That asymmetry is why over-showing is the safe
-    reading and under-showing would not be.
+    the backend will still refuse it. That asymmetry is why over-showing is
+    the safe reading and under-showing would not be.
+
+    Grant-based authority ONLY. This says nothing about possession, which is
+    a second, independent authority source in this model and genuinely
+    invisible here -- dependencies.require_status_authority lets an item's
+    holder report on it, and scope_equipment_query lets a holder see their
+    own item, both with zero grants behind either. A grant-less holder's
+    REPORT_STATUS/VIEW are correctly absent from `anywhere` and that IS a
+    case this endpoint hides a control the caller is entitled to use --
+    caught by a code-review pass reviewing SEC-H10-3, not by any test here.
+    A consumer wiring up possession-gated UI (as EquipmentPage.tsx's report-
+    fault button does) MUST OR in its own possession check rather than
+    trust `anywhere` alone for those two verbs. Folding possession into this
+    response is not a fix available at this altitude: it is per-resource,
+    not per-group, so answering it here would mean enumerating and checking
+    every item the caller holds -- a different, heavier computation than
+    this endpoint's session-wide grant snapshot, not an oversight in it.
     """
     system: List[str]
     anywhere: List[str]
