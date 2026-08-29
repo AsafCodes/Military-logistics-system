@@ -13,7 +13,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import App from './App';
 import { authService } from './services';
-import { TEST_USER as USER } from './test/setup';
+import {
+    TEST_SESSION as SESSION,
+    TEST_CAPABILITIES_NONE as NO_CAPS,
+} from './test/setup';
+
+// A granted admin's session, and the ungranted equivalent -- SEC-H10's route
+// guard reads system: ['MANAGE_PERSONNEL'] from the second, so the two must
+// differ only in capabilities, never in identity, to isolate what the guard
+// is actually keying on.
+const SESSION_NO_ADMIN = { ...SESSION, capabilities: NO_CAPS };
 
 // The login page renders a WebGL globe. jsdom has no WebGL context, so without
 // this the three.js canvas throws and every assertion below fails for a reason
@@ -71,7 +80,7 @@ describe('App bootstrap', () => {
     });
 
     it('renders the authenticated shell when the cookie is recognised', async () => {
-        vi.spyOn(authService, 'resolveSession').mockResolvedValue(USER);
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION);
 
         const { container } = render(<App />);
 
@@ -107,14 +116,58 @@ describe('App bootstrap', () => {
         });
     });
 
-    it('clears the spinner even when the session probe rejects outright', async () => {
-        // resolveSession swallows 401s, but a DNS failure or a timeout rejects.
-        // isLoading lives in a `finally` precisely so this cannot hang.
+    it('clears the spinner, alerts, and shows the login page when the session probe rejects outright', async () => {
+        // resolveSession swallows a 401 as null (that path is covered by "renders
+        // the login page..." above) and swallows a recognised-but-fault-loading
+        // capabilities failure as its own thrown Error (SEC-H10) -- so the only
+        // way resolveSession() itself rejects outright is something establishSession
+        // did not anticipate: a DNS failure, a timeout. isLoading lives in a
+        // `finally` precisely so this cannot hang, and establishSession's catch is
+        // unconditional, so it alerts here exactly as it does for the narrower
+        // SEC-H10 case.
+        const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
         vi.spyOn(authService, 'resolveSession').mockRejectedValue(new Error('network down'));
 
         const { container } = render(<App />);
 
         await waitFor(() => expect(spinner(container)).toBeNull());
+        expect(alerted).toHaveBeenCalled();
+        expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+    });
+});
+
+describe('SEC-H10: the /admin route guard', () => {
+    beforeEach(() => {
+        window.history.pushState({}, '', '/');
+    });
+
+    it('offers the admin nav item and route to a MANAGE_PERSONNEL holder', async () => {
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION);
+
+        render(<App />);
+
+        expect(await screen.findByText('ניהול מערכת')).toBeInTheDocument();
+        fireEvent.click(screen.getByText('ניהול מערכת'));
+
+        expect(await screen.findByText(/שיוך משתמשים לקבוצות/)).toBeInTheDocument();
+    });
+
+    it('hides the nav item and refuses the route to an ungranted user, even by URL', async () => {
+        // The regression this ticket exists for: before this ticket, typing the
+        // path rendered the panel regardless of the (then-nonexistent) nav
+        // filter. Navigating directly, not clicking, is the point -- a hidden
+        // button was never the actual hole.
+        window.history.pushState({}, '', '/admin');
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_NO_ADMIN);
+
+        const { container } = render(<App />);
+
+        await waitFor(() => expect(spinner(container)).toBeNull());
+        // The panel never mounted -- not hidden, not errored, absent.
+        expect(screen.queryByText(/שיוך משתמשים לקבוצות/)).toBeNull();
+        expect(screen.queryByText('ניהול מערכת')).toBeNull();
+        // Landed in the shell (the `*` catch-all to /dashboard), not blanked.
+        expect(await screen.findByText(/Master Admin/i)).toBeInTheDocument();
     });
 });
 
@@ -132,7 +185,7 @@ describe('login', () => {
     it('enters the shell when the profile resolves', async () => {
         vi.spyOn(authService, 'resolveSession')
             .mockResolvedValueOnce(null)      // cold load: nobody signed in
-            .mockResolvedValue(USER);         // after credentials are accepted
+            .mockResolvedValue(SESSION);      // after credentials are accepted
         vi.spyOn(authService, 'login').mockResolvedValue(undefined);
 
         const { container } = render(<App />);
@@ -175,7 +228,7 @@ describe('logout', () => {
     };
 
     it('drops the authenticated shell on success', async () => {
-        vi.spyOn(authService, 'resolveSession').mockResolvedValue(USER);
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION);
         vi.spyOn(authService, 'logout').mockResolvedValue(undefined);
 
         render(<App />);
@@ -197,7 +250,7 @@ describe('logout', () => {
         vi.spyOn(console, 'error').mockImplementation(() => { });
         // jsdom has no real alert; without a stub it logs "not implemented".
         const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
-        vi.spyOn(authService, 'resolveSession').mockResolvedValue(USER);
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION);
         vi.spyOn(authService, 'logout').mockRejectedValue(new Error('network down'));
 
         render(<App />);

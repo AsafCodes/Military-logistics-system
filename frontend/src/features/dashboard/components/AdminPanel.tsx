@@ -22,6 +22,26 @@ interface AdminPanelProps {
 
 export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
     const [groups, setGroups] = useState<GroupSummary[]>([]);
+    // SEC-H10. The route guard in App.tsx is a client-side convenience, not
+    // the real gate -- MANAGE_PERSONNEL is (list_groups gates on it via
+    // authz.require_global, backend/routers/setup.py). Someone reaching this
+    // panel without it (a stale capabilities snapshot, a demotion mid-session)
+    // must see a refusal on the group dropdown, not a silent empty one.
+    //
+    // Scoped to the ONE thing that actually failed, not the whole panel: user
+    // search (below) fetches independently and does not depend on /groups, so
+    // a /groups-only failure must not take it down too. And 'forbidden' is
+    // asserted only on a real 403 -- a transient network blip is a DIFFERENT
+    // fact from "you may not belong here" and must not be reported as one.
+    const [groupsError, setGroupsError] = useState<'forbidden' | 'network' | null>(null);
+    // Starts true, not false: without it, the render before fetchGroups()'s
+    // promise settles shows the group selector as though it were simply
+    // empty rather than not-yet-known -- the same brief, misleading window
+    // this whole refusal state exists to close, just moved one render
+    // earlier. Enforcement stays server-side either way (PUT .../group is
+    // separately gated on MANAGE_PERSONNEL); this is about what the UI
+    // implies during that window, not what it can get away with.
+    const [groupsLoading, setGroupsLoading] = useState(true);
 
     // Search State
     const [searchTerm, setSearchTerm] = useState("");
@@ -55,11 +75,17 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
     }, [searchTerm]);
 
     const fetchGroups = async () => {
+        setGroupsLoading(true);
         try {
             const res = await api.get('/groups');
             setGroups(res.data);
+            setGroupsError(null);
         } catch (err) {
             console.error("Failed to fetch groups", err);
+            const status = (err as { response?: { status?: number } })?.response?.status;
+            setGroupsError(status === 403 ? 'forbidden' : 'network');
+        } finally {
+            setGroupsLoading(false);
         }
     };
 
@@ -173,22 +199,42 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
                                 <p className="text-xs text-muted-foreground/70 mb-2">
                                     קובעת היכן המשתמש נמצא בעץ הארגוני, ומה נראה לו כתוצאה מכך.
                                 </p>
-                                <select
-                                    value={selectedGroupId}
-                                    onChange={e => setSelectedGroupId(e.target.value)}
-                                    className="w-full px-3 py-2 rounded-lg border border-border/50
+                                {groupsLoading ? (
+                                    <div className="p-3 text-sm text-muted-foreground">טוען קבוצות...</div>
+                                ) : groupsError ? (
+                                    <div className="p-3 rounded-lg border border-destructive/30 bg-destructive/5 space-y-2">
+                                        <p className="text-sm text-destructive">
+                                            {groupsError === 'forbidden'
+                                                ? 'אין לך הרשאה לצפות ברשימת הקבוצות.'
+                                                : 'טעינת רשימת הקבוצות נכשלה.'}
+                                        </p>
+                                        {groupsError === 'network' && (
+                                            <button
+                                                onClick={fetchGroups}
+                                                className="text-sm text-primary hover:underline"
+                                            >
+                                                נסה שוב
+                                            </button>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <select
+                                        value={selectedGroupId}
+                                        onChange={e => setSelectedGroupId(e.target.value)}
+                                        className="w-full px-3 py-2 rounded-lg border border-border/50
                                                bg-background text-foreground
                                                focus:ring-2 focus:ring-primary/50 outline-none
                                                transition-colors"
-                                    size={Math.min(groups.length + 1, 8)}
-                                >
-                                    <option value="" disabled>-- בחר קבוצה --</option>
-                                    {groups.map(g => (
-                                        <option key={g.id} value={g.id} className="py-1">
-                                            {g.name}
-                                        </option>
-                                    ))}
-                                </select>
+                                        size={Math.min(groups.length + 1, 8)}
+                                    >
+                                        <option value="" disabled>-- בחר קבוצה --</option>
+                                        {groups.map(g => (
+                                            <option key={g.id} value={g.id} className="py-1">
+                                                {g.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
                             </div>
 
                             <div className="flex gap-3 pt-4">

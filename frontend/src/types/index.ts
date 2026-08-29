@@ -1,6 +1,7 @@
 /**
  * Shared TypeScript interfaces for the application
  */
+import type { Capabilities } from '@/lib/capabilities';
 
 // ============ USER & AUTH ============
 export interface User {
@@ -25,6 +26,14 @@ export interface Group {
 // ({ username, password }) disagreed with the live one in auth.service.ts
 // ({ personalNumber, password }) -- two same-named types, one importable by
 // mistake from '@/types'.
+
+// SEC-H10. What resolveSession() answers with: the user AND what they may
+// do, bundled so there is no render window where one exists without the
+// other -- see lib/capabilities.ts for why `anywhere` is not a gate.
+export interface Session {
+    user: User;
+    capabilities: Capabilities;
+}
 
 // ============ EQUIPMENT ============
 export interface Equipment {

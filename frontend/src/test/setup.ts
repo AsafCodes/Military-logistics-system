@@ -34,6 +34,22 @@ export const TEST_USER = {
     is_active_duty: true,
 };
 
+/**
+ * SEC-H10. An admin's capabilities -- matches what GET /users/me/capabilities
+ * returns for the `master` fixture account backend-side (see
+ * tests/test_capabilities_endpoint.py's EXPECTED table). Holds MANAGE_PERSONNEL,
+ * the /admin route's real, exact gate.
+ */
+export const TEST_CAPABILITIES = {
+    system: ['MANAGE_PERSONNEL', 'MANAGE_CATALOG'],
+    anywhere: ['VIEW', 'TRANSFER', 'CREATE_EQUIPMENT', 'REPORT_STATUS', 'RESOLVE_FAULT'],
+};
+
+/** An authenticated, ungranted account -- holds nothing in either list. */
+export const TEST_CAPABILITIES_NONE = { system: [], anywhere: [] };
+
+export const TEST_SESSION = { user: TEST_USER, capabilities: TEST_CAPABILITIES };
+
 afterEach(() => {
     cleanup();
     // Several tests here deliberately plant hostile values in localStorage --

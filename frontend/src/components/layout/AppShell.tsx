@@ -13,6 +13,7 @@ import {
     X
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { CAPABILITY, hasSystem, useCapabilities, type CapabilityVerb } from '@/lib/capabilities';
 import type { User } from '@/types';
 
 // ============================================================
@@ -23,6 +24,10 @@ interface NavItem {
     path: string;
     label: string;
     icon: React.ReactNode;
+    // Absent means "every authenticated user" -- most items. Present names a
+    // GLOBAL capability (SEC-H10); hasSystem() is exact for those, so this is
+    // never an approximation the way gating on `anywhere` would be.
+    capability?: CapabilityVerb;
 }
 
 interface AppShellProps {
@@ -40,7 +45,7 @@ const NAV_ITEMS: NavItem[] = [
     { path: '/equipment', label: 'ציוד', icon: <Package size={20} /> },
     { path: '/maintenance', label: 'תחזוקה', icon: <Wrench size={20} /> },
     { path: '/reports', label: 'דוחות', icon: <FileBarChart size={20} /> },
-    { path: '/admin', label: 'ניהול מערכת', icon: <Shield size={20} /> },
+    { path: '/admin', label: 'ניהול מערכת', icon: <Shield size={20} />, capability: CAPABILITY.MANAGE_PERSONNEL },
 ];
 
 // ============================================================
@@ -71,12 +76,13 @@ export default function AppShell({ user, onLogout, children }: AppShellProps) {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    // Nav items are the same for every user -- MANAGE_PERSONNEL (the admin
-    // route's real gate) is a grant, not a role, and there is no per-user
-    // capability signal on the frontend to filter by (SEC-H10, deferred). The
-    // backend already refuses what it should; showing the link to everyone
-    // costs an unauthorized visitor a 403, not a hole.
-    const visibleItems = NAV_ITEMS;
+    // SEC-H10. useCapabilities() answers {system: [], anywhere: []} outside a
+    // provider rather than throwing, so this filter denies-by-default if
+    // AppShell is ever rendered somewhere AuthenticatedLayout doesn't wrap it.
+    const capabilities = useCapabilities();
+    const visibleItems = NAV_ITEMS.filter(
+        item => !item.capability || hasSystem(capabilities, item.capability)
+    );
 
     // Current page label
     const currentPageLabel = visibleItems.find(i => location.pathname.startsWith(i.path))?.label || 'לוח בקרה';

@@ -10,7 +10,27 @@
 import { describe, it, expect, vi } from 'vitest';
 import apiClient from '@/lib/axios';
 import { authService } from './auth.service';
-import { TEST_USER as USER } from '@/test/setup';
+import { TEST_USER as USER, TEST_CAPABILITIES as CAPS } from '@/test/setup';
+
+// Both calls in resolveSession() hit the same client method (apiClient.get),
+// so a mock keyed only on method would answer identically for /users/me and
+// /users/me/capabilities. Keyed on URL instead, matching what the two really
+// are: two different endpoints, not one call answered twice.
+function mockBothEndpoints(userResult: 'resolve' | 'reject', capsResult: 'resolve' | 'reject') {
+    vi.spyOn(apiClient, 'get').mockImplementation((url: string) => {
+        if (url === '/users/me') {
+            return userResult === 'resolve'
+                ? Promise.resolve({ data: USER })
+                : Promise.reject({ response: { status: 401 } });
+        }
+        if (url === '/users/me/capabilities') {
+            return capsResult === 'resolve'
+                ? Promise.resolve({ data: CAPS })
+                : Promise.reject(new Error('500'));
+        }
+        throw new Error(`unexpected URL in test: ${url}`);
+    });
+}
 
 // Spies are restored centrally via `restoreMocks` in vite.config.ts.
 describe('authService', () => {
@@ -39,7 +59,7 @@ describe('authService', () => {
         });
 
         it('resolveSession writes nothing', async () => {
-            vi.spyOn(apiClient, 'get').mockResolvedValue({ data: USER });
+            mockBothEndpoints('resolve', 'resolve');
 
             await authService.resolveSession();
 
@@ -88,14 +108,19 @@ describe('authService', () => {
     });
 
     describe('resolveSession', () => {
-        it('returns the user when the server recognises the cookie', async () => {
-            vi.spyOn(apiClient, 'get').mockResolvedValue({ data: USER });
+        it('returns the user and their capabilities when the server recognises the cookie', async () => {
+            mockBothEndpoints('resolve', 'resolve');
 
-            await expect(authService.resolveSession()).resolves.toEqual(USER);
+            await expect(authService.resolveSession()).resolves.toEqual({
+                user: USER,
+                capabilities: CAPS,
+            });
         });
 
         it('returns null instead of throwing when nobody is signed in', async () => {
-            vi.spyOn(apiClient, 'get').mockRejectedValue({ response: { status: 401 } });
+            // Both endpoints refuse an unrecognised cookie the same way; only
+            // /users/me needs to for this case, but a real 401 would refuse both.
+            mockBothEndpoints('reject', 'reject');
 
             // On a first visit a 401 is the ordinary answer, not an error. This
             // returning null rather than throwing is what lets App.tsx's mount
@@ -103,14 +128,27 @@ describe('authService', () => {
             await expect(authService.resolveSession()).resolves.toBeNull();
         });
 
-        it('opts out of the global 401 redirect', async () => {
-            const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: USER });
+        it('SEC-H10: throws -- does not report "signed out" -- when the cookie is recognised but permissions fail to load', async () => {
+            // The cookie IS valid (userResult resolves); only the capabilities
+            // call fails. Silently returning null here would tell a genuinely
+            // signed-in operator they are logged out, which is worse than an
+            // error: it is a believable lie.
+            mockBothEndpoints('resolve', 'reject');
+
+            await expect(authService.resolveSession()).rejects.toThrow();
+        });
+
+        it('opts out of the global 401 redirect on both calls', async () => {
+            mockBothEndpoints('resolve', 'resolve');
+            const get = vi.spyOn(apiClient, 'get');
 
             await authService.resolveSession();
 
             // Without this flag the interceptor turns every anonymous visit
             // into a full-page navigation to a page already being displayed.
-            expect(get.mock.calls[0][1]).toMatchObject({ skipAuthRedirect: true });
+            for (const call of get.mock.calls) {
+                expect(call[1]).toMatchObject({ skipAuthRedirect: true });
+            }
         });
     });
 

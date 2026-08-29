@@ -5,7 +5,8 @@ import ConnectionTest from './components/shared/ConnectionTest';
 import { LoginPage, type LoginFormValues } from './features/auth';
 import AppShell from './components/layout/AppShell';
 import { authService } from './services';
-import type { User } from '@/types';
+import { CAPABILITY, CapabilitiesContext, hasSystem } from '@/lib/capabilities';
+import type { Session } from '@/types';
 
 // Pages
 import { DashboardPage } from './features/dashboard';
@@ -21,26 +22,41 @@ const queryClient = new QueryClient();
 // ============================================================
 
 function AuthenticatedLayout({
-  user,
+  session,
   onLogout,
 }: {
-  // Not nullable: this layout renders only where `user !== null`, and typing it
-  // otherwise invites callers to render an authenticated shell for nobody.
-  user: User;
+  session: Session;
   onLogout: () => void;
 }) {
+  // SEC-H10. /admin's real gate is MANAGE_PERSONNEL, a GLOBAL capability --
+  // authz.may_global answers it as an exact yes/no, so hasSystem here is not
+  // an approximation the way hasAnywhere would be for a positional verb.
+  //
+  // Non-registration, not a redirect drawn after the fact: when the caller
+  // lacks the capability, the Route element below simply never exists, and
+  // the `*` catch-all two lines down absorbs /admin exactly like any other
+  // unknown path. Typing the URL cannot render a panel that was never
+  // registered -- this is what makes the guard structural rather than
+  // cosmetic.
+  const isAdmin = hasSystem(session.capabilities, CAPABILITY.MANAGE_PERSONNEL);
+
   return (
-    <AppShell user={user} onLogout={onLogout}>
-      <Routes>
-        <Route path="/dashboard" element={<DashboardPage onLogout={onLogout} />} />
-        <Route path="/equipment" element={<EquipmentPage />} />
-        <Route path="/maintenance" element={<MaintenancePage />} />
-        <Route path="/reports" element={<GeneralReportPage />} />
-        <Route path="/admin" element={<AdminPanel onClose={() => { }} />} />
-        {/* Default redirect */}
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
-    </AppShell>
+    <CapabilitiesContext.Provider value={session.capabilities}>
+      <AppShell user={session.user} onLogout={onLogout}>
+        <Routes>
+          <Route path="/dashboard" element={<DashboardPage onLogout={onLogout} />} />
+          <Route path="/equipment" element={<EquipmentPage />} />
+          <Route path="/maintenance" element={<MaintenancePage />} />
+          <Route path="/reports" element={<GeneralReportPage />} />
+          {isAdmin && (
+            <Route path="/admin" element={<AdminPanel onClose={() => { }} />} />
+          )}
+          {/* Default redirect. Also where /admin lands for anyone the Route
+              above wasn't registered for -- same as any other unknown path. */}
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </AppShell>
+    </CapabilitiesContext.Provider>
   );
 }
 
@@ -57,7 +73,28 @@ function App() {
   // edit gets to desynchronise -- in the two directions that matter, an
   // authenticated shell rendered with no user, or a login page rendered over a
   // live session.
-  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+
+  // SEC-H10. resolveSession() now throws when the cookie IS recognised but
+  // permissions could not be loaded (a 5xx on the capabilities call) -- a
+  // server fault, not a signed-out visitor, and reporting it as "signed out"
+  // would be a lie. Both the mount effect and handleLogin route through this
+  // one helper so that fault surfaces identically on both paths: told, not
+  // silently mis-rendered as a stripped or absent session.
+  //
+  // Resolves rather than setting state itself -- the mount effect below still
+  // needs its own `cancelled` guard around the resulting setState, which a
+  // shared helper cannot own on the caller's behalf. alert() matches the
+  // convention handleLogout already uses below, and the eight pre-existing
+  // calls across the feature pages.
+  const establishSession = async (): Promise<Session | null> => {
+    try {
+      return await authService.resolveSession();
+    } catch {
+      window.alert('טעינת ההרשאות נכשלה. נסה לרענן את הדף.');
+      return null;
+    }
+  };
 
   // SEC-H9. This effect used to read a cached user out of localStorage and
   // JSON.parse it unguarded, THEN call setIsLoading(false) on the next line --
@@ -69,21 +106,14 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
-    authService.resolveSession()
-      .then(me => {
-        if (!cancelled) setUser(me);
-      })
-      .catch(() => {
-        // resolveSession already answers a refused session with null, so
-        // reaching here means something worse -- and an uncaught rejection in a
-        // mount effect is how this bug presented the first time. Treated as
-        // "not signed in": the shell must not render for a session we failed to
-        // establish.
-        if (!cancelled) setUser(null);
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
+    (async () => {
+      // establishSession's own try/catch means it never rejects, so no
+      // try/finally is needed here to guarantee this runs -- only the
+      // `cancelled` guard is load-bearing, against a setState after unmount.
+      const result = await establishSession();
+      if (!cancelled) setSession(result);
+      if (!cancelled) setIsLoading(false);
+    })();
 
     return () => { cancelled = true; };
   }, []);
@@ -92,16 +122,12 @@ function App() {
     await authService.login(values);
 
     // Past this line the cookie EXISTS -- the credentials were accepted. So a
-    // failure fetching the profile must not surface as "login failed": the
-    // login worked, and telling the operator otherwise sends them to re-enter
-    // credentials for a session they already hold.
-    //
-    // resolveSession rather than a throwing fetch, and the SAME call the cold
-    // path uses: one request, null instead of an exception, and one answer to
-    // "who is signed in" rather than two spellings of it. A null here leaves
-    // the login form up with the cookie already set, so a second attempt
-    // succeeds against the session they now hold.
-    setUser(await authService.resolveSession());
+    // failure establishing the session must not surface as "login failed":
+    // the login worked, and telling the operator otherwise sends them to
+    // re-enter credentials for a session they already hold. establishSession
+    // alerts (rather than throwing) on that failure, so the login form stays
+    // up with the cookie already set and a second attempt succeeds.
+    setSession(await establishSession());
   };
 
   const handleLogout = async () => {
@@ -109,7 +135,7 @@ function App() {
     // this code can neither read nor delete it.
     try {
       await authService.logout();
-      setUser(null);
+      setSession(null);
     } catch (error) {
       // Caught, not rethrown: nothing awaits this handler, so a rejection would
       // escape as an unhandled promise rejection.
@@ -149,7 +175,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          {user === null ? (
+          {session === null ? (
             <>
               <Route
                 path="/login"
@@ -165,7 +191,7 @@ function App() {
               <Route path="*" element={<Navigate to="/login" replace />} />
             </>
           ) : (
-            <Route path="/*" element={<AuthenticatedLayout user={user} onLogout={handleLogout} />} />
+            <Route path="/*" element={<AuthenticatedLayout session={session} onLogout={handleLogout} />} />
           )}
         </Routes>
       </BrowserRouter>

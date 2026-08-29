@@ -8,7 +8,7 @@
  * answer from local state. Identity is whatever `/users/me` says it is.
  */
 import apiClient from '@/lib/axios';
-import type { User } from '@/types';
+import type { Session } from '@/types';
 
 export interface LoginCredentials {
     personalNumber: string;
@@ -48,7 +48,8 @@ class AuthService {
     }
 
     /**
-     * Ask the server who is signed in. The only answer to that question.
+     * Ask the server who is signed in and what they may do. The only answer
+     * to either question.
      *
      * Used by both paths -- the cold page load and the moment after a
      * successful login. There was briefly a second, throwing `getMe()` beside
@@ -56,21 +57,47 @@ class AuthService {
      * failure mode it wanted, and post-login the throwing one reported "login
      * failed" for a login that had in fact succeeded.
      *
-     * Returns null for "not signed in" rather than throwing, because on a first
-     * visit that is the ordinary answer and not an error. Opts out of the 401
-     * redirect: this probe EXPECTS to be refused when nobody is signed in, and
-     * letting the interceptor act on that turns every anonymous visit into a
-     * full page navigation.
+     * SEC-H10 bundles a second request into this one call rather than adding a
+     * parallel resolveCapabilities(): the two must arrive together, or a render
+     * window opens where the user is known but their authority is not, and a
+     * route guard drawn during that window has to decide "loading" versus
+     * "denied" with no principled way to tell them apart.
+     *
+     * Both requests run under allSettled, not all/Promise.all -- the two
+     * failure cases mean opposite things and only allSettled can tell them
+     * apart by WHICH call failed:
+     *
+     *   /users/me rejects                -> nobody is signed in. The ordinary
+     *                                        first-visit answer, not an error.
+     *   /users/me ok, capabilities fails -> the cookie IS recognised. This is
+     *                                        a server fault, and reporting it
+     *                                        as "signed out" would be a lie.
+     *
+     * The second case throws (a plain Error -- this codebase has no custom
+     * exception types, see backend/authz.py's own note on the same choice) so
+     * the caller can tell an operator their permissions could not be
+     * established, rather than silently signing them out.
+     *
+     * Both requests opt out of the 401 redirect: they EXPECT to be refused
+     * when nobody is signed in, and letting the interceptor act on that turns
+     * every anonymous visit into a full page navigation.
      */
-    async resolveSession(): Promise<User | null> {
-        try {
-            const response = await apiClient.get<User>('/users/me', {
+    async resolveSession(): Promise<Session | null> {
+        const [userResult, capsResult] = await Promise.allSettled([
+            apiClient.get<Session['user']>('/users/me', { skipAuthRedirect: true }),
+            apiClient.get<Session['capabilities']>('/users/me/capabilities', {
                 skipAuthRedirect: true,
-            });
-            return response.data;
-        } catch {
+            }),
+        ]);
+
+        if (userResult.status === 'rejected') {
             return null;
         }
+        if (capsResult.status === 'rejected') {
+            throw new Error('Could not load permissions for a recognised session.');
+        }
+
+        return { user: userResult.value.data, capabilities: capsResult.value.data };
     }
 }
 
