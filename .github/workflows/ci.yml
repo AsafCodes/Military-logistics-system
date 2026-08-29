@@ -36,6 +36,12 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
       SECRET_KEY: ci_test_secret
+      # DATA-H1-2. tests/conftest.py *assigns* DATABASE_URL to SQLite at import,
+      # so every other test runs on SQLite even here -- this second variable is
+      # the only way a test can reach the Postgres service above. It is what
+      # un-skips tests/test_utc_migration_postgres.py, which is the only check
+      # anywhere that the TIMESTAMPTZ migration preserves the instants it moves.
+      TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
 
     steps:
     - uses: actions/checkout@v4

@@ -119,6 +119,59 @@ def test_naive_legacy_rows_read_back_aware(db_session):
     assert reloaded.timestamp == datetime(2020, 6, 15, 12, 30, 0, tzinfo=timezone.utc)
 
 
+def test_the_dialect_split_is_wired_the_way_postgres_needs(db_session):
+    """DATA-H1-2's column type and bind parameter, checked WITHOUT a Postgres.
+
+    tests/test_utc_migration_postgres.py proves all of this against a real
+    server, but it skips whenever TEST_POSTGRES_URL is unset -- which is every
+    local run and every developer machine without Docker. This test needs no
+    server at all: a dialect object is enough to ask the decorator what it
+    would do, so the repository keeps a mechanical guard on the split even when
+    the Postgres suite is not running.
+
+    The two halves are only correct together (see clock.UtcDateTime's
+    docstring): a TIMESTAMPTZ column fed a naive value, or a naive column fed
+    an aware one, both shift every timestamp by the server's offset. So both
+    are asserted here, against both dialects, in one place.
+    """
+    from sqlalchemy.dialects import postgresql, sqlite
+
+    pg, lite = postgresql.dialect(), sqlite.dialect()
+    column = clock.UtcDateTime()
+    aware = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone(timedelta(hours=3)))
+
+    # The column type each backend is given.
+    assert column.load_dialect_impl(pg).timezone is True
+    assert getattr(column.load_dialect_impl(lite), "timezone", False) is False
+
+    # Postgres keeps the zone -- and gets the INSTANT, not the wall clock.
+    bound_pg = column.process_bind_param(aware, pg)
+    assert bound_pg.tzinfo is not None
+    assert bound_pg.utcoffset() == timedelta(0)
+    assert bound_pg == aware
+
+    # SQLite cannot hold a zone, so it gets naive UTC: today's storage format.
+    # The two naive literals below carry DTZ001 waivers because being naive is
+    # the property under test -- an aware version would assert the opposite.
+    bound_lite = column.process_bind_param(aware, lite)
+    assert bound_lite.tzinfo is None
+    assert bound_lite == datetime(2026, 6, 15, 9, 0, 0)  # noqa: DTZ001
+
+    # A naive input means UTC, and must be STAMPED before psycopg2 sees it --
+    # an unstamped naive value reaching TIMESTAMPTZ is read as server-local.
+    naive = datetime(2026, 6, 15, 9, 0, 0)  # noqa: DTZ001
+    assert column.process_bind_param(naive, pg) == naive.replace(tzinfo=timezone.utc)
+
+    # Reading back normalises to UTC on either dialect, including the aware
+    # non-UTC value psycopg2 hands over when the session zone is not UTC.
+    session_local = datetime(2026, 6, 15, 14, 30, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    for dialect in (pg, lite):
+        assert column.process_result_value(session_local, dialect).utcoffset() == timedelta(0)
+        assert column.process_result_value(session_local, dialect) == session_local
+        assert column.process_result_value(naive, dialect) == naive.replace(tzinfo=timezone.utc)
+        assert column.process_result_value(None, dialect) is None
+
+
 def test_bind_param_converts_a_non_utc_offset_rather_than_stripping_it(db_session):
     """The exact bug class this decorator exists to avoid.
 
