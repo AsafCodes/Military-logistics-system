@@ -24,6 +24,34 @@ class EquipmentStatus(str, enum.Enum):
     MISSING = "Missing"
 
 
+class Sensitivity(str, enum.Enum):
+    """How restricted an equipment record is.
+
+    DATA-H3-1. Two members, because two is what the domain has actually said:
+    the ticket's own title is "classified items are always reported as
+    UNCLASSIFIED", and nothing anywhere in this repository names a graded
+    ladder. Inventing CONFIDENTIAL/SECRET/TOP_SECRET here would be declaring
+    policy vocabulary no code, form or seed has asked for -- the shape the
+    Capability docstring below opens by warning about. Extending is one line
+    the moment something real needs the distinction.
+
+    Constrains the RESPONSE and the model default only. The column is still a
+    plain String (models.py), so an out-of-vocabulary value remains reachable
+    by hand-written SQL -- DATA-H12 is the ticket that constrains the column,
+    and until it lands such a value fails validation loudly rather than being
+    silently reported as UNCLASSIFIED, which is the trade DATA-H3-1 makes on
+    purpose. See tests/test_sensitivity_contract.py for that behaviour pinned.
+
+    Enforces NOTHING. Sensitivity is not consulted by scope_equipment_query or
+    by any gate: it is a field the API reports, not a control, and there is as
+    yet no write path that can set it to CLASSIFIED at all. DATA-H3-2 is where
+    it acquires both. Read a CLASSIFIED value as a claim about the record, not
+    as a restriction the server has applied.
+    """
+    UNCLASSIFIED = "UNCLASSIFIED"
+    CLASSIFIED = "CLASSIFIED"
+
+
 class GroupKind(str, enum.Enum):
     """The kinds of group the access model recognises.
 

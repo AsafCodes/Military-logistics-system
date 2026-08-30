@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-from .enums import EquipmentStatus
+from .enums import EquipmentStatus, Sensitivity
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -116,8 +116,42 @@ class EquipmentResponse(BaseModel):
     custom_location: Optional[str]
     actual_location_id: Optional[int]
     
-    sensitivity: str = "UNCLASSIFIED"
-    
+    # DATA-H3-1. Was `sensitivity: str = "UNCLASSIFIED"` -- a constant, not a
+    # field: no construction site passed it, so every item in the force was
+    # reported unclassified regardless of what its column held. Now sourced
+    # from the record at all three sites.
+    #
+    # Optional on DATA-H2's reasoning, not for want of a value: the column is
+    # nullable (4acc9d5f6339:108) and its default is Python-side, so NULL is
+    # reachable by any insert that does not go through the ORM. FastAPI
+    # validates the whole List[EquipmentResponse], so a required field turns
+    # one NULL row into a blanked equipment page -- DATA-M12's shape.
+    #
+    # Typed as the enum rather than str: that is this ticket's "constrain it to
+    # an enumerated type" clause. A str-mixin enum serializes to its value, so
+    # the wire format is unchanged for in-vocabulary rows (verified, not
+    # assumed -- model_dump_json emits the bare string "CLASSIFIED").
+    #
+    # This is the FIRST response field in this file typed as an enum, and that
+    # is worth saying plainly rather than dressing it up as precedent. The only
+    # other enum-typed field is VerificationCreate.reported_status below, which
+    # is a REQUEST; VerificationResponse.reported_status beside it is a plain
+    # str. So the established pattern here is enums on the way in and strings on
+    # the way out, and this field departs from it deliberately.
+    #
+    # The cost of departing: a hand-written out-of-vocabulary value (reachable
+    # until DATA-H12 constrains the column) now raises ValidationError and
+    # fails the whole list request, where the old constant silently replaced it.
+    #
+    # Note the asymmetry with the NULL case above, which is deliberate and not
+    # an oversight to be tidied away: NULL is a legitimate absence, so it
+    # degrades to null and the list survives; junk is a data-integrity fault, so
+    # it is loud. Reporting a record of UNKNOWN classification as UNCLASSIFIED
+    # is the exact falsehood this ticket exists to remove, and a validator that
+    # mapped unknown values to None would re-hide it. Do not "fix" the
+    # inconsistency by making either case match the other.
+    sensitivity: Optional[Sensitivity] = None
+
     # Smart fields
     item_name: str
     current_state_description: str

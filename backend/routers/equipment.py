@@ -99,7 +99,8 @@ def get_accessible_equipment(
             holder_user_id=item.holder_user_id,
             custom_location=item.custom_location,
             actual_location_id=item.actual_location_id,
-            serial_number=item.serial_number
+            serial_number=item.serial_number,
+            sensitivity=item.sensitivity  # DATA-H3-1
         ))
     return results
 
@@ -155,7 +156,8 @@ def create_equipment(
         serial_number=new_item.serial_number,
         holder_user_id=new_item.holder_user_id,
         custom_location=new_item.custom_location,
-        actual_location_id=new_item.actual_location_id
+        actual_location_id=new_item.actual_location_id,
+        sensitivity=new_item.sensitivity  # DATA-H3-1
     )
 
 @router.post("/equipment/assign_owner/")

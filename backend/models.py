@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float
 from sqlalchemy.orm import relationship
 from datetime import timedelta
 from .database import Base # Use shared Base from backend package
-from .enums import EquipmentStatus
+from .enums import EquipmentStatus, Sensitivity
 from . import clock
 
 # Imported for its side effect: it registers the group algebra tables on
@@ -87,7 +87,12 @@ class Equipment(Base):
     status = Column(String, default=EquipmentStatus.FUNCTIONAL.value)
     
     # Matrix Security Fields
-    sensitivity = Column(String, default="UNCLASSIFIED")
+    #
+    # DATA-H3-1 sourced the default from the enum rather than repeating the
+    # string, exactly as status does one line above. Still a plain String
+    # column: DATA-H12 owns the database-level constraint, and a Python-side
+    # default is not DDL, so this needs no migration.
+    sensitivity = Column(String, default=Sensitivity.UNCLASSIFIED.value)
 
     # The group this item belongs to -- the single representation, since
     # H1-11 dropped the unit_hierarchy path string that used to sit above.
