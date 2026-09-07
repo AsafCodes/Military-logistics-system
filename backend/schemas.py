@@ -106,6 +106,21 @@ class EquipmentCreate(BaseModel):
     # creator's extent, because unlike the derived value it is attacker-chosen.
     group_id: Optional[int] = None
 
+    # DATA-H3-2. Optional and defaulting to None, NOT to UNCLASSIFIED, and the
+    # difference is load-bearing rather than stylistic. None means "the client
+    # said nothing", which is what lets create_equipment tell a request that
+    # needs the SET_SENSITIVITY gate from one that does not. Defaulting to
+    # UNCLASSIFIED would make EVERY creation a classification decision and
+    # would demand the new verb of callers who never asked to classify
+    # anything, breaking ordinary creation for every CREATE_EQUIPMENT holder
+    # who lacks it (both company techs, in the seeded graph).
+    #
+    # None reaches the model as None and the column's Python-side default turns
+    # it into UNCLASSIFIED -- SQLAlchemy applies a default whenever the value is
+    # None at flush time, so this does NOT write NULL. Stated because the
+    # opposite is the natural assumption and an earlier draft acted on it.
+    sensitivity: Optional[Sensitivity] = None
+
 class EquipmentResponse(BaseModel):
     id: int
     type: str # Computed from catalog
@@ -179,7 +194,22 @@ class ReportFaultRequest(BaseModel):
 
 class EquipmentVerifyRequest(BaseModel):
     equipment_id: int
-    verification_code: Optional[str] = None 
+    verification_code: Optional[str] = None
+
+class SetSensitivityRequest(BaseModel):
+    """DATA-H3-2. The body of PATCH /equipment/{id}/sensitivity.
+
+    Required, not Optional, and the field stands alone. Declassifying is
+    UNCLASSIFIED -- an explicit value a caller states and the audit trail can
+    one day record -- never an omission. An Optional field here would make
+    "clear the classification" and "leave it alone" the same request.
+
+    No equipment_id, unlike the sibling *Request classes above: this route
+    takes the id in the PATH, following equipment.verify_equipment_daily
+    rather than the body-id convention the older POST routes use. The id
+    identifies the resource being amended, which is what a path is for.
+    """
+    sensitivity: Sensitivity
 
 # --- Setup ---
 class FaultTypeCreate(BaseModel):

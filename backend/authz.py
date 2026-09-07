@@ -594,6 +594,27 @@ EQUIPMENT_CAPABILITIES = (
     Capability.CREATE_EQUIPMENT,
     Capability.REPORT_STATUS,
     Capability.RESOLVE_FAULT,
+    # DATA-H3-2. A verb over equipment in a group, so it carries implied VIEW
+    # like the four above: a holder who could not SEE the item could not
+    # resolve it to classify it, and the grant would be authority nobody can
+    # exercise -- the H1-9 defect implied_view_placements exists to prevent.
+    Capability.SET_SENSITIVITY,
+    # DATA-H3-3 deliberately does NOT add VIEW_CLASSIFIED here, and the omission
+    # is the opposite call from the one directly above despite looking like the
+    # same situation. The rule this tuple feeds is "a verb over equipment in a
+    # group implies VIEW of that group". VIEW_CLASSIFIED is not a verb you
+    # exercise on an item -- it is a widening of the VIEW arm itself, consumed
+    # inside dependencies.scope_equipment_query rather than by any route.
+    #
+    # Including it would be circular (implying the very grant it modifies) and,
+    # worse, would hand a clearance-holder sight of every ORDINARY item in that
+    # group as a side effect -- authority nobody granted, arriving through a
+    # derivation rather than a table. A holder of VIEW_CLASSIFIED with no VIEW
+    # there sees nothing, which is correct: clearance widens sight you already
+    # have, it does not confer sight.
+    #
+    # Pinned by test_implied_view_covers_every_equipment_verb, whose guard
+    # asserts this tuple's exact membership.
 )
 
 

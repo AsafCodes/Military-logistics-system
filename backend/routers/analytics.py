@@ -19,6 +19,21 @@ def get_unit_readiness(
     # readiness, and a commander's figure is the readiness of what they
     # command. The percentage was never comparable across users anyway -- it
     # just looked like it was.
+    #
+    # DATA-H3-3 widened what "can see" means and this route was left alone ON
+    # PURPOSE, which is a decision rather than an oversight. Classified items in
+    # your scope now drop out of BOTH counts unless you hold VIEW_CLASSIFIED
+    # over their group, so an uncleared caller's total silently shrinks. Routing
+    # around the classification filter here would keep the number truthful at
+    # the cost of a SECOND definition of visibility -- the DATA-H9 shape -- and
+    # would be the only place in the backend where scoping means something
+    # different. The number continues to mean exactly what the paragraph above
+    # says it means: the readiness of what you can see.
+    #
+    # The accepted cost, named so nobody discovers it as a surprise: a cleared
+    # and an uncleared caller comparing totals can infer that a classified item
+    # exists in that scope, though not which one. Pinned by a test in
+    # tests/test_sensitivity_contract.py so the behaviour cannot drift quietly.
     visible = scope_equipment_query(db.query(models.Equipment), current_user)
     total = visible.count()
     functional = scope_equipment_query(

@@ -35,18 +35,40 @@ class Sensitivity(str, enum.Enum):
     Capability docstring below opens by warning about. Extending is one line
     the moment something real needs the distinction.
 
-    Constrains the RESPONSE and the model default only. The column is still a
-    plain String (models.py), so an out-of-vocabulary value remains reachable
-    by hand-written SQL -- DATA-H12 is the ticket that constrains the column,
-    and until it lands such a value fails validation loudly rather than being
-    silently reported as UNCLASSIFIED, which is the trade DATA-H3-1 makes on
-    purpose. See tests/test_sensitivity_contract.py for that behaviour pinned.
+    Constrains the RESPONSE, the REQUEST and the model default. The column is
+    still a plain String (models.py), so an out-of-vocabulary value remains
+    reachable by hand-written SQL -- DATA-H12 is the ticket that constrains the
+    column, and until it lands such a value fails validation loudly rather than
+    being silently reported as UNCLASSIFIED, which is the trade DATA-H3-1 makes
+    on purpose. See tests/test_sensitivity_contract.py for that behaviour, and
+    for the contrast with a bad value arriving on a REQUEST, which is refused
+    with a 422 before the route runs at all.
 
-    Enforces NOTHING. Sensitivity is not consulted by scope_equipment_query or
-    by any gate: it is a field the API reports, not a control, and there is as
-    yet no write path that can set it to CLASSIFIED at all. DATA-H3-2 is where
-    it acquires both. Read a CLASSIFIED value as a claim about the record, not
-    as a restriction the server has applied.
+    WRITABLE, as of DATA-H3-2: Capability.SET_SENSITIVITY gates both a
+    dedicated PATCH route and the sensitivity clause of equipment creation, so
+    CLASSIFIED is now reachable through the API by a named authority rather
+    than by hand-written SQL alone.
+
+    ENFORCED, as of DATA-H3-3, and this is the member's whole point: a
+    CLASSIFIED item is hidden from a caller who lacks VIEW_CLASSIFIED over its
+    group. The filter lives in dependencies.scope_equipment_query, so it reaches
+    every listing, the maintenance and transaction-log listings built on
+    scope_equipment_derived_query, and every 404 in the system through
+    get_scoped_equipment_or_404 -- one definition rather than a rule each route
+    reimplements. A CLASSIFIED value is no longer merely a claim recorded about
+    the record; it is a restriction the server applies to it.
+
+    Two deliberate limits on that guarantee, both load-bearing:
+
+      - POSSESSION SURVIVES CLASSIFICATION. The holder arm of
+        scope_equipment_query sits OUTSIDE the classification clause, so you can
+        still see what you are carrying. Classification restricts everyone
+        except the person physically holding the item -- which also keeps a
+        private able to report a fault on the rifle in their hands.
+      - AGGREGATES STILL LEAK. analytics.unit_readiness counts through the same
+        scope, so an uncleared caller's total silently drops by one. Comparing
+        totals with a cleared caller reveals that a classified item exists,
+        though not which. Accepted rather than overlooked; see that route.
     """
     UNCLASSIFIED = "UNCLASSIFIED"
     CLASSIFIED = "CLASSIFIED"
@@ -82,9 +104,11 @@ class Capability(str, enum.Enum):
     read by a router, and the rule this docstring opens with describes the
     whole enum rather than most of it.
 
-    RESOLVE_FAULT is the ONE placement in the entire cutover that is a
+    RESOLVE_FAULT was the ONE placement in the entire cutover that is a
     judgement rather than a mapping, and it should be read with that in mind.
-    Every other verb came from a column in profiles.py. This one could not:
+    Every other verb of the cutover came from a column in profiles.py; the
+    cutover is over, and SET_SENSITIVITY below is a second such judgement,
+    added by DATA-H3-2 rather than migrated from anything. This one could not:
     profiles.py has a single maintenance column, can_change_maintenance_status,
     so the table cannot say who may CLOSE a fault as distinct from who may
     REPORT one. It was split on the ruling that noticing a fault and declaring
@@ -117,6 +141,31 @@ class Capability(str, enum.Enum):
     would produce two tables that differ only in name, which is the SEC-H4
     shape this docstring opens by warning about. Split them the moment some
     profile holds one without the other, and not before.
+
+    SET_SENSITIVITY (DATA-H3-2) is the second judgement, and unlike
+    RESOLVE_FAULT it did not come from splitting a column -- profiles.py has no
+    classification boolean at all, so there was nothing to map. It is a verb of
+    its own rather than a reuse of TRANSFER because reusing TRANSFER would
+    assert that whoever may MOVE an item may CLASSIFY it, and TRANSFER is held
+    by every company commander in both grant tables; that is the widest reading
+    available for an authority that should be rarer than custody. Seeded to
+    master, brigade and battalion and deliberately NOT to the company, on the
+    ruling that classifying is a command decision above the level that carries
+    the kit. If that ruling is wrong, the company rows are where it is wrong.
+
+    Note it grants no possession arm anywhere. Holding an item lets you report
+    on it (dependencies.require_status_authority) and does NOT let you classify
+    it -- the same asymmetry RESOLVE_FAULT has, enforced the same way, by which
+    routes call which helper rather than by anything inside this enum.
+
+    VIEW_CLASSIFIED (DATA-H3-3) is the paired READ side of that verb, and the
+    two are not the same kind of thing despite the adjacency. SET_SENSITIVITY is
+    a verb you exercise ON an item; VIEW_CLASSIFIED is a widening of VIEW
+    itself, which is why it is the one equipment-facing member deliberately
+    kept OUT of authz.EQUIPMENT_CAPABILITIES -- the reasoning is stated in full
+    beside that tuple. Seeded to the same three holders as SET_SENSITIVITY so
+    that whoever may classify an item can still see it afterwards; splitting
+    them would let a commander classify something into invisibility.
     """
     VIEW = "VIEW"
     # dependencies.scope_equipment_query, and every listing built on it.
@@ -129,6 +178,12 @@ class Capability(str, enum.Enum):
     # question rather than a gate, report_fault's is_pending decision.
     RESOLVE_FAULT = "RESOLVE_FAULT"
     # maintenance.fix_equipment, on the group the item belongs to.
+    SET_SENSITIVITY = "SET_SENSITIVITY"
+    # equipment.set_sensitivity, and equipment.create_equipment when the
+    # request names a sensitivity. On the group the item belongs to.
+    VIEW_CLASSIFIED = "VIEW_CLASSIFIED"
+    # dependencies.scope_equipment_query, as a widening of its VIEW arm rather
+    # than a verb of its own. On the group the item belongs to.
     MANAGE_CATALOG = "MANAGE_CATALOG"
     # setup.py's fault-type routes. Global vocabulary: held over every root.
     MANAGE_PERSONNEL = "MANAGE_PERSONNEL"

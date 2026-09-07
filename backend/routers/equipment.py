@@ -121,6 +121,18 @@ def create_equipment(
     group_id = _creation_group_id(db, item.group_id, current_user)
     authz.require(db, current_user.id, Capability.CREATE_EQUIPMENT, group_id)
 
+    # DATA-H3-2. Asked ONLY when the request names a sensitivity, so the gate
+    # falls on the classification decision rather than on creation itself:
+    # CREATE_EQUIPMENT alone still creates ordinary items, which matters
+    # because both company techs hold that verb and neither holds this one.
+    #
+    # Inside the same pre-catalog block and for the identical reason given
+    # above -- a 403 raised after that block would leave a permanent
+    # CatalogItem behind under an attacker-chosen name, a write performed by a
+    # request the route answered "denied".
+    if item.sensitivity is not None:
+        authz.require(db, current_user.id, Capability.SET_SENSITIVITY, group_id)
+
     cat_item = db.query(models.CatalogItem).filter(models.CatalogItem.name == item.catalog_name).first()
     if not cat_item:
         cat_item = models.CatalogItem(name=item.catalog_name)
@@ -135,10 +147,22 @@ def create_equipment(
     # belongs to no group and rises to no commander. That is H1-6's gap, closed
     # by the gate rather than by the constraint -- the constraint is the
     # backstop for everything that does not come through this route.
+    #
+    # DATA-H3-2. Passing None here is safe and lands UNCLASSIFIED, not NULL:
+    # SQLAlchemy applies a Column default whenever the value is None at flush
+    # time, so an explicitly-passed None is indistinguishable from an omitted
+    # kwarg. Verified directly rather than assumed -- an earlier draft spread
+    # the kwarg conditionally to dodge a NULL this ORM never writes, and the
+    # mutation that should have caught the difference stayed green because
+    # there was no difference. Pinned anyway by
+    # test_created_equipment_without_a_sensitivity_is_unclassified_not_null,
+    # which asserts the stored column: the guarantee belongs to the model's
+    # default, so it is worth a test even though this line cannot break it.
     new_item = models.Equipment(
         catalog_item_id=cat_item.id,
         serial_number=item.serial_number,
         group_id=group_id,
+        sensitivity=item.sensitivity.value if item.sensitivity is not None else None,
     )
     db.add(new_item)
     db.commit()
@@ -158,6 +182,70 @@ def create_equipment(
         custom_location=new_item.custom_location,
         actual_location_id=new_item.actual_location_id,
         sensitivity=new_item.sensitivity  # DATA-H3-1
+    )
+
+@router.patch("/equipment/{equipment_id}/sensitivity", response_model=schemas.EquipmentResponse)
+def set_sensitivity(
+    equipment_id: int,
+    req: schemas.SetSensitivityRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Classify or declassify one item. DATA-H3-2.
+
+    The first PATCH in this codebase and the first route to edit a column of
+    an existing equipment row that is not about possession or condition --
+    every other write here moves an item, rehomes it, or records its state.
+    Both firsts are worth knowing before this is copied as a template.
+
+    Resolve, then decide, exactly as assign_owner does: the item is looked up
+    inside the caller's own VIEW extent, so an id they cannot see answers 404
+    and tells them nothing, and only then is the grant question asked. A 403
+    therefore reaches nobody who could not already list the row. Taking the id
+    from the path rather than the body changes nothing about that ordering.
+
+    NO POSSESSION ARM, deliberately, and this is the sharp edge of the route.
+    dependencies.require_status_authority lets a holder report on the item in
+    their hands; this asks the grant and only the grant, so a soldier carrying
+    a rifle cannot decide its classification. That is the same asymmetry
+    maintenance.fix_equipment has with RESOLVE_FAULT -- noticing a fault and
+    declaring the item serviceable are different authorities, and carrying an
+    item and classifying it are too. Enforced by which helper this route calls,
+    which is why it calls authz.require directly.
+
+    last_verified_at is NOT touched. DATA-H5's whole complaint is routes that
+    advance it as a side effect of paperwork; classifying an item is not
+    laying eyes on it.
+
+    Writes no audit record, exactly like assign_owner -- which is DATA-H4's
+    ticket, and named here rather than half-fixed: adding bespoke logging at a
+    fifth site is the shape DATA-H4 exists to replace with one helper.
+    """
+    item = get_scoped_equipment_or_404(db, current_user, equipment_id)
+    authz.require(db, current_user.id, Capability.SET_SENSITIVITY, item.group_id)
+
+    item.sensitivity = req.sensitivity.value
+    db.commit()
+    db.refresh(item)
+
+    # A fourth hand-mapped copy of this block, and DATA-H9's case rather than
+    # an oversight: model_validate cannot replace it while `type` and
+    # `compliance_check` name no attribute on Equipment, so the shared builder
+    # that ticket calls for has to add those before any site can stop copying.
+    return schemas.EquipmentResponse(
+        id=item.id,
+        type=item.item_name,
+        item_name=item.item_name,
+        status=item.status,
+        current_state_description=item.current_state_description,
+        compliance_check=item.report_status,
+        report_status=item.report_status,
+        compliance_level=item.compliance_level,
+        serial_number=item.serial_number,
+        holder_user_id=item.holder_user_id,
+        custom_location=item.custom_location,
+        actual_location_id=item.actual_location_id,
+        sensitivity=item.sensitivity,
     )
 
 @router.post("/equipment/assign_owner/")
