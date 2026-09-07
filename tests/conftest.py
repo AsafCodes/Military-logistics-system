@@ -45,7 +45,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.database import Base, get_db, _enforce_sqlite_foreign_keys
 from backend import authz, clock, models
-from backend.enums import Capability
+from backend.enums import Capability, Sensitivity
 import backend.security as security
 from datetime import timedelta
 
@@ -382,6 +382,31 @@ def mock_matrix_db(db_session, group_graph):
             "company_tech_a": "188/53/A",
             "company_tech_b": "188/53/B",
         },
+        # DATA-H3-2. Narrower than TRANSFER on purpose, and the contrast is the
+        # point: both company commanders may MOVE their company's kit and
+        # neither may CLASSIFY it. Classification is a command decision above
+        # the level that carries the equipment, which is a judgement rather
+        # than a mapping -- profiles.py has no classification column to read.
+        # company_cmdr_a is therefore the fixture's holder-without-the-verb,
+        # and soldier_a its holder-of-the-item-without-the-verb; the two 403
+        # tests in test_sensitivity_contract.py depend on both staying absent.
+        Capability.SET_SENSITIVITY: {
+            "master": "188",
+            "brigade_cmdr": "188",
+            "bat_cmdr": "188/53",
+        },
+        # DATA-H3-3. Matches SET_SENSITIVITY above so a classifier can still
+        # see what they classified. The absences are what the enforcement tests
+        # actually run on: company_cmdr_a holds VIEW over 188/53/A and NOT this,
+        # so a classified item in their own company vanishes from their listing
+        # -- that is the core assertion. soldier_a holds neither and is the
+        # possession-survives case, since the holder arm ignores this verb
+        # entirely.
+        Capability.VIEW_CLASSIFIED: {
+            "master": "188",
+            "brigade_cmdr": "188",
+            "bat_cmdr": "188/53",
+        },
         Capability.MANAGE_CATALOG: {
             "master": "188",
             "brigade_cmdr": "188",
@@ -469,21 +494,21 @@ def mock_matrix_db(db_session, group_graph):
     items.append(models.Equipment(
         catalog_item_id=cat.id, status="Functional", **belongs_to("188/53/A"),
         holder_user_id=users["soldier_a"].id, owner_user_id=users["soldier_a"].id,
-        sensitivity="UNCLASSIFIED", serial_number="SA100", last_verified_at=clock.utcnow()
+        sensitivity=Sensitivity.UNCLASSIFIED.value, serial_number="SA100", last_verified_at=clock.utcnow()
     ))
 
     # Soldier B Item (Different Company)
     items.append(models.Equipment(
         catalog_item_id=cat.id, status="Functional", **belongs_to("188/53/B"),
         holder_user_id=users["soldier_b"].id, owner_user_id=users["soldier_b"].id,
-        sensitivity="UNCLASSIFIED", serial_number="SB200", last_verified_at=clock.utcnow()
+        sensitivity=Sensitivity.UNCLASSIFIED.value, serial_number="SB200", last_verified_at=clock.utcnow()
     ))
 
     # Tech A Item
     items.append(models.Equipment(
         catalog_item_id=cat.id, status="Functional", **belongs_to("188/53/A"),
         holder_user_id=users["company_tech_a"].id, owner_user_id=users["company_tech_a"].id,
-        sensitivity="UNCLASSIFIED", serial_number="TA300", last_verified_at=clock.utcnow()
+        sensitivity=Sensitivity.UNCLASSIFIED.value, serial_number="TA300", last_verified_at=clock.utcnow()
     ))
     
     for item in items:

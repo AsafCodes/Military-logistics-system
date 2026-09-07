@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-from .enums import EquipmentStatus
+from .enums import EquipmentStatus, Sensitivity
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -106,6 +106,21 @@ class EquipmentCreate(BaseModel):
     # creator's extent, because unlike the derived value it is attacker-chosen.
     group_id: Optional[int] = None
 
+    # DATA-H3-2. Optional and defaulting to None, NOT to UNCLASSIFIED, and the
+    # difference is load-bearing rather than stylistic. None means "the client
+    # said nothing", which is what lets create_equipment tell a request that
+    # needs the SET_SENSITIVITY gate from one that does not. Defaulting to
+    # UNCLASSIFIED would make EVERY creation a classification decision and
+    # would demand the new verb of callers who never asked to classify
+    # anything, breaking ordinary creation for every CREATE_EQUIPMENT holder
+    # who lacks it (both company techs, in the seeded graph).
+    #
+    # None reaches the model as None and the column's Python-side default turns
+    # it into UNCLASSIFIED -- SQLAlchemy applies a default whenever the value is
+    # None at flush time, so this does NOT write NULL. Stated because the
+    # opposite is the natural assumption and an earlier draft acted on it.
+    sensitivity: Optional[Sensitivity] = None
+
 class EquipmentResponse(BaseModel):
     id: int
     type: str # Computed from catalog
@@ -116,8 +131,42 @@ class EquipmentResponse(BaseModel):
     custom_location: Optional[str]
     actual_location_id: Optional[int]
     
-    sensitivity: str = "UNCLASSIFIED"
-    
+    # DATA-H3-1. Was `sensitivity: str = "UNCLASSIFIED"` -- a constant, not a
+    # field: no construction site passed it, so every item in the force was
+    # reported unclassified regardless of what its column held. Now sourced
+    # from the record at all three sites.
+    #
+    # Optional on DATA-H2's reasoning, not for want of a value: the column is
+    # nullable (4acc9d5f6339:108) and its default is Python-side, so NULL is
+    # reachable by any insert that does not go through the ORM. FastAPI
+    # validates the whole List[EquipmentResponse], so a required field turns
+    # one NULL row into a blanked equipment page -- DATA-M12's shape.
+    #
+    # Typed as the enum rather than str: that is this ticket's "constrain it to
+    # an enumerated type" clause. A str-mixin enum serializes to its value, so
+    # the wire format is unchanged for in-vocabulary rows (verified, not
+    # assumed -- model_dump_json emits the bare string "CLASSIFIED").
+    #
+    # This is the FIRST response field in this file typed as an enum, and that
+    # is worth saying plainly rather than dressing it up as precedent. The only
+    # other enum-typed field is VerificationCreate.reported_status below, which
+    # is a REQUEST; VerificationResponse.reported_status beside it is a plain
+    # str. So the established pattern here is enums on the way in and strings on
+    # the way out, and this field departs from it deliberately.
+    #
+    # The cost of departing: a hand-written out-of-vocabulary value (reachable
+    # until DATA-H12 constrains the column) now raises ValidationError and
+    # fails the whole list request, where the old constant silently replaced it.
+    #
+    # Note the asymmetry with the NULL case above, which is deliberate and not
+    # an oversight to be tidied away: NULL is a legitimate absence, so it
+    # degrades to null and the list survives; junk is a data-integrity fault, so
+    # it is loud. Reporting a record of UNKNOWN classification as UNCLASSIFIED
+    # is the exact falsehood this ticket exists to remove, and a validator that
+    # mapped unknown values to None would re-hide it. Do not "fix" the
+    # inconsistency by making either case match the other.
+    sensitivity: Optional[Sensitivity] = None
+
     # Smart fields
     item_name: str
     current_state_description: str
@@ -145,7 +194,22 @@ class ReportFaultRequest(BaseModel):
 
 class EquipmentVerifyRequest(BaseModel):
     equipment_id: int
-    verification_code: Optional[str] = None 
+    verification_code: Optional[str] = None
+
+class SetSensitivityRequest(BaseModel):
+    """DATA-H3-2. The body of PATCH /equipment/{id}/sensitivity.
+
+    Required, not Optional, and the field stands alone. Declassifying is
+    UNCLASSIFIED -- an explicit value a caller states and the audit trail can
+    one day record -- never an omission. An Optional field here would make
+    "clear the classification" and "leave it alone" the same request.
+
+    No equipment_id, unlike the sibling *Request classes above: this route
+    takes the id in the PATH, following equipment.verify_equipment_daily
+    rather than the body-id convention the older POST routes use. The id
+    identifies the resource being amended, which is what a path is for.
+    """
+    sensitivity: Sensitivity
 
 # --- Setup ---
 class FaultTypeCreate(BaseModel):
@@ -169,13 +233,22 @@ class TicketResponse(BaseModel):
 
     status: str
     description: str
-    created_at: Optional[datetime] = None  # Alias for timestamp
+
+    # DATA-H2. `opened_at` is the column's real name on MaintenanceLog. It was
+    # absent here while maintenance.py:57 passed it, and Pydantic v2 ignores
+    # unknown __init__ kwargs, so every ticket shipped with no open date at all
+    # while `created_at`/`timestamp` -- declared but never passed -- shipped as
+    # null. Optional, not required: the column is nullable in the database, and
+    # a required field fails validation on one NULL row and takes the whole
+    # list response with it (DATA-M12's shape).
+    opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
-    
+
+    # DATA-H2, named not fixed: neither exists on MaintenanceLog and neither is
+    # ever passed, so both are constants presented as data -- the same falsehood
+    # as the aliases removed above. Outside this ticket's stated fix.
     is_false_alarm: bool = False
     tech_notes: Optional[str] = None
-    
-    timestamp: Optional[datetime] = None # DB field name
 
     class Config:
         from_attributes = True

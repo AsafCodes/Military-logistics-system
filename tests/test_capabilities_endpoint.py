@@ -68,13 +68,20 @@ def test_agrees_with_the_algebra_for_every_account_and_every_capability(client, 
 # implied_view_placements, independently of the route or authz module.
 
 EXPECTED = {
+    # SET_SENSITIVITY (DATA-H3-2) and VIEW_CLASSIFIED (DATA-H3-3) appear on
+    # exactly these three rows and on no other, always together. The company
+    # rows below are where that is worth reading: both company commanders hold
+    # TRANSFER without either, so this endpoint reports that they may move
+    # their kit, may not classify it, and cannot see it once someone else does.
     "master": (
         {"MANAGE_PERSONNEL", "MANAGE_CATALOG"},
-        {"VIEW", "TRANSFER", "CREATE_EQUIPMENT", "REPORT_STATUS", "RESOLVE_FAULT"},
+        {"VIEW", "TRANSFER", "CREATE_EQUIPMENT", "REPORT_STATUS", "RESOLVE_FAULT",
+         "SET_SENSITIVITY", "VIEW_CLASSIFIED"},
     ),
     "brigade_cmdr": (
         {"MANAGE_CATALOG"},
-        {"VIEW", "TRANSFER", "CREATE_EQUIPMENT", "REPORT_STATUS", "RESOLVE_FAULT"},
+        {"VIEW", "TRANSFER", "CREATE_EQUIPMENT", "REPORT_STATUS", "RESOLVE_FAULT",
+         "SET_SENSITIVITY", "VIEW_CLASSIFIED"},
     ),
     # Absent from the literal VIEW table entirely -- holds it only via
     # implied_view_placements, derived from the REPORT_STATUS/RESOLVE_FAULT
@@ -82,7 +89,8 @@ EXPECTED = {
     "brigade_tech": (set(), {"VIEW", "REPORT_STATUS", "RESOLVE_FAULT"}),
     "bat_cmdr": (
         set(),
-        {"VIEW", "TRANSFER", "CREATE_EQUIPMENT", "REPORT_STATUS", "RESOLVE_FAULT"},
+        {"VIEW", "TRANSFER", "CREATE_EQUIPMENT", "REPORT_STATUS", "RESOLVE_FAULT",
+         "SET_SENSITIVITY", "VIEW_CLASSIFIED"},
     ),
     "bat_tech": (set(), {"VIEW", "REPORT_STATUS", "RESOLVE_FAULT"}),
     "company_cmdr_a": (set(), {"VIEW", "TRANSFER", "REPORT_STATUS"}),

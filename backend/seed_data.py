@@ -295,6 +295,41 @@ def seed_matrix(reset=False):
             (u_bn_cmdr, "188/53"),
             (u_tech_bat, "188/53"),
         ],
+        # DATA-H3-2. Narrower than TRANSFER on purpose: both company commanders
+        # may MOVE their company's kit and neither may CLASSIFY it, because
+        # classification is a command decision above the level that carries the
+        # equipment. A judgement rather than a mapping -- profiles.py has no
+        # classification column to derive this from. The same three rows are in
+        # tests/conftest.py, written separately because that table is a dict of
+        # string keys where this one is a list of (User, group) tuples.
+        #
+        # No seeded item is CLASSIFIED, and that stays true after DATA-H3-3
+        # gave the value teeth. Classifying a seeded row would now make it
+        # genuinely invisible to most of the demo users, which is a confusing
+        # first impression of a dataset whose job is to show the org chart
+        # working. The enforcement is exercised by tests, which classify an
+        # item themselves, not by the demo data.
+        Capability.SET_SENSITIVITY: [
+            (u_master, "188"),
+            (u_brig_cmdr, "188"),
+            (u_bn_cmdr, "188/53"),
+        ],
+        # DATA-H3-3. The SAME three rows as SET_SENSITIVITY above, and the
+        # match is deliberate rather than incidental: whoever may classify an
+        # item must still be able to see it afterwards. Granting the write verb
+        # without this one would let a commander classify something into their
+        # own blind spot and then be unable to find it to undo that.
+        #
+        # NOT derived from the row above, though, even though it duplicates it.
+        # authz.implied_view_placements exists for verbs that imply VIEW, and
+        # VIEW_CLASSIFIED is deliberately excluded from EQUIPMENT_CAPABILITIES
+        # -- see the comment beside that tuple. These two tables agreeing today
+        # is a decision that could be revisited, not a rule.
+        Capability.VIEW_CLASSIFIED: [
+            (u_master, "188"),
+            (u_brig_cmdr, "188"),
+            (u_bn_cmdr, "188/53"),
+        ],
         Capability.MANAGE_CATALOG: [
             (u_master, "188"),
             (u_brig_cmdr, "188"),

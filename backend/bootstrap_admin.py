@@ -39,6 +39,19 @@ ROOT_CAPABILITIES = (
     Capability.CREATE_EQUIPMENT,
     Capability.REPORT_STATUS,
     Capability.RESOLVE_FAULT,
+    # DATA-H3-2. Conferred, and the decision this list exists to force was
+    # made: a bootstrapped MASTER is by definition the account that commands
+    # the whole force, and an account that may create equipment and move it
+    # anywhere but not classify it would be an odd half-authority. Note this
+    # is BROADER than the seeded grant table, which withholds the verb from
+    # both company commanders -- deliberately, since that table describes an
+    # org chart and this one describes the account that has no org chart yet.
+    Capability.SET_SENSITIVITY,
+    # DATA-H3-3. Same reasoning, and additionally the one grant this account
+    # cannot do without: bootstrap runs before any org chart exists, so if the
+    # bootstrapped MASTER lacked clearance a classified item would be invisible
+    # to the only account there is.
+    Capability.VIEW_CLASSIFIED,
     Capability.MANAGE_CATALOG,
     Capability.MANAGE_PERSONNEL,
 )

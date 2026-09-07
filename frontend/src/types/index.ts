@@ -93,7 +93,7 @@ export interface Ticket {
     fault_type: string;
     description: string;
     status: string;
-    opened_at: string;
+    opened_at?: string | null;
     closed_at?: string;
 }
 

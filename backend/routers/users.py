@@ -75,7 +75,8 @@ def get_my_equipment(current_user: models.User = Depends(get_current_active_user
         current_state_description=item.current_state_description, compliance_check=item.report_status,
         report_status=item.report_status, compliance_level=get_daily_status(item.last_verified_at),
         holder_user_id=item.holder_user_id, custom_location=item.custom_location,
-        actual_location_id=item.actual_location_id, serial_number=item.serial_number
+        actual_location_id=item.actual_location_id, serial_number=item.serial_number,
+        sensitivity=item.sensitivity  # DATA-H3-1
     ) for item in items]
 
 @router.get("/users/me", response_model=schemas.UserResponse)

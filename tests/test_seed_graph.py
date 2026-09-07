@@ -111,6 +111,29 @@ EXPECTED_GRANTS = {
     ("u_brig_cmdr", "188", "RESOLVE_FAULT"),
     ("u_bn_cmdr", "188/53", "RESOLVE_FAULT"),
     ("u_tech_bat", "188/53", "RESOLVE_FAULT"),
+    # SET_SENSITIVITY (DATA-H3-2): narrower than TRANSFER, and the pair of
+    # absences is the assertion. u_co_cmdr_a and u_co_cmdr_b hold TRANSFER over
+    # their companies and are missing here, so the seed says a company
+    # commander may MOVE their kit and may not CLASSIFY it. u_tech_bat is
+    # absent too -- classification is a command decision, not a technical one.
+    # A table that grew to match TRANSFER row for row would mean the verb had
+    # collapsed back into it, which is what this catches.
+    ("u_master", "188", "SET_SENSITIVITY"),
+    ("u_brig_cmdr", "188", "SET_SENSITIVITY"),
+    ("u_bn_cmdr", "188/53", "SET_SENSITIVITY"),
+    # VIEW_CLASSIFIED (DATA-H3-3): the same three nodes as SET_SENSITIVITY, so
+    # a classifier can still see what they classified. Listed separately rather
+    # than derived, because VIEW_CLASSIFIED is deliberately NOT in
+    # authz.EQUIPMENT_CAPABILITIES -- nothing generates these rows, and the two
+    # verbs agreeing is a seeding decision this set can catch drifting.
+    #
+    # The company absences bite harder here than above. u_co_cmdr_a holds VIEW
+    # over 188/53/A, so a classified item in their own company is invisible to
+    # them: this is the row that makes the enforcement tests meaningful rather
+    # than vacuous.
+    ("u_master", "188", "VIEW_CLASSIFIED"),
+    ("u_brig_cmdr", "188", "VIEW_CLASSIFIED"),
+    ("u_bn_cmdr", "188/53", "VIEW_CLASSIFIED"),
     # The two GLOBAL verbs. Their placement on the root is load-bearing in a
     # way the others are not: require_global asks for them over EVERY root, so
     # a row here naming any node below the top would authorise nothing at all

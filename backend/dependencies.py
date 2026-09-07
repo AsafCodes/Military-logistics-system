@@ -4,14 +4,14 @@ Authentication and Authorization Dependencies
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.utils import get_authorization_scheme_param
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 
 from .database import get_db
-from .enums import Capability
+from .enums import Capability, Sensitivity
 from . import authz
 from . import clock
 from . import models
@@ -138,6 +138,23 @@ def scope_equipment_query(q, user: models.User):
     the column NOT NULL, so the NULL group this used to warn about -- visible
     to its holder and to nobody above them, because `NULL IN (...)` is NULL --
     is no longer a state any row can be in.
+
+    DATA-H3-3 qualified the VIEW arm, and only that arm. A CLASSIFIED item is
+    visible through it only to a caller whose VIEW_CLASSIFIED extent covers the
+    item's group: clearance WIDENS sight you already have rather than conferring
+    it, so VIEW_CLASSIFIED without VIEW over the same subtree shows nothing.
+
+    The holder arm sits OUTSIDE that qualification, deliberately, and it is the
+    ruling this function is most likely to be questioned on. A private carrying
+    a classified rifle keeps seeing it. The alternative was tried on paper and
+    is worse in a way that is easy to miss: because this same function backs
+    get_scoped_equipment_or_404, hiding the item from its holder turns every
+    lookup by id into a 404 for them, and require_status_authority's possession
+    arm -- the thing that lets them report a fault on the item in their hands --
+    can never be reached. Classification would have quietly removed a soldier's
+    ability to report their own equipment broken. So the guarantee here is
+    "hidden from everyone except whoever is holding it", which is narrower than
+    it first sounds and is stated in Sensitivity's docstring in those words.
     """
     # H1-10 deleted the is_master arm that used to stand here, and with it the
     # last role comparison in any authorization path. MASTER's sight is now the
@@ -162,8 +179,32 @@ def scope_equipment_query(q, user: models.User):
     # is the conflation of role and authority this model exists to end, so the
     # narrowing is the point rather than a side effect. Such a user now sees
     # exactly what their grants say.
+    # DATA-H3-3. The VIEW arm is now conditioned on classification; the holder
+    # arm deliberately is not. See the docstring above for both rulings.
+    #
+    # is_distinct_from, not `!=`, and this is the one subtle line in the ticket.
+    # models.Equipment.sensitivity is a nullable String (DATA-H12 is the ticket
+    # that constrains it), and a raw-SQL NULL is reachable today -- there is a
+    # test that writes one. Under SQL's three-valued logic `NULL != 'CLASSIFIED'`
+    # is NULL, not TRUE, so a bare `!=` would drop such a row from the VIEW arm
+    # and hide it from everyone without clearance. That fails CLOSED, which
+    # sounds like the safe direction and is not: DATA-H3-1 chose deliberately to
+    # surface an out-of-vocabulary value loudly rather than let it pass as
+    # UNCLASSIFIED, and silently vanishing the row reinstates exactly the
+    # quiet-wrong-answer behaviour that ticket existed to end. IS DISTINCT FROM
+    # is NULL-safe and returns TRUE there.
     return q.filter(or_(
-        models.Equipment.group_id.in_(authz.extent(user.id, Capability.VIEW)),
+        and_(
+            models.Equipment.group_id.in_(authz.extent(user.id, Capability.VIEW)),
+            or_(
+                models.Equipment.sensitivity.is_distinct_from(
+                    Sensitivity.CLASSIFIED.value
+                ),
+                models.Equipment.group_id.in_(
+                    authz.extent(user.id, Capability.VIEW_CLASSIFIED)
+                ),
+            ),
+        ),
         models.Equipment.holder_user_id == user.id,
     ))
 

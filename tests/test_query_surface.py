@@ -529,17 +529,38 @@ def test_implied_view_covers_every_equipment_verb():
     because both tables satisfy it by construction now -- the seed and the
     fixture call this to build their VIEW rows. A test reading those tables
     would be asserting that the derivation derived what it derived.
+
+    The name is a promise: EVERY equipment verb, so this table must gain a row
+    whenever authz.EQUIPMENT_CAPABILITIES does. The assertion below the
+    placements enforces that rather than trusting the next editor to notice --
+    a verb added to the tuple and forgotten here would leave this test passing
+    under a name that had quietly stopped being true.
+
+    SET_SENSITIVITY (DATA-H3-2) is the case that motivated the guard. Its three
+    seeded holders all hold VIEW independently, so the derivation is invisible
+    in both grant tables and only a direct question reaches it -- the same
+    reason test_a_global_verb_implies_no_sight_of_equipment below exists.
     """
     placements = {
         Capability.TRANSFER: [("cmdr", "188/53/A")],
         Capability.CREATE_EQUIPMENT: [("tech", "188/53/A")],
         Capability.REPORT_STATUS: [("tech", "188/53/A"), ("bn", "188/53")],
         Capability.RESOLVE_FAULT: [("bn", "188/53")],
+        # Deliberately a holder of NOTHING else, so this pair can only appear
+        # in the result by way of SET_SENSITIVITY's own membership of the rule.
+        Capability.SET_SENSITIVITY: [("classifier", "188")],
     }
+
+    assert set(placements) == set(authz.EQUIPMENT_CAPABILITIES), (
+        "EQUIPMENT_CAPABILITIES gained or lost a verb and this table did not "
+        "follow -- the test name claims to cover every one of them"
+    )
+
     assert authz.implied_view_placements(placements) == {
         ("cmdr", "188/53/A"),
         ("tech", "188/53/A"),
         ("bn", "188/53"),
+        ("classifier", "188"),
     }
 
 
