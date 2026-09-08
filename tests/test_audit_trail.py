@@ -17,6 +17,7 @@ failing test or by nothing; there is no third option, and tests/test_utc_contrac
 defence against partial application"). This file copies its shape deliberately.
 """
 import ast
+import functools
 import re
 from pathlib import Path
 
@@ -33,14 +34,15 @@ WRITER = "audit_trail.py"
 
 AUDIT_TABLES = ("TransactionLog", "EquipmentStatusHistory")
 
-# The two sites that still move a status directly are marked at the line that
-# does it, with this pragma and the sub-task that closes them:
+# A site that moves a status outside the writer marks the line that does it:
 #
-#     item.status = "Malfunctioning"  # audit-trail-bypass: DATA-H4-2
+#     ).update({"status": "Closed", ...})  # audit-trail-bypass: permanent
 #
-# A third is permanent: fix_equipment's ticket-closing bulk update, where a
-# ticket's Open/Closed is not an equipment status and equipment_status_history
-# has no row shape for it.
+# DATA-H4-1 left two of these carrying `DATA-H4-2`, on report_fault's and
+# fix_equipment's bare assignments; DATA-H4-2 cut both routes onto the helper
+# and deleted them. The one that remains is fix_equipment's ticket-closing bulk
+# update, and it is permanent -- a ticket's Open/Closed is not an equipment
+# status and equipment_status_history has no row shape for it.
 #
 # A pragma rather than a (file, function) tuple listed here, and the difference
 # is not cosmetic. A function-keyed waiver exempts the whole FUNCTION: an
@@ -52,13 +54,34 @@ AUDIT_TABLES = ("TransactionLog", "EquipmentStatusHistory")
 BYPASS_PRAGMA = "audit-trail-bypass:"
 
 
-def backend_modules():
-    """Every source file under backend/, as (relative posix path, parsed tree)."""
-    for path in sorted(BACKEND_ROOT.rglob("*.py")):
-        yield (
+@functools.lru_cache(maxsize=1)
+def backend_sources():
+    """Every source file under backend/, as (relative posix path, text, tree).
+
+    Cached, and read ONCE. Five separate walks over backend/ had grown up in
+    this file -- the two AST guards, the two writer guards, and the pragma
+    lookup, each globbing and re-reading the same tree, with the pragma lookup
+    re-reading a file whose text backend_modules had just discarded. Nothing was
+    slow enough to notice; it is one line to stop doing, and a guard that reads
+    the source twice can read two different versions of it.
+    """
+    return tuple(
+        (
             path.relative_to(BACKEND_ROOT).as_posix(),
-            ast.parse(path.read_text(encoding="utf-8"), filename=str(path)),
+            source,
+            ast.parse(source, filename=str(path)),
         )
+        for path, source in (
+            (p, p.read_text(encoding="utf-8"))
+            for p in sorted(BACKEND_ROOT.rglob("*.py"))
+        )
+    )
+
+
+def backend_modules():
+    """The (path, tree) view, for guards that do not need the text."""
+    for relpath, _source, tree in backend_sources():
+        yield relpath, tree
 
 
 def _names_status(key):
@@ -129,6 +152,48 @@ def status_assignments(tree):
                 if isinstance(argument, ast.Dict) and any(_names_status(key)
                                                           for key in argument.keys):
                     yield node
+
+
+def map_keys(source, marker):
+    """The keys of a `const NAME: Record<...> = {...}` literal in a .ts/.tsx file.
+
+    Anchored to the start of a line, which is the point rather than fussiness.
+    An earlier version asked `f"{value}: {{" in table`, and a mutation test
+    walked through it twice: `xfault: {` CONTAINS `fault: {`, so a typo'd key
+    satisfied the check -- and so would the realistic case, a key named in a
+    COMMENT (`// fault: {...} coming in H4-3`) while the entry itself is absent.
+    A guard whose whole job is to stop a member landing a commit ahead of its
+    label cannot count a mention as an entry.
+
+    The same hole was in DATA-H4-1's dashboard guard from the day it was
+    written, for the same reason its sibling needed `\\b` added: a substring test
+    over a region of source answers a question about TEXT when the question is
+    about STRUCTURE. Both guards read this now, so there is one answer.
+
+    The DECLARATION is located by matching `marker ... = {`, not by splitting on
+    the marker text. Splitting broke the moment a comment in the same file
+    mentioned `const REASON_META` in prose: with two occurrences,
+    `split(marker)[1]` returns the text BETWEEN them, the key scan saw an empty
+    body, and every reason reported as missing. That failure was loud, but the
+    same shape rotated one way round is silent -- prose after the real
+    declaration would have extended the body, not truncated it.
+
+    Block comments are stripped before the scan, because line-anchoring alone
+    does not survive them: a key commented out inside a `/* ... */` sits at the
+    start of its own line and would otherwise read as an entry. Line comments
+    need no stripping -- the `//` is what fails the anchor.
+
+    Still not a parser, deliberately -- it does not know a key inside a nested
+    object from a top-level one. It knows a key from prose, which is the
+    distinction the guards actually turn on, and which it has now got wrong
+    twice in two different ways.
+    """
+    declaration = re.search(re.escape(marker) + r"[^=\n]*=\s*\{", source)
+    assert declaration, f"no `{marker} ... = {{` declaration in this file"
+
+    body = source[declaration.end():].split("};")[0]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.DOTALL)
+    return set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", body, re.MULTILINE))
 
 
 def enclosing_function(tree, target):
@@ -218,10 +283,10 @@ def test_only_audit_trail_assigns_equipment_status():
     """
     offenders = []
 
-    for relpath, tree in backend_modules():
+    for relpath, source, tree in backend_sources():
         if relpath == WRITER:
             continue
-        lines = (BACKEND_ROOT / relpath).read_text(encoding="utf-8").splitlines()
+        lines = source.splitlines()
         for node in status_assignments(tree):
             if BYPASS_PRAGMA in lines[node.lineno - 1]:
                 continue
@@ -445,10 +510,11 @@ def test_every_event_records_whether_the_actor_was_on_duty(
 # --- 5. The contracts the module docstring claims -----------------------------
 
 
+FRONTEND_SRC = BACKEND_ROOT.parent / "frontend/src"
 DASHBOARD_TABLE = (
-    BACKEND_ROOT.parent
-    / "frontend/src/features/dashboard/components/DailyActivityTable.tsx"
+    FRONTEND_SRC / "features/dashboard/components/DailyActivityTable.tsx"
 )
+REASON_META_FILE = FRONTEND_SRC / "features/equipment/changeReasons.ts"
 
 
 def test_the_writer_never_commits():
@@ -512,9 +578,8 @@ def test_every_event_type_has_a_writer():
     members -- this is what stops one landing a commit early.
     """
     sources = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in BACKEND_ROOT.rglob("*.py")
-        if path.name != "enums.py"
+        source for relpath, source, _tree in backend_sources()
+        if relpath != "enums.py"
     )
     # \b, not a plain substring. `EventType.HANDOVER` occurs inside
     # `EventType.HANDOVER_LOC`, so a plain `in` check reported HANDOVER as
@@ -547,19 +612,111 @@ def test_every_event_type_renders_in_the_dashboard():
     `function getEventLabel`, and VERIFICATION had a label with no icon or
     colour arm, invisible to a labels-only guard.
 
-    Checked as a substring rather than by parsing TSX: the assertion is that a
-    key exists, and a regex pretending to be a parser would be the more fragile
-    of the two.
+    Keys are extracted by map_keys rather than substring-scanned; see there for
+    the two ways the substring version could be satisfied without an entry
+    existing.
     """
     assert DASHBOARD_TABLE.exists(), f"dashboard table moved: {DASHBOARD_TABLE}"
-    source = DASHBOARD_TABLE.read_text(encoding="utf-8")
-    table = source.split("const EVENT_META")[1].split("};")[0]
+    keys = map_keys(DASHBOARD_TABLE.read_text(encoding="utf-8"), "const EVENT_META")
 
-    missing = [e.value for e in EventType if f"{e.value.lower()}: {{" not in table]
+    missing = [e.value for e in EventType if e.value.lower() not in keys]
 
     assert missing == [], (
         f"event types the dashboard cannot label: {missing}. They render as raw "
         "English in a Hebrew RTL table; add the arm in the commit that emits them."
+    )
+
+
+def test_every_change_reason_has_a_writer():
+    """The same rule for the other enum, which DATA-H4-2 gave two new members.
+
+    ChangeReason shipped in DATA-H4-1 with exactly one member for exactly one
+    writer, and the temptation the whole time was to declare fault_report and
+    repair alongside it -- the frontend already RENDERED both, which makes the
+    vocabulary look agreed and is precisely the argument SEC-H4 lost. A rendered
+    label for a value no router emits is a UI that describes a system that does
+    not exist. Enforced rather than remembered.
+
+    No \\b needed here as it happens -- no member's name prefixes another's --
+    but written the same way as EventType's deliberately, because that guard
+    only needed it after a member was added that DID collide, and by then the
+    hole had been open for a commit.
+    """
+    sources = "\n".join(
+        source for relpath, source, _tree in backend_sources()
+        if relpath != "enums.py"
+    )
+    orphans = [
+        r.name
+        for r in ChangeReason
+        if not re.search(rf"\bChangeReason\.{r.name}\b", sources)
+    ]
+
+    assert orphans == [], (
+        f"ChangeReason members that no code writes: {orphans}. Declare a member "
+        "in the commit that starts emitting it, not before."
+    )
+
+
+def test_every_change_reason_renders_in_the_history_views():
+    """The cross-stack half for equipment history, and the reason for the map.
+
+    This vocabulary lived in THREE switches -- two in EquipmentHistory.tsx (icon
+    and label separately) and a fused third in EquipmentPage.tsx's
+    InlineHistory. They had already drifted: the inline copy said 'תקלה' where
+    the modal said 'דיווח תקלה' for the identical row. A guard could not have
+    caught that and could not have covered all three, which is why DATA-H4-2
+    collapsed them into features/equipment/changeReasons.ts first and asserted
+    afterwards.
+
+    Reading the map means both views are covered by one check, permanently: a
+    fourth view rendering history gets the translations for free rather than
+    forking a fourth copy this test would not know to look at.
+    """
+    assert REASON_META_FILE.exists(), f"reason map moved: {REASON_META_FILE}"
+    keys = map_keys(REASON_META_FILE.read_text(encoding="utf-8"), "const REASON_META")
+
+    missing = [r.value for r in ChangeReason if r.value not in keys]
+
+    assert missing == [], (
+        f"change reasons the history views cannot label: {missing}. They fall "
+        "through to the raw string in a Hebrew RTL list; add the entry in the "
+        "commit that emits them."
+    )
+
+
+def test_no_history_view_keeps_its_own_reason_vocabulary():
+    """The collapse has to STAY collapsed, or the guard above covers one file.
+
+    Both consumers read the shared map, so the check above speaks for both. That
+    holds exactly as long as nobody reintroduces a local switch -- and a local
+    switch is the easy thing to write when adding one label in a hurry, which is
+    how three of them accumulated here in the first place. A view with its own
+    arms is invisible to the guard above while looking correct on screen.
+    """
+    # Derived from the enum, not hand-listed. The hand-listed version named
+    # 'fault_report' and 'verification' and silently omitted 'repair' -- so a
+    # partial revert reintroducing a switch for the one missing member passed,
+    # which is the exact drift this guard exists to refuse. Both quote styles,
+    # because `case "repair":` is the same defect the parser does not care about.
+    arms = [
+        f"case {quote}{r.value}{quote}:"
+        for r in ChangeReason
+        for quote in ("'", '"')
+    ]
+    strays = sorted(
+        path.relative_to(FRONTEND_SRC).as_posix()
+        for path, source in (
+            (p, p.read_text(encoding="utf-8"))
+            for p in FRONTEND_SRC.rglob("*.tsx")
+        )
+        if any(arm in source for arm in arms)
+    )
+
+    assert strays == [], (
+        f"views switching on change_reason locally: {strays}. Read REASON_META "
+        "from features/equipment/changeReasons.ts instead; a local switch is "
+        "invisible to the completeness guard above."
     )
 
 
@@ -716,3 +873,381 @@ def test_record_event_refuses_a_location_and_a_recipient_together(
             recipient=mock_matrix_db["soldier_a"],
         )
 
+
+# --- 7. Fault and repair (DATA-H4-2) -----------------------------------------
+#
+# Both routes moved onto the writer here. Before this sub-task report_fault set
+# "Malfunctioning" and wrote nothing at all, and fix_equipment set "Functional"
+# and wrote only the movement log -- so an item could be broken and repaired for
+# years while GET /equipment/{id}/history stayed empty. These tests are about
+# the two tables together: neither route is correct if only one of them fills.
+
+
+def report_fault(
+    client, who, equipment_id, description="found on parade", fault="Cracked Housing"
+):
+    return client.post(
+        "/maintenance/report",
+        json={
+            "equipment_id": equipment_id,
+            "fault_name": fault,
+            "description": description,
+        },
+        headers=create_auth_header(who),
+    )
+
+
+def fix_fault(client, who, equipment_id):
+    return client.post(
+        f"/maintenance/fix/{equipment_id}", headers=create_auth_header(who)
+    )
+
+
+def history_for(db_session, item):
+    return (
+        db_session.query(models.EquipmentStatusHistory)
+        .filter_by(equipment_id=item.id)
+        .order_by(models.EquipmentStatusHistory.id)
+        .all()
+    )
+
+
+def logs_for(db_session, item, event_type):
+    return (
+        db_session.query(models.TransactionLog)
+        .filter_by(equipment_id=item.id, event_type=event_type.value)
+        .all()
+    )
+
+
+def test_reporting_a_fault_records_the_transition_and_the_event(
+    client, db_session, mock_matrix_db
+):
+    """The headline: a fault report wrote neither table, and now writes both.
+
+    They answer different questions and that is why both are asserted here. The
+    history row is the item's CONDITION over time -- what it was, what it became,
+    and why -- which is what an investigation into an unserviceable weapon reads.
+    The log row is the movement report's record that somebody did something to
+    this item today. A route filling one and not the other looks audited from
+    whichever screen you happen to open.
+
+    notes carries the reporter's description because the row otherwise says a
+    fault moved the status and cannot say what the fault was, when the answer
+    arrived in the same request.
+    """
+    item = item_named(db_session, "SA100")
+    assert item.status == "Functional"
+
+    res = report_fault(client, "u_soldier_a", item.id, description="stock split")
+    assert res.status_code == 200, res.text
+
+    db_session.refresh(item)
+    assert item.status == "Malfunctioning"
+
+    rows = history_for(db_session, item)
+    assert len(rows) == 1, f"expected one history row, got {rows}"
+    assert rows[0].old_status == "Functional"
+    assert rows[0].new_status == "Malfunctioning"
+    assert rows[0].change_reason == ChangeReason.FAULT_REPORT.value
+    assert rows[0].notes == "stock split"
+    assert rows[0].created_by == mock_matrix_db["soldier_a"].id
+    assert rows[0].verification_id is None, (
+        "a fault report is not a verification; that column belongs to "
+        "create_verification and linking it here would fabricate a source"
+    )
+
+    assert len(logs_for(db_session, item, EventType.FAULT)) == 1
+
+
+def test_an_empty_description_is_stored_as_nothing_rather_than_as_emptiness(
+    client, db_session, mock_matrix_db
+):
+    """One column, two writers, one spelling for "nothing was said".
+
+    schemas.ReportFaultRequest declares description as a bare `str` with no
+    min_length, so "" is a legal body and a reporter who tabs past the field
+    sends one. fix_equipment already writes `notes or None` for the same reason;
+    two routes filling one column should not disagree about how to spell an
+    absent note, or a reader has to know which route wrote the row before they
+    can tell "said nothing" from "said nothing in particular".
+
+    Caught by mutation rather than foresight: the `or None` was added here in
+    review and nothing failed when it was taken out again.
+    """
+    item = item_named(db_session, "SA100")
+
+    assert report_fault(client, "u_soldier_a", item.id, description="").status_code == 200
+
+    rows = history_for(db_session, item)
+    assert len(rows) == 1
+    assert rows[0].notes is None, f"empty description stored as {rows[0].notes!r}"
+
+
+def test_a_repeat_fault_is_an_event_and_not_a_transition(
+    client, db_session, mock_matrix_db
+):
+    """The ruling set_status's docstring states, made executable.
+
+    report_fault sets "Malfunctioning" unconditionally, so a second report on an
+    already-broken item moves nothing. Writing a history row anyway would record
+    Malfunctioning -> Malfunctioning: a transition that did not happen, in the
+    one table whose columns are old_status and new_status.
+
+    But somebody DID report something, and refusing to record that would be the
+    opposite error. The log row is unconditional and the history row is not, and
+    the two tables are complete together rather than separately. Kill either half
+    of that asymmetry -- make the log conditional, or the history unconditional
+    -- and exactly this test fails.
+    """
+    item = item_named(db_session, "SA100")
+
+    assert report_fault(client, "u_soldier_a", item.id).status_code == 200
+    assert report_fault(client, "u_soldier_a", item.id, "again").status_code == 200
+
+    db_session.refresh(item)
+    assert item.status == "Malfunctioning"
+
+    rows = history_for(db_session, item)
+    assert len(rows) == 1, (
+        f"the second report moved no status and must add no row, got {rows}"
+    )
+    assert rows[0].notes != "again", "the no-op must not overwrite the first row"
+
+    assert len(logs_for(db_session, item, EventType.FAULT)) == 2, (
+        "both reports happened; transaction_logs is where that is recorded"
+    )
+
+
+def test_repairing_records_the_transition_beside_the_log_it_already_wrote(
+    client, db_session, mock_matrix_db
+):
+    """fix_equipment logged the FIX and wrote no history row. Now it does both.
+
+    The pre-existing log is asserted too, and deliberately: cutting this route
+    onto set_status touches the lines directly above record_event, and a
+    regression that drops or duplicates the FIX row would otherwise be invisible
+    to a test that only counted the new table.
+
+    notes is NULL rather than "" -- `notes` is a query parameter no client sends
+    (DATA-M5), so the empty string is the absence of a value and the column
+    should say so.
+    """
+    item = item_named(db_session, "SA100")
+    assert report_fault(client, "u_soldier_a", item.id).status_code == 200
+
+    res = fix_fault(client, "u_bat_cmdr", item.id)
+    assert res.status_code == 200, res.text
+
+    db_session.refresh(item)
+    assert item.status == "Functional"
+
+    rows = history_for(db_session, item)
+    assert len(rows) == 2, f"expected the fault row and the repair row, got {rows}"
+    assert rows[1].old_status == "Malfunctioning"
+    assert rows[1].new_status == "Functional"
+    assert rows[1].change_reason == ChangeReason.REPAIR.value
+    assert rows[1].notes is None
+    assert rows[1].created_by == mock_matrix_db["bat_cmdr"].id
+
+    assert len(logs_for(db_session, item, EventType.FIX)) == 1
+
+
+def test_fixing_an_unbroken_item_still_closes_its_tickets(
+    client, db_session, mock_matrix_db
+):
+    """The no-op rule must decline a row, not swallow the rest of the route.
+
+    set_status returns early when the status does not move, and it is called
+    ABOVE the ticket-closing update and the FIX log. An early return that had
+    been written as a raise, or a caller that had guarded the remaining work
+    behind it, would leave open tickets on an item everyone can see is
+    Functional -- the readiness report and the ticket list disagreeing, with
+    nothing in either to explain why.
+
+    Reachable in practice: two techs closing the same ticket, or a fix on an
+    item whose fault was never reported through this route.
+    """
+    item = item_named(db_session, "SA100")
+    assert report_fault(client, "u_cmdr_a", item.id).status_code == 200
+    assert fix_fault(client, "u_bat_cmdr", item.id).status_code == 200
+
+    before = len(history_for(db_session, item))
+
+    res = fix_fault(client, "u_bat_cmdr", item.id)
+    assert res.status_code == 200, res.text
+
+    db_session.refresh(item)
+    assert item.status == "Functional"
+    assert len(history_for(db_session, item)) == before, (
+        "nothing moved, so no transition was recorded"
+    )
+    assert len(logs_for(db_session, item, EventType.FIX)) == 2, (
+        "the FIX log is unconditional -- a tech acted on this item twice"
+    )
+    open_tickets = (
+        db_session.query(models.MaintenanceLog)
+        .filter(
+            models.MaintenanceLog.equipment_id == item.id,
+            models.MaintenanceLog.status != "Closed",
+        )
+        .count()
+    )
+    assert open_tickets == 0
+
+
+def test_a_refused_fault_report_writes_neither_table(
+    client, db_session, mock_matrix_db
+):
+    """The gates are above both writes, extended to the rows H4-2 adds.
+
+    tests/test_status_authority.py already pins that a refused write leaves no
+    FaultType and no MaintenanceLog behind. These two tables are new to these
+    routes and inherit nothing from that; a history row for a refused report is
+    an audit trail asserting a state change that was denied, which is worse than
+    no audit trail because it is believed.
+
+    Company A's commander against Company B's item: a 404 from the resolver,
+    which is the gate that fires before require_status_authority is reached.
+    """
+    item = item_named(db_session, "SB200")
+    history_before = db_session.query(models.EquipmentStatusHistory).count()
+    logs_before = db_session.query(models.TransactionLog).count()
+
+    assert report_fault(client, "u_cmdr_a", item.id).status_code == 404
+    assert fix_fault(client, "u_cmdr_a", item.id).status_code == 404
+
+    assert db_session.query(models.EquipmentStatusHistory).count() == history_before
+    assert db_session.query(models.TransactionLog).count() == logs_before
+
+
+def test_a_soldier_refused_the_fix_leaves_the_repair_unrecorded(
+    client, db_session, mock_matrix_db
+):
+    """The other refusal shape: seen, held, and still not permitted.
+
+    The 404 above never reaches the verb. Here soldier_a HOLDS SA100, so the
+    resolver returns it and authz.require is what refuses -- the deeper of the
+    two gates, and the one a set_status call placed a line too high would sail
+    past, writing the transition and then 403-ing. The status is asserted
+    unchanged for the same reason.
+    """
+    item = item_named(db_session, "SA100")
+    assert report_fault(client, "u_soldier_a", item.id).status_code == 200
+    before = len(history_for(db_session, item))
+
+    assert fix_fault(client, "u_soldier_a", item.id).status_code == 403
+
+    db_session.refresh(item)
+    assert item.status == "Malfunctioning"
+    assert len(history_for(db_session, item)) == before
+
+
+def test_the_audit_write_dies_with_the_ticket_it_explains(
+    client, db_session, mock_matrix_db, monkeypatch
+):
+    """Why both writes sit BELOW the find-or-create commit, and in its flush.
+
+    report_fault commits mid-route to mint a novel FaultType. Audit above that
+    commit and a later failure leaves a COMMITTED history row explaining a
+    ticket that was rolled back -- DATA-M4's shape at a new site, and the worst
+    kind of audit defect: a permanent record of something that did not happen.
+
+    THE FAILURE IS FORCED AT THE FINAL COMMIT, and where it is forced is the
+    whole design of this test. An earlier version exploded the MaintenanceLog
+    CONSTRUCTOR, which fires two lines above the audit calls -- so under correct
+    code neither call ever ran, and the empty table proved only that unreached
+    code writes nothing. Failing on the second commit means record_event and
+    set_status have run and staged their rows, exactly as in production, before
+    anything goes wrong. The fault name is deliberately novel so that a first
+    commit exists to be counted; with a seeded name there is no mid-route commit
+    at all, which the assertion below checks rather than assumes.
+
+    ONE reachable defect, and this is it. A review asked for a stray
+    `db.commit()` between the audit writes and the route's own to be caught too;
+    it is not, and it should not be. `db.add(log)` runs ABOVE both audit calls,
+    so any commit that could persist an audit row persists the ticket in the
+    same transaction -- the rows cannot be separated by adding a commit, only by
+    hoisting the audit writes above the fault-type commit that already exists.
+    Mutation-tested both ways: hoisting fails this test, a stray commit does not
+    and describes no defect. A test written to "catch" it would be asserting
+    something untrue about the session.
+
+    Both tables are asserted. The history row was the obvious one and the
+    TransactionLog row is the one an earlier version missed entirely -- a FAULT
+    event surviving a rolled-back ticket is the same defect wearing the other
+    table's clothes.
+    """
+    item = item_named(db_session, "SA100")
+    logs_before = db_session.query(models.TransactionLog).count()
+
+    class Exploding(Exception):
+        pass
+
+    real_commit = db_session.commit
+    calls = {"n": 0}
+
+    def failing_commit():
+        calls["n"] += 1
+        # 1 = the find-or-create commit that mints the FaultType. 2 = the
+        # route's own, the one carrying the ticket and both audit rows.
+        if calls["n"] >= 2:
+            raise Exploding("ticket commit failed")
+        return real_commit()
+
+    monkeypatch.setattr(db_session, "commit", failing_commit)
+
+    with pytest.raises(Exploding):
+        report_fault(
+            client,
+            "u_soldier_a",
+            item.id,
+            description="never lands",
+            fault="Novel Fault For This Test",
+        )
+
+    assert calls["n"] >= 2, (
+        "the mid-route commit never happened, so this test proved nothing -- "
+        "the fault name must be one no fixture seeds"
+    )
+
+    monkeypatch.undo()
+    db_session.rollback()
+
+    assert history_for(db_session, item) == [], (
+        "a history row survived a failed ticket; the audit writes must sit "
+        "below the fault-type commit and share the ticket's flush"
+    )
+    assert db_session.query(models.TransactionLog).count() == logs_before, (
+        "a FAULT log survived a failed ticket"
+    )
+    db_session.refresh(item)
+    assert item.status == "Functional"
+
+
+def test_a_fault_report_on_a_statusless_item_is_refused(
+    client, db_session, mock_matrix_db
+):
+    """H4-1 409 ruling, through the route H4-2 newly exposes it on.
+
+    That refusal was pinned through /verifications/ only, because that was the
+    one caller. report_fault is now a second, and it is the one where the old
+    behaviour was worst: the bare assignment overwrote a NULL status silently,
+    so a corrupt row got quietly repaired into "Malfunctioning" with no record
+    that it had ever been broken.
+
+    Written by raw SQL because nothing in the application can produce this state
+    -- the same construction tests/test_sensitivity_contract.py uses for a NULL
+    sensitivity.
+    """
+    item = item_named(db_session, "SA100")
+    db_session.execute(
+        text("UPDATE equipment SET status = NULL WHERE id = :id"), {"id": item.id}
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    res = report_fault(client, "u_soldier_a", item.id)
+    assert res.status_code == 409, res.text
+
+    assert history_for(db_session, item) == []

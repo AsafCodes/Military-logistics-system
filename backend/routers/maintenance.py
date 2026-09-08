@@ -10,7 +10,7 @@ from ..dependencies import (
     scope_equipment_derived_query,
     require_status_authority,
 )
-from ..enums import Capability, EventType
+from ..enums import Capability, ChangeReason, EquipmentStatus, EventType
 from .. import audit_trail
 from .. import authz
 from .. import clock
@@ -116,8 +116,44 @@ def report_fault(
     )
     db.add(log)
 
-    # Mark equipment as malfunctioning
-    item.status = "Malfunctioning"  # audit-trail-bypass: DATA-H4-2
+    # DATA-H4-2. Both writes sit BELOW the find-or-create db.commit() above and
+    # in the same flush as the ticket, which is the whole reason this block is
+    # here rather than three lines earlier. Audit a fault above that commit and
+    # a later failure leaves a committed history row explaining a ticket that
+    # does not exist -- DATA-M4's shape at a new site.
+    #
+    # The asymmetry between the two calls is deliberate and is the ruling
+    # set_status's docstring states: a repeat report on an already-broken item
+    # is an EVENT (somebody reported something) and is not a TRANSITION (nothing
+    # moved). So the log row is unconditional and the history row is set_status's
+    # own no-op rule to decline. The two tables are complete together and
+    # neither is complete alone.
+    audit_trail.record_event(
+        db,
+        equipment=item,
+        actor=current_user,
+        event_type=EventType.FAULT,
+    )
+    # The description travels into notes because the alternative is a history
+    # row reading "Functional -> Malfunctioning, fault_report" with no why, when
+    # the why arrived in the same request. It is duplicated onto the ticket
+    # above, and that is the lesser cost: the ticket is closed and filtered out
+    # by fix_equipment, while this row is the permanent record.
+    #
+    # `or None` for the same reason fix_equipment uses it below: schemas.py
+    # declares description as a bare `str` with no min_length, so "" is a legal
+    # request body, and storing it would put a value in the column meaning "the
+    # reporter said nothing" that reads as "the reporter said nothing in
+    # particular". Two routes writing one column should not disagree about how
+    # to spell an absent note.
+    audit_trail.set_status(
+        db,
+        equipment=item,
+        actor=current_user,
+        new_status=EquipmentStatus.MALFUNCTIONING.value,
+        reason=ChangeReason.FAULT_REPORT,
+        notes=report.description or None,
+    )
 
     db.commit()
     return {"status": "Fault Reported", "ticket_id": log.id}
@@ -144,14 +180,33 @@ def fix_equipment(
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
     authz.require(db, current_user.id, Capability.RESOLVE_FAULT, item.group_id)
 
-    item.status = "Functional"  # audit-trail-bypass: DATA-H4-2
+    # DATA-H4-2. This route already logged the FIX below and wrote no history
+    # row, so an item could be broken and repaired for years while
+    # GET /equipment/{id}/history stayed empty -- the one table that records
+    # condition over time was written by create_verification alone.
+    #
+    # `notes or None` writes NULL today and will keep writing NULL until
+    # DATA-M5 lands: `notes` is a QUERY PARAMETER and no client sends one
+    # (EquipmentPage.tsx, MaintenancePage.tsx both post with no body), so it is
+    # always "". Storing that empty string would put a value in the column that
+    # means "the repairer said nothing" and looks like "the repairer said
+    # nothing in particular"; NULL says the first honestly.
+    audit_trail.set_status(
+        db,
+        equipment=item,
+        actor=current_user,
+        new_status=EquipmentStatus.FUNCTIONAL.value,
+        reason=ChangeReason.REPAIR,
+        notes=notes or None,
+    )
 
     # Close open tickets.
     #
     # The pragma sits on this line because that is where the AST reports the
     # call, and the guard reads the line a node starts on. A ticket's
     # Open/Closed is not an equipment status -- equipment_status_history has no
-    # row shape for it -- so this bypass is permanent, unlike the two above.
+    # row shape for it -- so this bypass is permanent. It is now the only one
+    # in the backend: DATA-H4-2 deleted the two that were waiting for it.
     db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
         models.MaintenanceLog.equipment_id == item.id,
         models.MaintenanceLog.status != "Closed"

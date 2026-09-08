@@ -10,10 +10,17 @@ import enum
 class EquipmentStatus(str, enum.Enum):
     """The statuses an equipment record is meant to hold.
 
-    Enforced on the verification write path only: the column is still a plain
-    String, and routers/maintenance.py assigns literals directly. Analytics
-    counts readiness by matching FUNCTIONAL exactly (routers/analytics.py),
-    so free-form values on the unconstrained paths still corrupt the metric.
+    Enforced on the write paths, not by the column: it is still a plain String,
+    so a value from outside this enum remains reachable by hand-written SQL.
+    Analytics counts readiness by matching FUNCTIONAL exactly
+    (routers/analytics.py), so such a value still corrupts the metric.
+
+    "routers/maintenance.py assigns literals directly" was true of this
+    docstring until DATA-H4-2, which cut report_fault and fix_equipment onto
+    audit_trail.set_status and made them pass members from here. Every
+    application path now writes a member; DATA-H12 is the ticket that
+    constrains the column and makes that true by construction rather than by
+    every caller remembering.
 
     These are the four options the verification form offers
     (frontend VerificationForm.tsx); keep the two in sync.
@@ -110,6 +117,15 @@ class EventType(str, enum.Enum):
     ASSIGN = "ASSIGN"
     # equipment.assign_owner. DATA-H4's headline: a change of custody wrote
     # nothing at all and never reached the movement report.
+    FAULT = "FAULT"
+    # maintenance.report_fault (DATA-H4-2). Like ASSIGN above it, a value with
+    # no legacy spelling to preserve -- nothing has ever written a fault to this
+    # table -- so it is uppercase only to match its neighbours.
+    #
+    # Written UNCONDITIONALLY, unlike the history row the same route also
+    # produces. A second fault report on an already-broken item moves no status,
+    # so equipment_status_history correctly records nothing; but somebody did
+    # report something, and this is the table that says so.
 
 
 class ChangeReason(str, enum.Enum):
@@ -118,16 +134,30 @@ class ChangeReason(str, enum.Enum):
     DATA-H4-1. Lowercase, unlike EventType, and that asymmetry is inherited
     rather than chosen: "verification" is the one value this column has ever
     held, written as a bare literal by verifications.create_verification, and
-    the frontend switches on it as-is (EquipmentHistory.tsx, EquipmentPage.tsx's
-    InlineHistory). Normalising the case would break both.
+    the frontend renders it as-is. Normalising the case would break that.
 
-    No TRANSFER member, though the frontend renders an arm for one. A transfer
-    changes custody, not condition, so it has no honest old_status/new_status
-    to record -- it belongs in transaction_logs, which is where it already is.
-    That arm is dead and DATA-H4-2 deletes it.
+    The other two values were chosen the same way and are equally unfree:
+    DATA-H4-2 adds the WRITERS for "fault_report" and "repair", but the frontend
+    has rendered arms for both strings since long before any code emitted them
+    (features/equipment/changeReasons.ts carries what were three duplicated
+    switches). The vocabulary was agreed; only the backend half was missing.
+
+    No TRANSFER member, though the frontend rendered an arm for one until
+    DATA-H4-2 deleted it. A transfer changes custody, not condition, so it has
+    no honest old_status/new_status to record -- it belongs in transaction_logs,
+    which is where it already is. Dead permanently, not dead pending a writer,
+    which is why deleting the arm was right and adding the member would not be.
+
+    Read by frontend changeReasons.ts, the same way EventType is read by
+    DailyActivityTable.tsx; tests/test_audit_trail.py asserts every member here
+    has both a router that writes it and an entry that renders it.
     """
     VERIFICATION = "verification"
     # verifications.create_verification.
+    FAULT_REPORT = "fault_report"
+    # maintenance.report_fault.
+    REPAIR = "repair"
+    # maintenance.fix_equipment.
 
 
 class GroupKind(str, enum.Enum):

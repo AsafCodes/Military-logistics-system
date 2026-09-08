@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck } from 'lucide-react';
+import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle } from 'lucide-react';
 import api from '@/api';
 
 // ============================================================
@@ -52,9 +52,15 @@ const EVENT_META: Record<string, EventMeta> = {
     assign: { icon: UserCheck, color: 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10', label: 'שינוי בעלות' },
     verification: { icon: ShieldCheck, color: 'text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-500/10', label: 'אימות' },
     fix: { icon: Wrench, color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10', label: 'תיקון' },
+    // DATA-H4-2. Amber against fix's emerald: a fault and its repair are the
+    // two ends of one story and the eye should separate them at a glance.
+    fault: { icon: AlertTriangle, color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10', label: 'דיווח תקלה' },
 };
 
-const FALLBACK_COLOR = 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10';
+// Derived, not restated. This was a byte-for-byte copy of handover's colour,
+// which is the drift this map was created to end -- retouch the blue in one
+// place and the fallback silently stops matching the swatch it is meant to be.
+const FALLBACK_COLOR = EVENT_META.handover.color;
 
 function eventMeta(eventType: string): EventMeta | undefined {
     return EVENT_META[eventType?.toLowerCase()];
