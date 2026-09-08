@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
-from .. import clock, models, schemas
+from .. import audit_trail, clock, models, schemas
+from ..enums import ChangeReason
 from ..dependencies import (
     get_current_active_user,
     get_scoped_equipment_or_404,
@@ -43,20 +44,20 @@ async def create_verification(
     db.add(verification)
     db.flush()
     
-    old_status = equipment.status
-    if reported_status != old_status:
-        equipment.status = reported_status
-        history = models.EquipmentStatusHistory(
-            equipment_id=equipment.id,
-            old_status=old_status,
-            new_status=reported_status,
-            change_reason="verification",
-            verification_id=verification.id,
-            notes=data.findings,
-            created_by=current_user.id
-        )
-        db.add(history)
-    
+    # The flush above is what makes verification_id available here, and it is
+    # the reason it cannot move. audit_trail.set_status owns both halves of the
+    # change now -- the assignment and the row -- so the "did the status
+    # actually move" question is asked once, there, rather than at each caller.
+    audit_trail.set_status(
+        db,
+        equipment=equipment,
+        actor=current_user,
+        new_status=reported_status,
+        reason=ChangeReason.VERIFICATION,
+        notes=data.findings,
+        verification_id=verification.id,
+    )
+
     equipment.last_verified_at = clock.utcnow()
     db.commit()
     db.refresh(verification)

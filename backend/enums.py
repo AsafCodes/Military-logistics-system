@@ -74,6 +74,62 @@ class Sensitivity(str, enum.Enum):
     CLASSIFIED = "CLASSIFIED"
 
 
+class EventType(str, enum.Enum):
+    """What a transaction_logs row says happened.
+
+    DATA-H4-1. These four strings existed before this enum did, as bare
+    literals at four inline construction sites; ASSIGN is the first new one.
+    The VALUES are therefore not free to be prettier than they are -- a
+    database that has been running carries rows spelling exactly these, and
+    tests/test_group_schema.py inserts 'HANDOVER' by raw SQL and asserts it
+    survives the migration chain. Renaming a member is cheap; changing a value
+    silently orphans history.
+
+    Every member here is written by a router, and each arrived in the same
+    commit as the route that writes it -- the rule Capability's docstring below
+    states at length and for the same reason. There is no member waiting for a
+    writer.
+
+    Read by frontend DailyActivityTable.tsx, which lowercases and looks the
+    value up in its EVENT_META map to pick a Hebrew label; a member with no
+    entry there renders as raw English. Not "switches" -- DATA-H4-1 replaced
+    three parallel switch statements with that map in the same commit this
+    sentence was written in, and described the code it had just deleted.
+    tests/test_audit_trail.py asserts the map is complete, so the two cannot
+    drift the way EquipmentStatus and VerificationForm.tsx still can.
+    """
+    HANDOVER = "HANDOVER"
+    # equipment.transfer_equipment, person branch.
+    HANDOVER_LOC = "HANDOVER_LOC"
+    # equipment.transfer_equipment, location branch.
+    VERIFICATION = "VERIFICATION"
+    # equipment.verify_equipment_daily -- the daily presence confirmation,
+    # NOT verifications.create_verification's condition report.
+    FIX = "FIX"
+    # maintenance.fix_equipment.
+    ASSIGN = "ASSIGN"
+    # equipment.assign_owner. DATA-H4's headline: a change of custody wrote
+    # nothing at all and never reached the movement report.
+
+
+class ChangeReason(str, enum.Enum):
+    """Why an equipment_status_history row exists.
+
+    DATA-H4-1. Lowercase, unlike EventType, and that asymmetry is inherited
+    rather than chosen: "verification" is the one value this column has ever
+    held, written as a bare literal by verifications.create_verification, and
+    the frontend switches on it as-is (EquipmentHistory.tsx, EquipmentPage.tsx's
+    InlineHistory). Normalising the case would break both.
+
+    No TRANSFER member, though the frontend renders an arm for one. A transfer
+    changes custody, not condition, so it has no honest old_status/new_status
+    to record -- it belongs in transaction_logs, which is where it already is.
+    That arm is dead and DATA-H4-2 deletes it.
+    """
+    VERIFICATION = "verification"
+    # verifications.create_verification.
+
+
 class GroupKind(str, enum.Enum):
     """The kinds of group the access model recognises.
 

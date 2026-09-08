@@ -10,7 +10,8 @@ from ..dependencies import (
     scope_equipment_derived_query,
     require_status_authority,
 )
-from ..enums import Capability
+from ..enums import Capability, EventType
+from .. import audit_trail
 from .. import authz
 from .. import clock
 from .. import models
@@ -114,10 +115,10 @@ def report_fault(
         status="Open"
     )
     db.add(log)
-    
+
     # Mark equipment as malfunctioning
-    item.status = "Malfunctioning"
-    
+    item.status = "Malfunctioning"  # audit-trail-bypass: DATA-H4-2
+
     db.commit()
     return {"status": "Fault Reported", "ticket_id": log.id}
 
@@ -143,22 +144,29 @@ def fix_equipment(
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
     authz.require(db, current_user.id, Capability.RESOLVE_FAULT, item.group_id)
 
-    item.status = "Functional"
-    
-    # Close open tickets
-    db.query(models.MaintenanceLog).filter(
+    item.status = "Functional"  # audit-trail-bypass: DATA-H4-2
+
+    # Close open tickets.
+    #
+    # The pragma sits on this line because that is where the AST reports the
+    # call, and the guard reads the line a node starts on. A ticket's
+    # Open/Closed is not an equipment status -- equipment_status_history has no
+    # row shape for it -- so this bypass is permanent, unlike the two above.
+    db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
         models.MaintenanceLog.equipment_id == item.id,
         models.MaintenanceLog.status != "Closed"
     ).update({"status": "Closed", "closed_at": clock.utcnow()}, synchronize_session=False)
 
-    # Log transaction
-    log = models.TransactionLog(
-        equipment_id=item.id,
-        involved_user_id=current_user.id,
-        event_type="FIX",
-        timestamp=clock.utcnow()
+    # This site is why record_event normalises user_status_at_time: the other
+    # three transaction-log writes recorded it and this one silently did not,
+    # so the column answered "was the actor on duty" for three event types out
+    # of four. It carries it now, like everything else.
+    audit_trail.record_event(
+        db,
+        equipment=item,
+        actor=current_user,
+        event_type=EventType.FIX,
     )
-    db.add(log)
-    
+
     db.commit()
     return {"status": "Fixed", "notes": notes}

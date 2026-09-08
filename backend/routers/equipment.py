@@ -13,7 +13,8 @@ from ..dependencies import (
     get_scoped_equipment_or_404,
     scope_equipment_query,
 )
-from ..enums import Capability
+from ..enums import Capability, EventType
+from .. import audit_trail
 from .. import authz
 from .. import clock
 from .. import models
@@ -300,7 +301,30 @@ def assign_owner(
     item.actual_location_id = None
     item.last_verified_at = clock.utcnow()
     item.custom_location = None
-    
+
+    # DATA-H4's headline. This route changed owner, holder, group and the
+    # verification clock and recorded none of it, so a change of custody --
+    # the most auditable event this system has -- left no trace and never
+    # appeared in the movement report.
+    #
+    # Below both authz.require calls, so a refused assignment logs nothing,
+    # and inside the same commit as the mutation, so the row cannot outlive a
+    # rollback of what it describes.
+    #
+    # recipient=, not a hand-spelled location string: record_event owns the
+    # "User:{name}" convention so this event and HANDOVER cannot drift apart
+    # in the one column that records who received the item.
+    #
+    # last_verified_at is still reset above and this only records that it
+    # happened; DATA-H5 is the ticket that stops it.
+    audit_trail.record_event(
+        db,
+        equipment=item,
+        actor=current_user,
+        event_type=EventType.ASSIGN,
+        recipient=target,
+    )
+
     db.commit()
     return {"status": "Ownership Assigned", "state": item.current_state_description}
 
@@ -396,14 +420,13 @@ def transfer_equipment(
             if destination is not None:
                 item.group_id = destination
 
-            log = models.TransactionLog(
-                equipment_id=item.id,
-                involved_user_id=current_user.id,
-                event_type="HANDOVER",
-                user_status_at_time=current_user.is_active_duty,
-                location=f"User:{target.full_name}" 
+            audit_trail.record_event(
+                db,
+                equipment=item,
+                actor=current_user,
+                event_type=EventType.HANDOVER,
+                recipient=target,
             )
-            db.add(log)
             result_msg = {"status": "Transferred", "new_holder": target.full_name}
 
         else:
@@ -415,14 +438,13 @@ def transfer_equipment(
             item.custom_location = req.to_location
             item.holder_user_id = None
             
-            log = models.TransactionLog(
-                equipment_id=item.id,
-                involved_user_id=current_user.id,
-                event_type="HANDOVER_LOC",
-                user_status_at_time=current_user.is_active_duty,
-                location=req.to_location
+            audit_trail.record_event(
+                db,
+                equipment=item,
+                actor=current_user,
+                event_type=EventType.HANDOVER_LOC,
+                location=req.to_location,
             )
-            db.add(log)
             result_msg = {"status": "Transferred", "location": req.to_location}
 
         item.actual_location_id = None
@@ -468,15 +490,16 @@ def verify_equipment_daily(
 
     item.last_verified_at = clock.utcnow()
     
-    trans_log = models.TransactionLog(
-        equipment_id=item.id,
-        involved_user_id=current_user.id,
-        event_type="VERIFICATION",
-        user_status_at_time=current_user.is_active_duty,
-        timestamp=clock.utcnow()
+    # VERIFICATION means THIS route -- the daily presence confirmation, gated
+    # on possession alone. verifications.create_verification is a different
+    # act with a different gate and does not share the string.
+    audit_trail.record_event(
+        db,
+        equipment=item,
+        actor=current_user,
+        event_type=EventType.VERIFICATION,
     )
-    db.add(trans_log)
-    
+
     db.commit()
     
     new_status = get_daily_status(item.last_verified_at)

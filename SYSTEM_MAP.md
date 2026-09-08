@@ -30,7 +30,8 @@ Marker_System/
 │   ├── schemas.py              # All Pydantic request/response schemas
 │   ├── security.py             # JWT + password hashing + password generation
 │   ├── dependencies.py         # Auth deps + Matrix Security scoping + compliance helper
-│   ├── enums.py                # Shared enumerated types (EquipmentStatus)
+│   ├── enums.py                # Shared enumerated types (EquipmentStatus, Sensitivity, EventType, ChangeReason, Capability)
+│   ├── audit_trail.py          # THE writer for both audit tables; owns equipment.status
 │   ├── authz.py                # Group algebra: Group, GroupEdge, GroupClosure, GroupMembership, Grant
 │   ├── migrations.py           # Alembic runner; replaces create_all
 │   ├── bootstrap_admin.py      # Out-of-band initial MASTER (not reachable over HTTP)
@@ -316,10 +317,10 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | `catalog_items` | Equipment type definitions (Radio 710, Ceramic Vest, etc.) |
 | `locations` | Physical storage (Armory, Container, etc.) |
 | `fault_types` | Known fault categories + pending approval flag |
-| `transaction_logs` | Append-only log of every movement/handover/verification |
+| `transaction_logs` | Append-only log of every movement/handover/verification. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction |
 | `maintenance_logs` | Fault tickets (Open → In Progress → Closed) |
 | `verifications` | Detailed condition reports |
-| `equipment_status_history` | Audit: old_status → new_status with reason + verification link |
+| `equipment_status_history` | Audit: old_status → new_status with reason + verification link. **Written only by `audit_trail.set_status`**, which owns the `equipment.status` assignment too — the record and the change are one operation |
 | `daily_stats` | Cached readiness snapshots (total, functional, score) |
 | `solution_types` | Fix categories (Replace, Fix) |
 
