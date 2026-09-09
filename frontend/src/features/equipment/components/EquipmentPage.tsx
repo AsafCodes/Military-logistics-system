@@ -5,6 +5,7 @@ import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
 import type { Equipment, User, FaultType } from '@/types';
 import EquipmentHistory from './EquipmentHistory';
 import VerificationForm from './VerificationForm';
+import { reasonMeta } from '../changeReasons';
 
 // ============================================================
 // Sub-Components: Modals
@@ -779,16 +780,11 @@ function InlineHistory({ equipmentId }: { equipmentId: number }) {
             .finally(() => setLoading(false));
     }, [equipmentId]);
 
-    const getReasonLabel = (reason: string) => {
-        switch (reason) {
-            case 'verification': return '✅ אימות';
-            case 'fault_report': return '⚠️ תקלה';
-            case 'repair': return '🔧 תיקון';
-            case 'transfer': return '🔄 העברה';
-            default: return '📝 ' + reason;
-        }
-    };
-
+    // DATA-H4-2. This was a fused copy of EquipmentHistory.tsx's two switches,
+    // in a different file, and it had already drifted: 'תקלה' here against
+    // 'דיווח תקלה' there, for the identical row. One map now
+    // (../changeReasons.ts); the fusing stays, since this view has one line to
+    // spend and the modal has two.
     if (loading) return <div className="text-sm text-muted-foreground py-2">טוען היסטוריה...</div>;
 
     if (history.length === 0) return (
@@ -798,9 +794,13 @@ function InlineHistory({ equipmentId }: { equipmentId: number }) {
     return (
         <div className="space-y-2">
             <div className="text-xs font-bold text-muted-foreground uppercase mb-2">היסטוריית שינויים</div>
-            {history.slice(0, 5).map(h => (
+            {history.slice(0, 5).map(h => {
+                const reason = reasonMeta(h.change_reason);
+                return (
                 <div key={h.id} className="flex items-center gap-3 text-xs text-muted-foreground">
-                    <span className="font-medium whitespace-nowrap">{getReasonLabel(h.change_reason)}</span>
+                    <span className="font-medium whitespace-nowrap">
+                        {reason.icon} {reason.label}
+                    </span>
                     <span className="text-emerald-600 dark:text-emerald-400">{h.old_status}</span>
                     <span>→</span>
                     <span className="text-primary">{h.new_status}</span>
@@ -809,7 +809,8 @@ function InlineHistory({ equipmentId }: { equipmentId: number }) {
                     </span>
                     {h.user_name && <span className="text-foreground/60">{h.user_name}</span>}
                 </div>
-            ))}
+                );
+            })}
             {history.length > 5 && (
                 <div className="text-xs text-primary">עוד {history.length - 5} רשומות...</div>
             )}

@@ -10,10 +10,17 @@ import enum
 class EquipmentStatus(str, enum.Enum):
     """The statuses an equipment record is meant to hold.
 
-    Enforced on the verification write path only: the column is still a plain
-    String, and routers/maintenance.py assigns literals directly. Analytics
-    counts readiness by matching FUNCTIONAL exactly (routers/analytics.py),
-    so free-form values on the unconstrained paths still corrupt the metric.
+    Enforced on the write paths, not by the column: it is still a plain String,
+    so a value from outside this enum remains reachable by hand-written SQL.
+    Analytics counts readiness by matching FUNCTIONAL exactly
+    (routers/analytics.py), so such a value still corrupts the metric.
+
+    "routers/maintenance.py assigns literals directly" was true of this
+    docstring until DATA-H4-2, which cut report_fault and fix_equipment onto
+    audit_trail.set_status and made them pass members from here. Every
+    application path now writes a member; DATA-H12 is the ticket that
+    constrains the column and makes that true by construction rather than by
+    every caller remembering.
 
     These are the four options the verification form offers
     (frontend VerificationForm.tsx); keep the two in sync.
@@ -58,7 +65,7 @@ class Sensitivity(str, enum.Enum):
     reimplements. A CLASSIFIED value is no longer merely a claim recorded about
     the record; it is a restriction the server applies to it.
 
-    Two deliberate limits on that guarantee, both load-bearing:
+    Three deliberate limits on that guarantee, all load-bearing:
 
       - POSSESSION SURVIVES CLASSIFICATION. The holder arm of
         scope_equipment_query sits OUTSIDE the classification clause, so you can
@@ -69,9 +76,141 @@ class Sensitivity(str, enum.Enum):
         scope, so an uncleared caller's total silently drops by one. Comparing
         totals with a cleared caller reveals that a classified item exists,
         though not which. Accepted rather than overlooked; see that route.
+      - AUDIT DISAPPEARS WITH THE ITEM. scope_equipment_derived_query filters on
+        the item's CURRENT sensitivity, so classifying one retroactively removes
+        every transaction_logs row about it -- including the RECLASSIFY row
+        recording the classification itself. The event that hides an item is
+        hidden by the same act, from exactly the callers who would notice it had
+        gone. The mechanism predates DATA-H4-3 and is pinned by
+        tests/test_sensitivity_contract.py; that ticket is what made it
+        self-referential, by giving the act a log row of its own to swallow.
     """
     UNCLASSIFIED = "UNCLASSIFIED"
     CLASSIFIED = "CLASSIFIED"
+
+
+class EventType(str, enum.Enum):
+    """What a transaction_logs row says happened.
+
+    DATA-H4-1. These four strings existed before this enum did, as bare
+    literals at four inline construction sites; ASSIGN is the first new one.
+    The VALUES are therefore not free to be prettier than they are -- a
+    database that has been running carries rows spelling exactly these, and
+    tests/test_group_schema.py inserts 'HANDOVER' by raw SQL and asserts it
+    survives the migration chain. Renaming a member is cheap; changing a value
+    silently orphans history.
+
+    Every member here is written by a router, and each arrived in the same
+    commit as the route that writes it -- the rule Capability's docstring below
+    states at length and for the same reason. There is no member waiting for a
+    writer.
+
+    As of DATA-H4-3 the converse also holds: there is no equipment-mutating
+    route waiting for a member. Every route under routers/ that changes an
+    equipment row writes at least one row into transaction_logs, which is what
+    DATA-H4's "route every state mutation through one audit-writing helper"
+    asked for and what tests/test_audit_trail.py's guards keep true. The
+    remaining gaps are structural rather than missed: users.update_user_group
+    and setup.py's fault-type routes have no equipment to name, and a NULL
+    equipment_id is dropped by scope_equipment_derived_query's inner join, so a
+    row for them would be written and seen by nobody (DATA-M8).
+
+    Read by frontend DailyActivityTable.tsx, which lowercases and looks the
+    value up in its EVENT_META map to pick a Hebrew label; a member with no
+    entry there renders as raw English. Not "switches" -- DATA-H4-1 replaced
+    three parallel switch statements with that map in the same commit this
+    sentence was written in, and described the code it had just deleted.
+    tests/test_audit_trail.py asserts the map is complete, so the two cannot
+    drift the way EquipmentStatus and VerificationForm.tsx still can.
+    """
+    HANDOVER = "HANDOVER"
+    # equipment.transfer_equipment, person branch.
+    HANDOVER_LOC = "HANDOVER_LOC"
+    # equipment.transfer_equipment, location branch.
+    VERIFICATION = "VERIFICATION"
+    # equipment.verify_equipment_daily -- the daily presence confirmation,
+    # NOT verifications.create_verification's condition report.
+    FIX = "FIX"
+    # maintenance.fix_equipment.
+    ASSIGN = "ASSIGN"
+    # equipment.assign_owner. DATA-H4's headline: a change of custody wrote
+    # nothing at all and never reached the movement report.
+    FAULT = "FAULT"
+    # maintenance.report_fault (DATA-H4-2). Like ASSIGN above it, a value with
+    # no legacy spelling to preserve -- nothing has ever written a fault to this
+    # table -- so it is uppercase only to match its neighbours.
+    #
+    # Written UNCONDITIONALLY, unlike the history row the same route also
+    # produces. A second fault report on an already-broken item moves no status,
+    # so equipment_status_history correctly records nothing; but somebody did
+    # report something, and this is the table that says so.
+    RECLASSIFY = "RECLASSIFY"
+    # equipment.set_sensitivity, via audit_trail.set_sensitivity (DATA-H4-3).
+    #
+    # Records WHO reclassified WHICH item WHEN, and deliberately not what it
+    # changed to, because transaction_logs has nowhere honest to put it.
+    #
+    # Two string columns exist and neither is free. `location` already means a
+    # place AND a person ("User:{name}"), so a third meaning in a column no
+    # reader can disambiguate is the exact drift record_event's docstring
+    # exists to prevent. `broken_description` is dead -- nothing has written or
+    # read it since the initial migration -- but it is named for FAULTS, so
+    # putting a classification in it buys accuracy about one event by making
+    # the column lie about every other. Reusing a misnamed empty column is the
+    # cheaper-looking half of the same mistake.
+    #
+    # The current value is on the equipment row; DATA-M8 is where the log gains
+    # a column that means what it says.
+    #
+    # Written UNCONDITIONALLY, for FAULT's reason above: re-asserting CLASSIFIED
+    # on an already-classified item is somebody making a classification
+    # decision, and this is the events table.
+    CREATE = "CREATE"
+    # equipment.create_equipment (DATA-H4-3). Equipment has no created_at column
+    # (models.py), so this row is the only record the system will ever hold of
+    # when an item entered the inventory -- which is why it is worth a member
+    # rather than being dismissed as "not a movement".
+    CONDITION_REPORT = "CONDITION_REPORT"
+    # verifications.create_verification (DATA-H4-3). NOT VERIFICATION, which is
+    # taken four members up by the daily presence confirmation -- two acts with
+    # two gates do not share a string.
+    #
+    # Unconditional, beside a set_status call that is not. Before DATA-H4-3 a
+    # verification CONFIRMING the status wrote nothing into either audit table:
+    # set_status no-ops when nothing moved, and nothing else recorded that
+    # somebody had looked. That is the gap this member closes.
+
+
+class ChangeReason(str, enum.Enum):
+    """Why an equipment_status_history row exists.
+
+    DATA-H4-1. Lowercase, unlike EventType, and that asymmetry is inherited
+    rather than chosen: "verification" is the one value this column has ever
+    held, written as a bare literal by verifications.create_verification, and
+    the frontend renders it as-is. Normalising the case would break that.
+
+    The other two values were chosen the same way and are equally unfree:
+    DATA-H4-2 adds the WRITERS for "fault_report" and "repair", but the frontend
+    has rendered arms for both strings since long before any code emitted them
+    (features/equipment/changeReasons.ts carries what were three duplicated
+    switches). The vocabulary was agreed; only the backend half was missing.
+
+    No TRANSFER member, though the frontend rendered an arm for one until
+    DATA-H4-2 deleted it. A transfer changes custody, not condition, so it has
+    no honest old_status/new_status to record -- it belongs in transaction_logs,
+    which is where it already is. Dead permanently, not dead pending a writer,
+    which is why deleting the arm was right and adding the member would not be.
+
+    Read by frontend changeReasons.ts, the same way EventType is read by
+    DailyActivityTable.tsx; tests/test_audit_trail.py asserts every member here
+    has both a router that writes it and an entry that renders it.
+    """
+    VERIFICATION = "verification"
+    # verifications.create_verification.
+    FAULT_REPORT = "fault_report"
+    # maintenance.report_fault.
+    REPAIR = "repair"
+    # maintenance.fix_equipment.
 
 
 class GroupKind(str, enum.Enum):

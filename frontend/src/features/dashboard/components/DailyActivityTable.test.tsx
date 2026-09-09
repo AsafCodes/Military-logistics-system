@@ -81,3 +81,50 @@ describe('DailyActivityTable: renders the Z-suffixed timestamp in the viewer loc
         expect(screen.queryByText('12:15')).toBeNull();
     });
 });
+
+
+/**
+ * DATA-H4-1. The label switch, against the vocabulary the backend actually
+ * emits rather than the vocabulary this file was written against.
+ *
+ * The fixtures above use 'movement' and 'fault'. Neither string has ever been
+ * written by any router: backend/enums.py EventType emits HANDOVER,
+ * HANDOVER_LOC, VERIFICATION, FIX and (new with this ticket) ASSIGN. So the
+ * two switches in this component were being exercised entirely on values that
+ * do not occur, while every real handover fell through to `default` and
+ * printed raw English into an RTL Hebrew table -- for as long as the feature
+ * has existed, with this suite green.
+ *
+ * tests/test_audit_trail.py has a guard that every EventType value has a
+ * `case` arm here, but a substring check on a source file cannot prove React
+ * renders it. This is the half that runs the component.
+ *
+ * The negative assertion is the one that would have caught the original bug:
+ * asserting the Hebrew appears says a label was found, while asserting the
+ * raw event_type is ABSENT says the `default` arm was not taken.
+ */
+describe('DailyActivityTable: labels the event types the backend really writes (DATA-H4-1)', () => {
+    const CASES: Array<[string, string]> = [
+        ['HANDOVER', 'העברה'],
+        ['HANDOVER_LOC', 'העברה למיקום'],
+        ['ASSIGN', 'שינוי בעלות'],
+        ['VERIFICATION', 'אימות'],
+        ['FIX', 'תיקון'],
+    ];
+
+    it.each(CASES)('renders %s as a Hebrew label, not raw text', async (eventType, label) => {
+        vi.spyOn(api, 'get').mockImplementation((url: string) => {
+            if (url === '/reports/daily_movement') {
+                return Promise.resolve({
+                    data: [{ ...ACTIVITY_ITEM, event_type: eventType }],
+                });
+            }
+            throw new Error(`unexpected URL in test: ${url}`);
+        });
+
+        render(<DailyActivityTable />);
+
+        expect(await screen.findByText(label)).toBeInTheDocument();
+        expect(screen.queryByText(eventType)).not.toBeInTheDocument();
+    });
+});
