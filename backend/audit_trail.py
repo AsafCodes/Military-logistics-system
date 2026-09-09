@@ -13,8 +13,8 @@ helper so no path CAN bypass it", and the operative word is `can`. A module
 plus a convention is not that -- a convention is what the four divergent call
 sites already were. The enforcement is in tests/test_audit_trail.py, which
 walks every file under backend/ with `ast` and fails on a construction of
-either table, or a write to `.status`, outside this module. That guard is the
-fix; this module is only what makes obeying it possible.
+either table, or a write to `.status` or `.sensitivity`, outside this module.
+That guard is the fix; this module is only what makes obeying it possible.
 
 What the guard actually promises is that no ORDINARY spelling gets past it,
 which is the honest version of "cannot" and the one worth writing down. A
@@ -23,13 +23,19 @@ lists what it misses rather than implying it misses nothing. It exists to stop
 the sixth call site being written inline by accident, which is how the first
 five happened.
 
-WHY set_status OWNS THE ASSIGNMENT
------------------------------------
+WHY THE SETTERS OWN THEIR ASSIGNMENTS
+--------------------------------------
 It would be smaller to write a helper that records a status change the caller
 has already made. It would also be useless: that is precisely the shape that
 let report_fault set "Malfunctioning" and write no row for four years. The
 assignment and the record are one operation or they are two things that drift,
 so `equipment.status = x` is not a statement any router gets to write.
+
+DATA-H4-3 extended that to `equipment.sensitivity`, which had exactly one
+writer and no audit at all. One caller does not normally justify a helper --
+what justifies this one is that the guard needs a chokepoint to point AT, and
+the column is the access-control decision itself since DATA-H3-3 made a
+classification something the server enforces rather than merely records.
 
 NOT DEPENDENCY-FREE, unlike clock.py and enums.py, which open by saying they
 are and mean it. This module imports models, so it sits below it and cannot be
@@ -51,6 +57,20 @@ from sqlalchemy.orm import Session
 from . import clock, models
 from .enums import ChangeReason, EventType
 
+# The equipment columns this module OWNS: assigning one outside here is a test
+# failure, not a code review note. Declared as data because the guard in
+# tests/test_audit_trail.py drives off it -- DATA-H4-3 first wrote the pair as
+# three separate literal lists in the test file, which meant a fourth setter
+# added here without touching all three would leave its column silently
+# unguarded. That is this module's own failure mode ("no path CAN bypass it")
+# reappearing one level up, in which columns get policed rather than whether a
+# given column's writes are.
+#
+# Kept beside the setters rather than in the test, so adding `set_priority`
+# below and forgetting this line is caught by the staleness check next door
+# rather than by nobody.
+OWNED_COLUMNS = ("status", "sensitivity")
+
 
 def record_event(
     db: Session,
@@ -61,7 +81,10 @@ def record_event(
     location: str | None = None,
     recipient: models.User | None = None,
 ) -> None:
-    """Append a transaction_logs row. Adds; never commits.
+    """Append a transaction_logs row. Adds; never commits, and never flushes.
+
+    Refuses an equipment that has no id yet -- see the branch below for why
+    that is a refusal rather than a flush.
 
     The caller's own commit covers it, so an audit row cannot survive a
     rollback of the change it describes -- and, in the other direction, a
@@ -83,8 +106,15 @@ def record_event(
     That one-line move is the point: the AST guards next door check that rows
     are CONSTRUCTED here, and cannot check that they are FORMATTED alike, so a
     "user:" or "User: " from a later caller would pass every test and quietly
-    split the movement report's only record of who received the item. The
-    callers DATA-H4-2 and -3 add are exactly the ones that would drift.
+    split the movement report's only record of who received the item.
+
+    DATA-H4-2 and -3 added four callers between them, and not one passes either
+    argument: a fault, a creation, a condition report and a reclassification
+    each involve one item and one actor and no second party. So the convention
+    is still spelled in exactly one place and has had no chance to drift.
+
+    The repair's FIX row is not among those four. It is one of the original
+    sites, migrated here by DATA-H4-1.
 
     Inherited, not endorsed. involved_location_id, which would carry a place
     properly, is dead (DATA-M18); involved_user_id records the ACTOR, not the
@@ -93,6 +123,36 @@ def record_event(
     """
     if location is not None and recipient is not None:
         raise ValueError("record_event takes a location or a recipient, not both")
+
+    if equipment.id is None:
+        # DATA-H4-3. The equipment has not been INSERTed yet, so reading .id
+        # below writes NULL into equipment_id -- and a NULL there is not a loud
+        # failure. scope_equipment_derived_query joins INNER, so the row is
+        # dropped from the movement report and from every listing built on it:
+        # written, committed, and visible to nobody. It is the mechanism that
+        # makes users.update_user_group unauditable, and create_equipment
+        # reached it by accident before this check existed.
+        #
+        # SessionLocal sets autoflush=False (database.py), so nothing flushes on
+        # a caller's behalf; a caller holding a pending row must flush it.
+        #
+        # REFUSED RATHER THAN FLUSHED HERE, and the distinction is the whole
+        # point. Flushing would be the convenient fix and this module may not:
+        # tests/test_audit_trail.py's writer-never-commits guard forbids commit
+        # AND flush, on H4-1's ruling that the helper declines to own a
+        # transaction so the audit row and the change it describes must share
+        # the caller's. Taking the flush would buy one route's convenience with
+        # the property the whole module rests on.
+        #
+        # So the caller keeps the flush and loses only the silence. That is
+        # set_status's rule about an absent old_status applied to a different
+        # input -- surface it, do not launder it -- and it turns the one failure
+        # mode here that no test could see into one that cannot be missed.
+        raise ValueError(
+            "record_event needs a persisted equipment; its id is None, which "
+            "would write an audit row that no scoped query can return. Flush "
+            "the session before calling."
+        )
 
     if recipient is not None:
         # full_name is nullable (models.py), so the naive f-string writes the
@@ -166,10 +226,16 @@ def set_status(
         # An absent old_status is a corrupt row, which a 409 describes; an
         # absent new_status is this module being called wrongly, which no
         # client can fix and no status code should dress up as a conflict.
-        # Latent today -- every caller passes an EquipmentStatus value or a
-        # literal -- and this module is precisely the chokepoint DATA-H4-2 and
-        # -3 add callers to, which is when a silently-empty new_status would
-        # start writing rows claiming a transition INTO nothing.
+        # Latent today -- every caller passes an EquipmentStatus value -- and
+        # it stayed latent through the two callers DATA-H4-2 added to this
+        # chokepoint, which is what it was written ahead of: a silently-empty
+        # new_status writes rows claiming a transition INTO nothing.
+        #
+        # DATA-H4-3 added none. It reached for a SIBLING function instead, and
+        # set_sensitivity carries a copy of this guard for the same reason --
+        # which is the shape worth noticing here: this module grows by gaining
+        # writers, not only callers, and each new writer owes its own version
+        # of this check.
         raise ValueError(
             f"set_status requires a non-empty new_status, got {new_status!r}"
         )
@@ -198,3 +264,62 @@ def set_status(
         created_by=actor.id,
     )
     db.add(history)
+
+
+def set_sensitivity(
+    db: Session,
+    *,
+    equipment: models.Equipment,
+    actor: models.User,
+    new_sensitivity: str,
+) -> None:
+    """Assign equipment.sensitivity and log that somebody decided it.
+
+    DATA-H4-3. Adds; never commits -- the contract both functions above hold.
+
+    Three ways this deliberately does NOT match set_status, each of which reads
+    as an oversight unless it is written down.
+
+    NO 409 ON AN ABSENT OLD VALUE. set_status refuses one because old_status is
+    a NOT NULL column and a row in that state cannot be written; nothing here
+    records an old value at all, so there is no corrupt row to refuse. A NULL
+    sensitivity is a record being REPAIRED by this call, and refusing it would
+    make the one route that can fix such a row the one route that cannot.
+
+    A NO-OP IS STILL AN EVENT, which is the exact inverse of set_status's rule
+    and rests on the same distinction. equipment_status_history records
+    TRANSITIONS -- its columns are old and new, so a row where they match
+    asserts a change that did not happen. transaction_logs records EVENTS, and
+    re-asserting CLASSIFIED on an already-classified item is a person making a
+    classification decision. EventType.FAULT settled this shape in DATA-H4-2,
+    where a repeat fault report logs and writes no history row; a repeat
+    classification is the same case with only one of the two tables involved.
+
+    THE ROW DOES NOT SAY WHAT IT CHANGED TO. See EventType.RECLASSIFY for why
+    (there is nowhere honest to put it) and DATA-M8 for where that gets fixed.
+    Worth noticing that this is a real limit and not a small one: a RECLASSIFY
+    row cannot distinguish classifying from declassifying, so the log answers
+    "who touched the classification of this item" and not "what is it now".
+
+    A one-caller helper, which normally is not worth writing. What makes this
+    one worth it is stated in the module docstring: the guard in
+    tests/test_audit_trail.py needs somewhere to point, and `.sensitivity` is
+    the access-control decision itself rather than a fact recorded beside one.
+    """
+    if not new_sensitivity:
+        # set_status's reasoning verbatim: this is the module being called
+        # wrongly, not a client error, so it is a ValueError and not a 4xx.
+        # Latent -- the one caller passes a validated Sensitivity member -- and
+        # here for the same reason its sibling was, ahead of the second caller.
+        raise ValueError(
+            f"set_sensitivity requires a non-empty new_sensitivity, "
+            f"got {new_sensitivity!r}"
+        )
+
+    equipment.sensitivity = new_sensitivity
+    record_event(
+        db,
+        equipment=equipment,
+        actor=actor,
+        event_type=EventType.RECLASSIFY,
+    )

@@ -31,7 +31,7 @@ Marker_System/
 │   ├── security.py             # JWT + password hashing + password generation
 │   ├── dependencies.py         # Auth deps + Matrix Security scoping + compliance helper
 │   ├── enums.py                # Shared enumerated types (EquipmentStatus, Sensitivity, EventType, ChangeReason, Capability)
-│   ├── audit_trail.py          # THE writer for both audit tables; owns equipment.status
+│   ├── audit_trail.py          # THE writer for both audit tables; owns equipment.status + .sensitivity
 │   ├── authz.py                # Group algebra: Group, GroupEdge, GroupClosure, GroupMembership, Grant
 │   ├── migrations.py           # Alembic runner; replaces create_all
 │   ├── bootstrap_admin.py      # Out-of-band initial MASTER (not reachable over HTTP)
@@ -122,6 +122,7 @@ Marker_System/
 - **Files:** `models.py` → `Equipment` (fields: `owner_user_id`, `holder_user_id`, `custom_location`, `actual_location_id`)
 - **Responsibility:** Separates WHO OWNS an item (`owner_user_id`) from WHO HAS IT RIGHT NOW (`holder_user_id`) from WHERE IT IS (`custom_location` / `actual_location_id`).
 - **⚠️ Non-Obvious Detail:** Transfer to a person clears location. Transfer to a location clears holder. These are mutually exclusive (XOR validation in `equipment.py`). Don't try to set both at once.
+- **Audit (DATA-H4-3):** every route in `equipment.py` that mutates a row now writes a `transaction_logs` entry — `create_equipment` emits `CREATE`, `set_sensitivity` emits `RECLASSIFY` through `audit_trail.set_sensitivity` (which owns the column assignment, as `set_status` owns `.status`), alongside the `ASSIGN`/`HANDOVER`/`HANDOVER_LOC`/`VERIFICATION` writers already there. `CREATE` sits behind a `db.flush()` because `record_event` reads `equipment.id`: without it the row would carry a NULL `equipment_id`, which `scope_equipment_derived_query`'s inner join discards — written, committed, visible to nobody. `record_event` **refuses** an unflushed equipment rather than flushing it itself (the writer owns no transaction operation, by H4-1's ruling), so that failure is loud rather than silent. A `RECLASSIFY` row records who and when, **not** from-what-to-what — `transaction_logs` has nowhere honest to put it: `location` already means a place *and* a person, and `broken_description` is dead but named for faults (DATA-M8).
 
 ### Module D: Fault & Ticket Pipeline
 - **Files:** `routers/maintenance.py`
@@ -134,6 +135,7 @@ Marker_System/
 ### Module E: Verification & Audit Trail
 - **Files:** `routers/verifications.py` (2 sub-routers: `router` + `history_router`)
 - **Responsibility:** Records detailed equipment condition reports. If the reported status differs from current status, automatically creates an `EquipmentStatusHistory` entry linked to the verification. **No longer the only writer of that table** (DATA-H4-2): the maintenance routes above write it too, so `GET /equipment/{id}/history` is now the item's whole condition history rather than its verification history.
+- **Audit (DATA-H4-3):** `create_verification` also emits `CONDITION_REPORT` into `transaction_logs`, **unconditionally**, beside the conditional `set_status` call. Before this a verification that *confirmed* the existing status wrote nothing into either audit table — `set_status` correctly declines a transition that did not happen, and nothing recorded that anyone had looked. `CONDITION_REPORT`, **not** `VERIFICATION`: that value means `equipment.verify_equipment_daily`'s presence check, gated on possession alone, and these are two acts with two gates.
 - **Endpoints:** `POST /verifications/` (create), `GET /verifications/equipment/{id}` (list), `GET /equipment/{id}/history` (status changes).
 - **Authority (H1-9):** all three resolve through `get_scoped_equipment_or_404`. The write then gates on `require_status_authority` (holder or `REPORT_STATUS`); the two reads gate on **nothing further** — they are reads, so the resolver *is* the VIEW gate. Until H1-9 all three took the raw id, so any authenticated account could read any asset's full observation history and status audit trail by counting.
 - **Active duty (H1-10.5):** all three routes are on `get_current_active_user`, and `login_for_access_token` refuses an inactive account outright — the per-route check only declines a credential that was already issued, so the login gate is what closes the class rather than the instances. The refusal reuses the wrong-password 401 verbatim so the form is not an oracle for which military IDs have been deactivated.
@@ -318,10 +320,10 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | `catalog_items` | Equipment type definitions (Radio 710, Ceramic Vest, etc.) |
 | `locations` | Physical storage (Armory, Container, etc.) |
 | `fault_types` | Known fault categories + pending approval flag |
-| `transaction_logs` | Append-only log of every movement/handover/verification. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction |
+| `transaction_logs` | Append-only log of every movement/handover/verification, and since DATA-H4-3 of every equipment mutation: creation, reclassification and condition reports too. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction |
 | `maintenance_logs` | Fault tickets (Open → In Progress → Closed) |
 | `verifications` | Detailed condition reports |
-| `equipment_status_history` | Audit: old_status → new_status with reason + verification link. **Written only by `audit_trail.set_status`**, which owns the `equipment.status` assignment too — the record and the change are one operation |
+| `equipment_status_history` | Audit: old_status → new_status with reason + verification link. **Written only by `audit_trail.set_status`**, which owns the `equipment.status` assignment too — the record and the change are one operation. Records **transitions**, so a no-op write adds nothing; `transaction_logs` is where the act still shows up |
 | `daily_stats` | Cached readiness snapshots (total, functional, score) |
 | `solution_types` | Fix categories (Replace, Fix) |
 

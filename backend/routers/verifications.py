@@ -7,7 +7,7 @@ from typing import List
 
 from ..database import get_db
 from .. import audit_trail, clock, models, schemas
-from ..enums import ChangeReason
+from ..enums import ChangeReason, EventType
 from ..dependencies import (
     get_current_active_user,
     get_scoped_equipment_or_404,
@@ -44,6 +44,27 @@ async def create_verification(
     db.add(verification)
     db.flush()
     
+    # DATA-H4-3. UNCONDITIONAL, and it sits beside a call that is not -- which
+    # is the whole point of the pair. An inspection happened, so this row is
+    # written; a transition may not have, so set_status below decides for
+    # itself.
+    #
+    # Before this, a verification that CONFIRMED the existing status wrote
+    # nothing into either audit table: set_status no-ops when nothing moved and
+    # nothing else recorded that anyone had looked. Somebody laid eyes on a
+    # rifle, filed a report, and the audit trail said no.
+    #
+    # CONDITION_REPORT, not VERIFICATION. That string means
+    # equipment.verify_equipment_daily -- the daily presence confirmation, gated
+    # on possession alone -- and this route is a condition report gated on
+    # require_status_authority. Two acts, two gates, two values.
+    audit_trail.record_event(
+        db,
+        equipment=equipment,
+        actor=current_user,
+        event_type=EventType.CONDITION_REPORT,
+    )
+
     # The flush above is what makes verification_id available here, and it is
     # the reason it cannot move. audit_trail.set_status owns both halves of the
     # change now -- the assignment and the row -- so the "did the status

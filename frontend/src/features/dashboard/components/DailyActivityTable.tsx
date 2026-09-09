@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle, ShieldAlert, PackagePlus, ClipboardCheck } from 'lucide-react';
 import api from '@/api';
 
 // ============================================================
@@ -55,6 +55,18 @@ const EVENT_META: Record<string, EventMeta> = {
     // DATA-H4-2. Amber against fix's emerald: a fault and its repair are the
     // two ends of one story and the eye should separate them at a glance.
     fault: { icon: AlertTriangle, color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10', label: 'דיווח תקלה' },
+    // DATA-H4-3. Rose is the loudest swatch in this map and the only one that
+    // is loud on purpose: a classification decision is the rarest event here
+    // and the one an auditor scans for.
+    reclassify: { icon: ShieldAlert, color: 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10', label: 'שינוי סיווג' },
+    // Slate, deliberately quiet. An item entering the inventory is the most
+    // routine line the report carries.
+    create: { icon: PackagePlus, color: 'text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-500/10', label: 'יצירת פריט' },
+    // Indigo against verification's sky, and adjacent on purpose -- the daily
+    // presence check and the condition report are the same family and
+    // different acts, which is exactly what the backend refuses to spell with
+    // one EventType. Same reasoning as fault's amber against fix's emerald.
+    condition_report: { icon: ClipboardCheck, color: 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10', label: 'דיווח מצב' },
 };
 
 // Derived, not restated. This was a byte-for-byte copy of handover's colour,

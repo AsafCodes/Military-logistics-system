@@ -166,9 +166,30 @@ def create_equipment(
         sensitivity=item.sensitivity.value if item.sensitivity is not None else None,
     )
     db.add(new_item)
+
+    # DATA-H4-3. Equipment has no created_at column (models.py), so this row is
+    # the only record the system will ever hold of when an item entered the
+    # inventory -- which is the answer to "a creation is not a movement".
+    #
+    # The flush is what gives new_item an id, and record_event REFUSES an
+    # equipment without one rather than writing an unreachable row -- so
+    # deleting this line fails loudly instead of producing an audit row that no
+    # scoped query can return. The reasoning for refusing rather than flushing
+    # inside the writer is at that check.
+    #
+    # Below the CatalogItem commit above and inside the Equipment insert's own
+    # transaction, so the log cannot outlive the item it records.
+    db.flush()
+    audit_trail.record_event(
+        db,
+        equipment=new_item,
+        actor=current_user,
+        event_type=EventType.CREATE,
+    )
+
     db.commit()
     db.refresh(new_item)
-    
+
     return schemas.EquipmentResponse(
         id=new_item.id,
         type=new_item.item_name,
@@ -218,14 +239,25 @@ def set_sensitivity(
     advance it as a side effect of paperwork; classifying an item is not
     laying eyes on it.
 
-    Writes no audit record, exactly like assign_owner -- which is DATA-H4's
-    ticket, and named here rather than half-fixed: adding bespoke logging at a
-    fifth site is the shape DATA-H4 exists to replace with one helper.
+    DATA-H4-3. This route wrote no audit record at all, and the note that used
+    to stand here said so and deferred, on the argument that bespoke logging at
+    a fifth site was the thing DATA-H4 existed to replace. It is now the helper
+    that both assigns the column and logs the decision -- the route no longer
+    names `sensitivity` on the left of an `=` at all, and an AST guard in
+    tests/test_audit_trail.py refuses any file under backend/ that does.
     """
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
     authz.require(db, current_user.id, Capability.SET_SENSITIVITY, item.group_id)
 
-    item.sensitivity = req.sensitivity.value
+    # Below the gate, so a refused classification leaves nothing behind, and
+    # inside the same commit as the assignment it records.
+    audit_trail.set_sensitivity(
+        db,
+        equipment=item,
+        actor=current_user,
+        new_sensitivity=req.sensitivity.value,
+    )
+
     db.commit()
     db.refresh(item)
 

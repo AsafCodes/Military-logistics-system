@@ -65,7 +65,7 @@ class Sensitivity(str, enum.Enum):
     reimplements. A CLASSIFIED value is no longer merely a claim recorded about
     the record; it is a restriction the server applies to it.
 
-    Two deliberate limits on that guarantee, both load-bearing:
+    Three deliberate limits on that guarantee, all load-bearing:
 
       - POSSESSION SURVIVES CLASSIFICATION. The holder arm of
         scope_equipment_query sits OUTSIDE the classification clause, so you can
@@ -76,6 +76,14 @@ class Sensitivity(str, enum.Enum):
         scope, so an uncleared caller's total silently drops by one. Comparing
         totals with a cleared caller reveals that a classified item exists,
         though not which. Accepted rather than overlooked; see that route.
+      - AUDIT DISAPPEARS WITH THE ITEM. scope_equipment_derived_query filters on
+        the item's CURRENT sensitivity, so classifying one retroactively removes
+        every transaction_logs row about it -- including the RECLASSIFY row
+        recording the classification itself. The event that hides an item is
+        hidden by the same act, from exactly the callers who would notice it had
+        gone. The mechanism predates DATA-H4-3 and is pinned by
+        tests/test_sensitivity_contract.py; that ticket is what made it
+        self-referential, by giving the act a log row of its own to swallow.
     """
     UNCLASSIFIED = "UNCLASSIFIED"
     CLASSIFIED = "CLASSIFIED"
@@ -96,6 +104,16 @@ class EventType(str, enum.Enum):
     commit as the route that writes it -- the rule Capability's docstring below
     states at length and for the same reason. There is no member waiting for a
     writer.
+
+    As of DATA-H4-3 the converse also holds: there is no equipment-mutating
+    route waiting for a member. Every route under routers/ that changes an
+    equipment row writes at least one row into transaction_logs, which is what
+    DATA-H4's "route every state mutation through one audit-writing helper"
+    asked for and what tests/test_audit_trail.py's guards keep true. The
+    remaining gaps are structural rather than missed: users.update_user_group
+    and setup.py's fault-type routes have no equipment to name, and a NULL
+    equipment_id is dropped by scope_equipment_derived_query's inner join, so a
+    row for them would be written and seen by nobody (DATA-M8).
 
     Read by frontend DailyActivityTable.tsx, which lowercases and looks the
     value up in its EVENT_META map to pick a Hebrew label; a member with no
@@ -126,6 +144,41 @@ class EventType(str, enum.Enum):
     # produces. A second fault report on an already-broken item moves no status,
     # so equipment_status_history correctly records nothing; but somebody did
     # report something, and this is the table that says so.
+    RECLASSIFY = "RECLASSIFY"
+    # equipment.set_sensitivity, via audit_trail.set_sensitivity (DATA-H4-3).
+    #
+    # Records WHO reclassified WHICH item WHEN, and deliberately not what it
+    # changed to, because transaction_logs has nowhere honest to put it.
+    #
+    # Two string columns exist and neither is free. `location` already means a
+    # place AND a person ("User:{name}"), so a third meaning in a column no
+    # reader can disambiguate is the exact drift record_event's docstring
+    # exists to prevent. `broken_description` is dead -- nothing has written or
+    # read it since the initial migration -- but it is named for FAULTS, so
+    # putting a classification in it buys accuracy about one event by making
+    # the column lie about every other. Reusing a misnamed empty column is the
+    # cheaper-looking half of the same mistake.
+    #
+    # The current value is on the equipment row; DATA-M8 is where the log gains
+    # a column that means what it says.
+    #
+    # Written UNCONDITIONALLY, for FAULT's reason above: re-asserting CLASSIFIED
+    # on an already-classified item is somebody making a classification
+    # decision, and this is the events table.
+    CREATE = "CREATE"
+    # equipment.create_equipment (DATA-H4-3). Equipment has no created_at column
+    # (models.py), so this row is the only record the system will ever hold of
+    # when an item entered the inventory -- which is why it is worth a member
+    # rather than being dismissed as "not a movement".
+    CONDITION_REPORT = "CONDITION_REPORT"
+    # verifications.create_verification (DATA-H4-3). NOT VERIFICATION, which is
+    # taken four members up by the daily presence confirmation -- two acts with
+    # two gates do not share a string.
+    #
+    # Unconditional, beside a set_status call that is not. Before DATA-H4-3 a
+    # verification CONFIRMING the status wrote nothing into either audit table:
+    # set_status no-ops when nothing moved, and nothing else recorded that
+    # somebody had looked. That is the gap this member closes.
 
 
 class ChangeReason(str, enum.Enum):

@@ -1,12 +1,18 @@
 """DATA-H4-1: one writer for the audit tables, and nothing that can go round it.
 
 backend/audit_trail.py's docstring carries the census of what was wrong; this
-file does not repeat it, so the two cannot drift as DATA-H4-2 and -3 change
+file does not repeat it, so the two did not drift as DATA-H4-2 and -3 changed
 the counts.
 
 The ticket's fix is "route every state mutation through one audit-writing
-helper so no path CAN bypass it". The first two tests here are that sentence.
-Everything below them is the behaviour the helper is supposed to have.
+helper so no path CAN bypass it". The first three tests here are that sentence
+-- one per audit table construction, one per owned column. Everything below
+them is the behaviour the helper is supposed to have.
+
+DATA-H4-3 is where "every state mutation" stopped being aspirational: every
+route under backend/routers that mutates an equipment row now writes at least
+one audit row, and the two columns that decide readiness and visibility are
+both assignable in exactly one file.
 
 WHY THE GUARDS ARE AST WALKS AND NOT REVIEW
 --------------------------------------------
@@ -23,6 +29,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 import backend
 from backend import audit_trail, models
@@ -43,6 +50,11 @@ AUDIT_TABLES = ("TransactionLog", "EquipmentStatusHistory")
 # and deleted them. The one that remains is fix_equipment's ticket-closing bulk
 # update, and it is permanent -- a ticket's Open/Closed is not an equipment
 # status and equipment_status_history has no row shape for it.
+#
+# DATA-H4-3 added a second guarded column and no fourth pragma: set_sensitivity
+# had one assignment and it moved into the writer whole. A guard arriving with
+# nothing to waive is the cheap case, and the reason to add it then rather than
+# after a second site exists.
 #
 # A pragma rather than a (file, function) tuple listed here, and the difference
 # is not cosmetic. A function-keyed waiver exempts the whole FUNCTION: an
@@ -84,22 +96,32 @@ def backend_modules():
         yield relpath, tree
 
 
-def _names_status(key):
-    """Is this dict key the `status` column, in either spelling?
+def _names_column(key, column):
+    """Is this dict key the named column, in either spelling?
 
     `{"status": x}` is an ast.Constant; `{models.Equipment.status: x}` is an
     ast.Attribute and is the more idiomatic SQLAlchemy of the two. Matching
     only the string was a hole a reviewer walked straight through.
     """
     if isinstance(key, ast.Constant):
-        return key.value == "status"
-    return isinstance(key, ast.Attribute) and key.attr == "status"
+        return key.value == column
+    return isinstance(key, ast.Attribute) and key.attr == column
 
 
-def status_assignments(tree):
-    """Every statement that moves an equipment status, as AST nodes.
+def column_assignments(tree, column):
+    """Every statement that writes the named equipment column, as AST nodes.
+
+    Parameterised by DATA-H4-3, which needed the identical walk for
+    `.sensitivity`. The alternative was a forty-line copy differing in one
+    string literal, in the file whose entire subject is what happens when the
+    same logic is written out more than once.
 
     TWO SHAPES, because Python and SQLAlchemy each offer one.
+
+    The examples below are all `status`, because that is the pair of shapes
+    the guard was built against and both are attested there. They read the same
+    with `sensitivity` substituted; nothing about either shape is specific to
+    which column is named.
 
     The first is any attribute store -- `item.status = x`. Detected by asking
     the parser for `ast.Store` context rather than by enumerating statement
@@ -139,7 +161,7 @@ def status_assignments(tree):
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Attribute)
-            and node.attr == "status"
+            and node.attr == column
             and isinstance(node.ctx, ast.Store)
         ):
             yield node
@@ -149,8 +171,9 @@ def status_assignments(tree):
             and node.func.attr == "update"
         ):
             for argument in node.args:
-                if isinstance(argument, ast.Dict) and any(_names_status(key)
-                                                          for key in argument.keys):
+                if isinstance(argument, ast.Dict) and any(
+                    _names_column(key, column) for key in argument.keys
+                ):
                     yield node
 
 
@@ -206,7 +229,7 @@ def enclosing_function(tree, target):
     return "<module>"
 
 
-# --- 1. The two guards ------------------------------------------------------
+# --- 1. The three guards ----------------------------------------------------
 
 
 def test_only_audit_trail_constructs_an_audit_row():
@@ -260,6 +283,24 @@ def test_only_audit_trail_constructs_an_audit_row():
     )
 
 
+def assignments_outside_the_writer(column):
+    """Every unwaived write of `column` in backend/, outside audit_trail.py."""
+    offenders = []
+
+    for relpath, source, tree in backend_sources():
+        if relpath == WRITER:
+            continue
+        lines = source.splitlines()
+        for node in column_assignments(tree, column):
+            if BYPASS_PRAGMA in lines[node.lineno - 1]:
+                continue
+            offenders.append(
+                f"{relpath}:{node.lineno} in {enclosing_function(tree, node)}()"
+            )
+
+    return offenders
+
+
 def test_only_audit_trail_assigns_equipment_status():
     """`something.status = x` happens in one file, plus a waiver DATA-H4-2 empties.
 
@@ -272,31 +313,157 @@ def test_only_audit_trail_assigns_equipment_status():
     an ast.keyword on a Call, it creates a row rather than transitions one, and
     there is no prior status for a history row to record.
 
-    An intended bypass marks its own line with the pragma above. The three that
-    exist are in maintenance.py: two equipment writes that close with
-    DATA-H4-2, and the ticket-closing bulk update, which is permanent.
+    An intended bypass marks its own line with the pragma above. The one that
+    exists is fix_equipment's ticket-closing bulk update, which is permanent.
 
     The match is on the NAME `status`, with no idea whose. An unrelated class
     doing `self.status = "ok"` under backend/ would be flagged, and the right
     repair then is to narrow this guard by target -- not to pragma correct
     code, which is how a guard becomes noise and then becomes deleted.
     """
-    offenders = []
-
-    for relpath, source, tree in backend_sources():
-        if relpath == WRITER:
-            continue
-        lines = source.splitlines()
-        for node in status_assignments(tree):
-            if BYPASS_PRAGMA in lines[node.lineno - 1]:
-                continue
-            offenders.append(
-                f"{relpath}:{node.lineno} in {enclosing_function(tree, node)}()"
-            )
+    offenders = assignments_outside_the_writer("status")
 
     assert offenders == [], (
         "equipment status is assigned outside audit_trail.set_status, so a "
         f"status can move with no history row explaining it: {offenders}"
+    )
+
+
+def test_only_audit_trail_assigns_equipment_sensitivity():
+    """The same claim for the other owned column. DATA-H4-3.
+
+    Sensitivity earned a guard for a different reason than status did. Status
+    had five call sites that had already diverged; sensitivity had exactly one,
+    and one site cannot have drifted from itself. What it had instead was no
+    audit at all -- an item could be classified or declassified through the API
+    and the movement report showed nothing, at a column that since DATA-H3-3
+    decides who may see the item.
+
+    So this guard is not preserving a hard-won consolidation; it is stopping the
+    second site from ever being written inline, which is how the status guard
+    came to have five to consolidate. There are no pragmas because there is
+    nothing to waive: set_sensitivity's assignment moved into the writer and
+    nothing else under backend/ writes the column.
+
+    create_equipment is invisible to this and correctly so. It passes
+    sensitivity as a constructor kwarg -- an ast.keyword, not a Store -- which
+    creates a row rather than reclassifying one, and its audit is EventType
+    .CREATE. A creation that also happens to be classified is one event, not two.
+    """
+    offenders = assignments_outside_the_writer("sensitivity")
+
+    assert offenders == [], (
+        "equipment sensitivity is assigned outside audit_trail.set_sensitivity, "
+        "so an item's classification can change with nothing in the movement "
+        f"report saying who changed it: {offenders}"
+    )
+
+
+# The two guards above assert `offenders == []` against the real backend/ tree,
+# and after DATA-H4-3 that tree contains no positive case for either column:
+# every attribute store lives in the writer, the one bulk update is waived, and
+# no .update({"sensitivity": ...}) exists at all. So they pass whether or not
+# column_assignments detects anything, which makes them a detector nobody has
+# watched detect. Found by review, then confirmed by mutation -- gutting
+# column_assignments to yield nothing, and pinning _names_column to "status" so
+# the sensitivity guard silently degrades into a second status guard, BOTH left
+# the suite green.
+#
+# The battery that should have caught it mutated backend/, where a guard with
+# no live violation to find cannot fail. These plant the violation instead, and
+# are the only tests here that assert the guard says YES.
+SYNTHETIC = {
+    "attribute store": "item.{col} = 'x'",
+    "augmented store": "item.{col} += 'x'",
+    # Both named in column_assignments' docstring as shapes the ast.Store test
+    # catches and the hand-rolled predecessor missed. Untested until now.
+    "for-loop target": "for item.{col} in xs:\n    pass",
+    "with-as target": "with ctx() as item.{col}:\n    pass",
+    "bulk update, string key": 'db.query(M).filter(c).update({{"{col}": "x"}})',
+    "bulk update, column key": "db.query(M).update({{models.Equipment.{col}: 'x'}})",
+}
+
+
+def test_every_setter_declares_the_column_it_owns():
+    """OWNED_COLUMNS cannot fall behind the setters it is supposed to describe.
+
+    The guards below are parametrized over audit_trail.OWNED_COLUMNS, so a
+    `set_priority` added to the writer without a matching entry there would be
+    policed by nothing at all -- and every existing test would stay green,
+    because none of them is about the column that went unguarded. That is this
+    module's own failure mode ("no path CAN bypass it") reappearing one level
+    up: not whether a column's writes are checked, but which columns get
+    checked.
+
+    Derived from the writer's own `def set_<column>` names rather than from a
+    second list, so the two cannot disagree. record_event is deliberately not
+    matched -- it owns no column, which is why it is not spelled `set_`.
+    """
+    tree = ast.parse((BACKEND_ROOT / WRITER).read_text(encoding="utf-8"))
+    setters = {
+        node.name[len("set_"):]
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("set_")
+    }
+
+    assert setters == set(audit_trail.OWNED_COLUMNS), (
+        f"audit_trail defines setters for {sorted(setters)} but declares "
+        f"{sorted(audit_trail.OWNED_COLUMNS)}; a column with a setter and no "
+        "declaration is guarded by nothing"
+    )
+
+
+@pytest.mark.parametrize("column", audit_trail.OWNED_COLUMNS)
+@pytest.mark.parametrize("shape", sorted(SYNTHETIC), ids=lambda s: s.replace(" ", "_"))
+def test_the_guard_detects_a_planted_write(column, shape):
+    """Every shape the guard claims to catch, caught. Both columns."""
+    source = SYNTHETIC[shape].format(col=column)
+    found = list(column_assignments(ast.parse(source), column))
+
+    assert found, (
+        f"column_assignments missed a {shape} of .{column} -- the guard that "
+        f"is supposed to refuse this shape would report a clean tree: {source!r}"
+    )
+
+
+@pytest.mark.parametrize("column", audit_trail.OWNED_COLUMNS)
+def test_the_guard_reads_the_column_it_is_asked_about(column):
+    """The generalisation is real, not a status guard wearing a parameter.
+
+    Kills the mutation that pins _names_column to "status": under it the
+    sensitivity guard still returns [] on the real tree, because its one false
+    hit lands on the bulk update that the pragma strips anyway. Asked directly,
+    the degradation is obvious.
+    """
+    other = "sensitivity" if column == "status" else "status"
+    source = (
+        f"item.{other} = 'x'\n"
+        f"db.query(M).update({{'{other}': 'x'}})"
+    )
+
+    assert list(column_assignments(ast.parse(source), column)) == [], (
+        f"asking about .{column} reported a write to .{other}; the guard is "
+        "not actually reading its column argument"
+    )
+
+
+@pytest.mark.parametrize("column", audit_trail.OWNED_COLUMNS)
+def test_the_guard_ignores_reads(column):
+    """ast.Load must stay invisible, or the guard flags correct code.
+
+    A guard that fires on `x = item.status` gets pragmas scattered over
+    innocent lines until somebody deletes it -- the failure mode
+    column_assignments' docstring names as how a guard becomes noise.
+    """
+    source = (
+        f"x = item.{column}\n"
+        f"counts[log.{column}] += 1\n"
+        f"send(schemas.Response({column}=item.{column}))"
+    )
+
+    assert list(column_assignments(ast.parse(source), column)) == [], (
+        f"a READ of .{column} was reported as a write"
     )
 
 
@@ -375,6 +542,14 @@ def test_a_verification_that_moves_nothing_writes_no_history_row(
     is a real call that changes nothing. The Verification row is still written
     -- somebody did look at the item -- and that is the distinction the two
     tables draw: verifications record the ACT, history records the CHANGE.
+
+    DATA-H4-3 added the third assertion, and it is where this test stopped
+    describing a clean division and started describing a hole. Until then this
+    call wrote NO row into EITHER audit table: history correctly declined a
+    transition that did not happen, and nothing recorded that anyone had looked.
+    An inspection with a null result is still an inspection, and the audit trail
+    said nothing had occurred. CONDITION_REPORT is written unconditionally for
+    exactly this case.
     """
     item = item_named(db_session, "SA100")
     assert item.status == "Functional", "fixture precondition"
@@ -398,6 +573,12 @@ def test_a_verification_that_moves_nothing_writes_no_history_row(
     assert db_session.query(models.Verification).filter_by(
         equipment_id=item.id
     ).count() == 1
+    assert db_session.query(models.TransactionLog).filter_by(
+        equipment_id=item.id, event_type=EventType.CONDITION_REPORT.value
+    ).count() == 1, (
+        "a verification that confirmed the status wrote nothing into either "
+        "audit table -- somebody inspected the item and the trail is silent"
+    )
 
 
 def test_a_status_change_records_both_ends_and_its_verification(
@@ -1250,4 +1431,417 @@ def test_a_fault_report_on_a_statusless_item_is_refused(
     res = report_fault(client, "u_soldier_a", item.id)
     assert res.status_code == 409, res.text
 
+    assert history_for(db_session, item) == []
+
+
+# --- 8. Reclassification, creation and condition reports (DATA-H4-3) ---------
+
+
+def classify(client, who, equipment_id, sensitivity="CLASSIFIED"):
+    return client.patch(
+        f"/equipment/{equipment_id}/sensitivity",
+        json={"sensitivity": sensitivity},
+        headers=create_auth_header(who),
+    )
+
+
+def create_item(client, who, serial, **extra):
+    return client.post(
+        "/equipment/",
+        json={"catalog_name": "Rifle", "serial_number": serial, **extra},
+        headers=create_auth_header(who),
+    )
+
+
+def movement_report(client, who):
+    res = client.get("/reports/daily_movement", headers=create_auth_header(who))
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_classifying_an_item_records_who_decided_it(
+    client, db_session, mock_matrix_db
+):
+    """The event DATA-H3-2 created and left unrecorded for a whole ticket.
+
+    location IS NULL is asserted, not incidental. It is the one column that
+    could have carried the new value, and the ruling in EventType.RECLASSIFY is
+    that it must not -- it already means a place and a person, and a reader
+    facing a third meaning cannot tell which one a row carries. A later author
+    who "improves" the row by writing "CLASSIFIED" there fails here.
+    """
+    item = item_named(db_session, "SA100")
+    assert item.sensitivity == "UNCLASSIFIED", "fixture precondition"
+
+    res = classify(client, "u_master", item.id)
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    assert item_named(db_session, "SA100").sensitivity == "CLASSIFIED"
+
+    logs = logs_for(db_session, item, EventType.RECLASSIFY)
+    assert len(logs) == 1, "classifying wrote no RECLASSIFY row"
+    assert logs[0].involved_user_id == mock_matrix_db["master"].id
+    assert logs[0].location is None, (
+        "the RECLASSIFY row put something in `location`, a column that already "
+        "means a place and a person -- see EventType.RECLASSIFY"
+    )
+
+
+def test_reasserting_a_classification_is_still_an_event(
+    client, db_session, mock_matrix_db
+):
+    """The transaction_logs/history asymmetry, made executable on a new column.
+
+    set_status returns early when nothing moved, because equipment_status_history
+    records TRANSITIONS. set_sensitivity deliberately does not, because
+    transaction_logs records EVENTS -- and PATCHing CLASSIFIED onto an
+    already-classified item is a person making a classification decision, even
+    though the column does not change.
+
+    The mirror of test_a_repeat_fault_is_an_event_and_not_a_transition above,
+    which is where this rule was settled. Copying the no-op guard from
+    set_status into set_sensitivity is the plausible mistake, and it fails here.
+    """
+    item = item_named(db_session, "SA100")
+
+    assert classify(client, "u_master", item.id).status_code == 200
+    assert classify(client, "u_master", item.id).status_code == 200
+
+    assert len(logs_for(db_session, item, EventType.RECLASSIFY)) == 2, (
+        "the second classification of an already-classified item wrote no row; "
+        "transaction_logs records events, not transitions"
+    )
+
+
+def test_a_refused_reclassification_records_nothing(
+    client, db_session, mock_matrix_db
+):
+    """The gate is above the writer, so a 403 leaves neither a row nor a change.
+
+    u_cmdr_a is the fixture's holder-without-the-verb: they hold VIEW over
+    188/53/A, so they get a 403 rather than a 404, and they do NOT hold
+    SET_SENSITIVITY -- the deliberate narrowing conftest.py documents at the
+    grant table. That is what makes this a test of ordering rather than of
+    visibility.
+    """
+    item = item_named(db_session, "SA100")
+    before = db_session.query(models.TransactionLog).count()
+
+    res = classify(client, "u_cmdr_a", item.id)
+    assert res.status_code == 403, res.text
+
+    db_session.expire_all()
+    assert item_named(db_session, "SA100").sensitivity == "UNCLASSIFIED"
+    assert db_session.query(models.TransactionLog).count() == before
+
+
+def test_the_reclassify_row_is_hidden_by_the_act_it_records(
+    client, db_session, mock_matrix_db
+):
+    """Sensitivity's third named limit, executable.
+
+    scope_equipment_derived_query filters on the item's CURRENT sensitivity, so
+    classifying an item retroactively removes every transaction_logs row about
+    it -- including the row that records the classification. The caller who
+    would most want to know why the item vanished is exactly the caller who
+    cannot see the answer.
+
+    Asserted from both ends in one test on purpose. The cleared half is what
+    makes the uncleared half mean something: without it, an assertion that
+    u_cmdr_a cannot see the row is satisfied by the row not existing, which is
+    the failure this whole ticket is about.
+
+    Not a defect to fix here. It is the honest consequence of scoping audit rows
+    through the item they describe, which is SEC-H5's fix; the alternative --
+    logs outliving their subject's visibility -- is worse. Named in
+    backend/enums.py Sensitivity rather than left for someone to discover.
+    """
+    item = item_named(db_session, "SA100")
+
+    assert classify(client, "u_master", item.id).status_code == 200
+
+    def reclassify_rows(who):
+        return [
+            row for row in movement_report(client, who)
+            if row["event_type"] == "RECLASSIFY" and row["serial_number"] == "SA100"
+        ]
+
+    assert len(reclassify_rows("u_master")) == 1, (
+        "the classifier cannot see the row they just wrote -- this test can "
+        "prove nothing about the uncleared caller from that starting state"
+    )
+    assert reclassify_rows("u_cmdr_a") == [], (
+        "an uncleared caller can see the RECLASSIFY row for a classified item; "
+        "scope_equipment_derived_query is not inheriting the clause"
+    )
+
+
+def test_a_created_item_is_born_with_a_log_that_reaches_the_report(
+    client, db_session, mock_matrix_db
+):
+    """Equipment has no created_at column, so this row is the only birth record.
+
+    ASSERTED THROUGH THE REPORT, and that is the whole design of this test.
+    record_event reads equipment.id, which is None until the INSERT runs, so
+    dropping create_equipment's db.flush() writes a TransactionLog with a NULL
+    equipment_id -- which scope_equipment_derived_query's inner join discards
+    silently. Nothing raises. The row exists. A count of transaction_logs still
+    goes up by one. Only asking the endpoint tells the two apart.
+    """
+    res = create_item(client, "u_master", "NEW-001")
+    assert res.status_code == 200, res.text
+    new_id = res.json()["id"]
+
+    logs = logs_for(db_session, item_named(db_session, "NEW-001"), EventType.CREATE)
+    assert len(logs) == 1, "the creation wrote no CREATE row"
+    assert logs[0].involved_user_id == mock_matrix_db["master"].id
+    assert logs[0].equipment_id == new_id, (
+        "the CREATE row carries no equipment_id -- record_event read a pending "
+        "item's id before it was flushed"
+    )
+
+    rows = [
+        row for row in movement_report(client, "u_master")
+        if row["event_type"] == "CREATE" and row["serial_number"] == "NEW-001"
+    ]
+    assert len(rows) == 1, (
+        "the CREATE row never reached the movement report -- if the row exists "
+        "in the table, its equipment_id is NULL and the inner join dropped it, "
+        "which is what create_equipment's db.flush() prevents"
+    )
+
+
+def test_a_refused_creation_leaves_neither_an_item_nor_a_log(
+    client, db_session, mock_matrix_db
+):
+    """The gate is two blocks above the writer, with a commit in between.
+
+    u_soldier_a holds no CREATE_EQUIPMENT anywhere. The refusal happens before
+    the CatalogItem find-or-create commits, so this also pins the ordering that
+    keeps a denied request from leaving a permanent catalog row behind under an
+    attacker-chosen name.
+    """
+    before = db_session.query(models.TransactionLog).count()
+
+    res = create_item(client, "u_soldier_a", "NEW-002")
+    assert res.status_code == 403, res.text
+
+    assert db_session.query(models.TransactionLog).count() == before
+    assert db_session.query(models.Equipment).filter_by(
+        serial_number="NEW-002"
+    ).count() == 0
+
+
+def test_record_event_refuses_an_equipment_that_has_no_id_yet(
+    db_session, mock_matrix_db
+):
+    """The one failure in this module that no assertion could otherwise see.
+
+    A pending equipment has id None, so the row would carry a NULL
+    equipment_id -- and scope_equipment_derived_query joins INNER, so it is
+    dropped from the movement report and every listing built on it. Nothing
+    raises, the row exists, and a count of transaction_logs still goes up by
+    one. Written, committed, visible to nobody.
+
+    create_equipment reached exactly this by construction: it is the only route
+    that audits an item it has just built. Its db.flush() is what avoids it,
+    and before this check deleting that line was SILENT -- the reason the
+    end-to-end test for it has to assert through /reports/daily_movement rather
+    than by counting rows.
+
+    A refusal rather than a flush here, because the writer-never-commits guard
+    above forbids this module owning a transaction operation, and H4-1's ruling
+    is worth more than one route's convenience. The caller keeps the flush and
+    loses the silence.
+    """
+    pending = models.Equipment(
+        catalog_item_id=item_named(db_session, "SA100").catalog_item_id,
+        serial_number="PENDING-001",
+        group_id=item_named(db_session, "SA100").group_id,
+    )
+    db_session.add(pending)
+    assert pending.id is None, "fixture precondition: not flushed"
+
+    before = db_session.query(models.TransactionLog).count()
+
+    with pytest.raises(ValueError, match="persisted equipment"):
+        audit_trail.record_event(
+            db_session,
+            equipment=pending,
+            actor=mock_matrix_db["master"],
+            event_type=EventType.CREATE,
+        )
+
+    assert db_session.query(models.TransactionLog).count() == before, (
+        "the unreachable row was written before the refusal"
+    )
+
+
+@pytest.mark.parametrize("empty", [None, ""], ids=["none", "empty_string"])
+def test_set_sensitivity_refuses_an_empty_new_sensitivity(
+    db_session, mock_matrix_db, empty
+):
+    """The sibling of set_status's guard, which DATA-H4-3 shipped without.
+
+    Found by mutation: deleting the ValueError left the whole suite green. The
+    guard was written as a mirror of set_status's and the mirroring stopped at
+    the code, which is the failure mode a one-caller helper invites -- the one
+    caller passes a validated Sensitivity member, so nothing exercises the
+    branch until the second caller arrives and does not.
+
+    What an unguarded empty value costs here is different from its status
+    counterpart, and worse in one specific way. An empty new_status writes a
+    history row claiming a transition INTO nothing, which is visible in the
+    table. An empty sensitivity DECLASSIFIES the item. models.py's
+    column default applies at INSERT, not on update, so both spellings survive
+    the write -- "" as itself, None as NULL -- and scope_equipment_query
+    matches with is_distinct_from, under which each is TRUE against
+    CLASSIFIED. The item becomes visible to callers holding no
+    VIEW_CLASSIFIED: a silent widening of who can see it, recorded as a
+    RECLASSIFY row that -- by this module's own design -- does not say what it
+    changed to.
+
+    Both halves are asserted for that reason: the raise, and the column not
+    having moved before it.
+    """
+    item = item_named(db_session, "SA100")
+    before = db_session.query(models.TransactionLog).count()
+
+    with pytest.raises(ValueError, match="non-empty new_sensitivity"):
+        audit_trail.set_sensitivity(
+            db_session,
+            equipment=item,
+            actor=mock_matrix_db["master"],
+            new_sensitivity=empty,
+        )
+
+    assert item.sensitivity == "UNCLASSIFIED", (
+        "the classification moved despite the refusal"
+    )
+    assert db_session.query(models.TransactionLog).count() == before
+
+
+def test_the_creation_log_dies_with_the_item_it_records(
+    client, db_session, mock_matrix_db, monkeypatch
+):
+    """A flushed row is not a committed one, and this route commits twice.
+
+    The hazard is specific and the code invites it: create_equipment already
+    calls db.commit() for the CatalogItem, so an author reading top-to-bottom
+    can reasonably place the audit write above the Equipment insert and believe
+    it is covered. It would then survive a failure of the real commit.
+
+    Forced by failing the commit that would PERSIST the audit row, identified
+    by looking in the session rather than by counting calls. An earlier version
+    failed the second commit, which worked only because "Rifle" is absent from
+    the catalog fixture and the find-or-create therefore commits first. Give
+    this route an existing catalog name and there is exactly one commit, the
+    mutation never fires, and the test reports "DID NOT RAISE" -- reading as
+    though the audit row survived when in fact nothing was tested. Verified by
+    doing it. The trigger now names the condition the test is about.
+    """
+    real_commit = Session.commit
+
+    def failing_commit(self):
+        if any(isinstance(obj, models.TransactionLog) for obj in self.new):
+            raise RuntimeError("commit failed after the audit write")
+        return real_commit(self)
+
+    monkeypatch.setattr(Session, "commit", failing_commit)
+
+    with pytest.raises(RuntimeError):
+        create_item(client, "u_master", "NEW-003")
+
+    monkeypatch.undo()
+    db_session.rollback()
+
+    assert db_session.query(models.Equipment).filter_by(
+        serial_number="NEW-003"
+    ).count() == 0
+    assert db_session.query(models.TransactionLog).filter_by(
+        event_type="CREATE"
+    ).count() == 0, (
+        "a CREATE row outlived the item it records, so the movement report "
+        "carries the birth of an item that does not exist"
+    )
+
+
+def test_a_condition_report_is_not_the_daily_verification(
+    client, db_session, mock_matrix_db
+):
+    """Two acts, two gates, two EventType values -- asserted in both directions.
+
+    verify_equipment_daily is gated on possession alone and means "the item is
+    where I say it is". create_verification is gated on require_status_authority
+    and means "here is what condition it is in". EventType.VERIFICATION's
+    comment has claimed the distinction since DATA-H4-1; until DATA-H4-3 the
+    second act emitted nothing at all, so the claim was untested.
+
+    The negative assertions are the load-bearing half. Reusing VERIFICATION for
+    the condition report is the obvious shortcut, and it passes any test that
+    only checks a row exists.
+    """
+    item = item_named(db_session, "SA100")
+    holder = db_session.query(models.User).filter_by(
+        id=item.holder_user_id
+    ).one().personal_number
+
+    res = client.post(
+        "/verifications/",
+        json={
+            "equipment_id": item.id,
+            "verification_type": "daily",
+            "reported_status": "Functional",
+            "findings": "no change",
+            "action_required": False,
+        },
+        headers=create_auth_header(holder),
+    )
+    assert res.status_code == 200, res.text
+
+    assert len(logs_for(db_session, item, EventType.CONDITION_REPORT)) == 1
+    assert logs_for(db_session, item, EventType.VERIFICATION) == [], (
+        "the condition report emitted VERIFICATION, which means the daily "
+        "presence check -- see EventType.VERIFICATION"
+    )
+
+    res = client.post(
+        f"/equipment/{item.id}/verify", headers=create_auth_header(holder)
+    )
+    assert res.status_code == 200, res.text
+
+    assert len(logs_for(db_session, item, EventType.VERIFICATION)) == 1
+    assert len(logs_for(db_session, item, EventType.CONDITION_REPORT)) == 1, (
+        "the daily presence check emitted CONDITION_REPORT"
+    )
+
+
+def test_a_refused_condition_report_writes_neither_table(
+    client, db_session, mock_matrix_db
+):
+    """The unconditional write is still below the gate.
+
+    An unconditional row is the one most likely to be hoisted above a gate,
+    because it reads as bookkeeping rather than as part of the change. u_soldier_b
+    neither holds SA100 nor carries REPORT_STATUS over Company A, so
+    require_status_authority refuses on both arms.
+    """
+    item = item_named(db_session, "SA100")
+    logs_before = db_session.query(models.TransactionLog).count()
+
+    res = client.post(
+        "/verifications/",
+        json={
+            "equipment_id": item.id,
+            "verification_type": "daily",
+            "reported_status": "Malfunctioning",
+            "findings": "should not be recorded",
+            "action_required": True,
+        },
+        headers=create_auth_header("u_soldier_b"),
+    )
+    assert res.status_code in (403, 404), res.text
+
+    assert db_session.query(models.TransactionLog).count() == logs_before
     assert history_for(db_session, item) == []
