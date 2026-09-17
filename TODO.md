@@ -107,12 +107,12 @@
   **Fix:** Switch to the active-duty dependency, and additionally reject inactive users at login rather than after the fact.
   **Closed at H1-10.5.** Both halves. The two remaining reads moved to `get_current_active_user`, and `login_for_access_token` now refuses an inactive account with the same 401 and the same wording as a bad password — a distinct code would make the form an oracle for which military IDs have been deactivated. The login half is the one that closes the *class* rather than the instances: a per-route check still issues the credential first.
 
-- [ ] **SEC-H9 · Session token and a trusted user object live in browser local storage** — [auth.service.ts:31](frontend/src/services/auth.service.ts#L31), [:52](frontend/src/services/auth.service.ts#L52), [:61-63](frontend/src/services/auth.service.ts#L61-L63) · `[REDESIGN]`
+- [V] **SEC-H9 · Session token and a trusted user object live in browser local storage** — [auth.service.ts:31](frontend/src/services/auth.service.ts#L31), [:52](frontend/src/services/auth.service.ts#L52), [:61-63](frontend/src/services/auth.service.ts#L61-L63) · `[REDESIGN]`
   **Evidence:** The bearer token and the full serialized user object are written to local storage. The cached object is parsed with no validation and no error handling, then read back to drive UI permission decisions.
   **Why it matters:** Any cross-site scripting or compromised dependency exfiltrates a bearer token for a military logistics system. Separately, a user can edit their cached role in devtools and reload to reveal the admin interface. Malformed cached JSON throws inside a mount effect and, with no error boundary anywhere, blanks the application.
   **Fix:** Move the token to a same-site, http-only cookie or hold it in memory. Never persist the user object — always derive identity from the server. Add an error boundary.
 
-- [ ] **SEC-H10 · The admin route is registered for every authenticated user** — [App.tsx:37](frontend/src/App.tsx#L37), [AppShell.tsx:76-79](frontend/src/components/layout/AppShell.tsx#L76-L79) · `[CARRY FORWARD]`
+- [V] **SEC-H10 · The admin route is registered for every authenticated user** — [App.tsx:37](frontend/src/App.tsx#L37), [AppShell.tsx:76-79](frontend/src/components/layout/AppShell.tsx#L76-L79) · `[CARRY FORWARD]`
   **Evidence:** Only the navigation *button* is filtered by role; the route itself has no guard, so typing the path renders the panel.
   **Why it matters:** The frontend conveys an authorization boundary that does not exist. The same hide-the-button pattern is used on the equipment and maintenance pages. Real enforcement rests entirely on the backend — which, per SEC-H5 and SEC-H6, frequently does not enforce it either.
   **Fix:** Add a route-level role guard, and treat all client-side role checks as cosmetic only.
@@ -169,17 +169,17 @@
 
 ### High
 
-- [ ] **DATA-H1 · Every displayed timestamp is shifted by the viewer's timezone offset** — [reports.py:85](backend/routers/reports.py#L85), [reports.py:105](backend/routers/reports.py#L105) · `[CARRY FORWARD]`
+- [V] **DATA-H1 · Every displayed timestamp is shifted by the viewer's timezone offset** — [reports.py:85](backend/routers/reports.py#L85), [reports.py:105](backend/routers/reports.py#L105) · `[CARRY FORWARD]`
   **Evidence:** Datetime columns are declared without timezone awareness and defaulted from a naive coordinated-universal-time call, then serialized with a plain ISO conversion that emits no zone designator.
   **Why it matters:** The browser parses a zoneless timestamp as *local* time. Every time shown in the reports and daily-activity tables is wrong by the client's offset — three hours for the apparent target locale. In an accountability system, "when was this last seen" being silently wrong is a correctness failure, not a cosmetic one.
   **Fix:** Make the columns timezone-aware, store aware values, and serialize with an explicit zone designator.
 
-- [ ] **DATA-H2 · Ticket open-dates are always empty** — [maintenance.py:37](backend/routers/maintenance.py#L37), [schemas.py:118-137](backend/schemas.py#L118-L137) · `[CARRY FORWARD]`
+- [V] **DATA-H2 · Ticket open-dates are always empty** — [maintenance.py:37](backend/routers/maintenance.py#L37), [schemas.py:118-137](backend/schemas.py#L118-L137) · `[CARRY FORWARD]`
   **Evidence:** The response is constructed with an open-date keyword that the response schema does not declare. The validation library silently ignores unknown keywords by default, and the two date fields the schema *does* declare are never populated.
   **Why it matters:** Three-way drift — a real database column, a schema that omits it, and a frontend type that declares it required. Every maintenance ticket in the interface permanently displays a placeholder dash for its open date, while the type system asserts a guaranteed value.
   **Fix:** Add the field to the response schema under its real name, remove the two unpopulated aliases, and align the frontend type.
 
-- [ ] **DATA-H3 · Classified items are always reported as unclassified** — [schemas.py:75](backend/schemas.py#L75) · `[CARRY FORWARD]`
+- [V] **DATA-H3 · Classified items are always reported as unclassified** — [schemas.py:75](backend/schemas.py#L75) · `[CARRY FORWARD]`
   **Evidence:** The sensitivity field carries a default value, and not one of the three response-construction sites passes it.
   **Why it matters:** The real classification column is silently discarded on every response, so the API reports a constant falsehood about the sensitivity of military equipment. The field is also never set, filtered, or validated anywhere — a security control that exists only as a column.
   **Fix:** Populate it from the record, constrain it to an enumerated type, and either enforce it in scoping or delete the concept.
