@@ -688,7 +688,7 @@ def test_the_route_changes_sensitivity_and_nothing_else(
     of it. group_id is the sharper of the two: it decides who can see the item.
 
     last_verified_at must NOT advance. Both assign_owner and transfer_equipment
-    reset it, which is exactly what DATA-H5 reports as compliance forgeable by
+    used to reset it, which is exactly what DATA-H5 reported as compliance forgeable by
     paperwork; classifying an item is not laying eyes on it, so a green
     compliance badge must not fall out of this request.
     """

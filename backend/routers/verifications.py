@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
-from .. import audit_trail, clock, models, schemas
+from .. import audit_trail, models, schemas
 from ..enums import ChangeReason, EventType
 from ..dependencies import (
     get_current_active_user,
@@ -58,7 +58,10 @@ async def create_verification(
     # equipment.verify_equipment_daily -- the daily presence confirmation, gated
     # on possession alone -- and this route is a condition report gated on
     # require_status_authority. Two acts, two gates, two values.
-    audit_trail.record_event(
+    #
+    # DATA-H5. The same call advances last_verified_at, so the clock and the
+    # row proving an inspection happened cannot be written apart.
+    audit_trail.set_last_verified_at(
         db,
         equipment=equipment,
         actor=current_user,
@@ -79,7 +82,6 @@ async def create_verification(
         verification_id=verification.id,
     )
 
-    equipment.last_verified_at = clock.utcnow()
     db.commit()
     db.refresh(verification)
     

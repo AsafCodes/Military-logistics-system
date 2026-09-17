@@ -13,7 +13,7 @@ helper so no path CAN bypass it", and the operative word is `can`. A module
 plus a convention is not that -- a convention is what the four divergent call
 sites already were. The enforcement is in tests/test_audit_trail.py, which
 walks every file under backend/ with `ast` and fails on a construction of
-either table, or a write to `.status` or `.sensitivity`, outside this module.
+either table, or a write to an OWNED_COLUMNS entry, outside this module.
 That guard is the fix; this module is only what makes obeying it possible.
 
 What the guard actually promises is that no ORDINARY spelling gets past it,
@@ -69,7 +69,7 @@ from .enums import ChangeReason, EventType
 # Kept beside the setters rather than in the test, so adding `set_priority`
 # below and forgetting this line is caught by the staleness check next door
 # rather than by nobody.
-OWNED_COLUMNS = ("status", "sensitivity")
+OWNED_COLUMNS = ("status", "sensitivity", "last_verified_at")
 
 
 def record_event(
@@ -322,4 +322,42 @@ def set_sensitivity(
         equipment=equipment,
         actor=actor,
         event_type=EventType.RECLASSIFY,
+    )
+
+
+# The events that are somebody laying eyes on the item. Everything else in
+# EventType is paperwork, and paperwork must not advance the clock.
+VERIFYING_EVENTS = frozenset({EventType.VERIFICATION, EventType.CONDITION_REPORT})
+
+
+def set_last_verified_at(
+    db: Session,
+    *,
+    equipment: models.Equipment,
+    actor: models.User,
+    event_type: EventType,
+) -> None:
+    """Advance the verification clock to now and log the inspection that did it.
+
+    DATA-H5. assign_owner and transfer_equipment both reset this column, and
+    the model defaulted it to the moment of creation, so a bulk transfer made
+    the fleet compliant and a new item read GOOD without ever being checked.
+    Only a physical verification may advance it, and the event type is how
+    this function knows whether one happened.
+
+    Takes no value: the clock is always set to now, so no caller can backdate
+    or forward-date an inspection. Adds; never commits.
+    """
+    if event_type not in VERIFYING_EVENTS:
+        raise ValueError(
+            f"set_last_verified_at requires a verifying event, got {event_type!r}; "
+            "only a physical verification may advance the compliance clock"
+        )
+
+    equipment.last_verified_at = clock.utcnow()
+    record_event(
+        db,
+        equipment=equipment,
+        actor=actor,
+        event_type=event_type,
     )

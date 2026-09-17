@@ -359,6 +359,25 @@ def test_only_audit_trail_assigns_equipment_sensitivity():
     )
 
 
+def test_only_audit_trail_assigns_last_verified_at():
+    """The verification clock has one writer. DATA-H5.
+
+    assign_owner and transfer_equipment both reset this column, so paperwork
+    marked equipment physically verified. set_last_verified_at only accepts a
+    verifying event, so a route that assigns the column itself is exactly the
+    forgery this guard exists to refuse.
+
+    Constructor kwargs stay silent, as for the other columns: the test fixtures
+    that build rows with last_verified_at= create state rather than advance it.
+    """
+    offenders = assignments_outside_the_writer("last_verified_at")
+
+    assert offenders == [], (
+        "last_verified_at is assigned outside audit_trail.set_last_verified_at, "
+        f"so something other than a physical verification can mark an item compliant: {offenders}"
+    )
+
+
 # The two guards above assert `offenders == []` against the real backend/ tree,
 # and after DATA-H4-3 that tree contains no positive case for either column:
 # every attribute store lives in the writer, the one bulk update is waived, and
@@ -968,11 +987,11 @@ def test_verifying_an_unchanged_status_still_advances_the_clock(
 ):
     """set_status returning early must not swallow the caller's other work.
 
-    last_verified_at is assigned AFTER the helper call in create_verification,
-    and a refactor that tucked it inside the status-changed branch would make
-    a clean daily verification stop counting as a verification -- silently
-    degrading compliance for every item that is working correctly, which is
-    most of them.
+    last_verified_at is advanced by set_last_verified_at, called unconditionally
+    beside set_status in create_verification, and a refactor that tucked it
+    inside the status-changed branch would make a clean daily verification stop
+    counting as a verification -- silently degrading compliance for every item
+    that is working correctly, which is most of them.
     """
     item = item_named(db_session, "SA100")
     db_session.execute(
@@ -1829,6 +1848,7 @@ def test_a_refused_condition_report_writes_neither_table(
     """
     item = item_named(db_session, "SA100")
     logs_before = db_session.query(models.TransactionLog).count()
+    clock_before = item.last_verified_at
 
     res = client.post(
         "/verifications/",
@@ -1845,3 +1865,7 @@ def test_a_refused_condition_report_writes_neither_table(
 
     assert db_session.query(models.TransactionLog).count() == logs_before
     assert history_for(db_session, item) == []
+    db_session.expire_all()
+    assert item_named(db_session, "SA100").last_verified_at == clock_before, (
+        "a refused condition report advanced the verification clock (DATA-H5)"
+    )

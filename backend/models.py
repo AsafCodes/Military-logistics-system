@@ -128,8 +128,10 @@ class Equipment(Base):
 
     actual_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
 
-    # Verification
-    last_verified_at = Column(clock.UtcDateTime, default=clock.utcnow)
+    # Verification. No default (DATA-H5): a new item has never been checked, so
+    # it starts NULL -- "never reported" -- until audit_trail.set_last_verified_at
+    # records a real inspection.
+    last_verified_at = Column(clock.UtcDateTime)
 
     # Relationships
     catalog_item = relationship("CatalogItem")
