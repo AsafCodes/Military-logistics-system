@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '@/api';
+import { reasonMeta } from '../changeReasons';
 
 interface StatusHistoryItem {
     id: number;
@@ -52,26 +53,10 @@ export default function EquipmentHistory({ equipmentId, isOpen, onClose }: Equip
         }
     };
 
-    const getReasonIcon = (reason: string) => {
-        switch (reason) {
-            case 'verification': return '✅';
-            case 'fault_report': return '⚠️';
-            case 'repair': return '🔧';
-            case 'transfer': return '🔄';
-            default: return '📝';
-        }
-    };
-
-    const getReasonLabel = (reason: string) => {
-        switch (reason) {
-            case 'verification': return 'אימות';
-            case 'fault_report': return 'דיווח תקלה';
-            case 'repair': return 'תיקון';
-            case 'transfer': return 'העברה';
-            default: return reason;
-        }
-    };
-
+    // DATA-H4-2. Two switches here and a third in EquipmentPage.tsx's
+    // InlineHistory, all over the same vocabulary; see ../changeReasons.ts for
+    // why they are one map now and what the 'transfer' arm they all carried
+    // was.
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
             <div className="glass-card w-full max-w-2xl max-h-[80vh] overflow-hidden animate-scale-in" dir="rtl">
@@ -95,16 +80,18 @@ export default function EquipmentHistory({ equipmentId, isOpen, onClose }: Equip
                         <div className="text-center py-8 text-muted-foreground">אין היסטוריה זמינה</div>
                     ) : (
                         <div className="space-y-3">
-                            {history.map((item) => (
+                            {history.map((item) => {
+                                const reason = reasonMeta(item.change_reason);
+                                return (
                                 <div
                                     key={item.id}
                                     className="border-r-4 border-primary/50 pr-4 py-3 rounded-lg
                                                bg-accent/30 hover:bg-accent/50 transition-colors"
                                 >
                                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                        <span>{getReasonIcon(item.change_reason)}</span>
+                                        <span>{reason.icon}</span>
                                         <span className="font-medium text-foreground/80">
-                                            {getReasonLabel(item.change_reason)}
+                                            {reason.label}
                                         </span>
                                         <span>•</span>
                                         <span>
@@ -130,7 +117,8 @@ export default function EquipmentHistory({ equipmentId, isOpen, onClose }: Equip
                                         <p className="text-sm text-muted-foreground mt-1.5 pr-1">{item.notes}</p>
                                     )}
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>

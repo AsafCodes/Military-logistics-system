@@ -13,7 +13,8 @@ from ..dependencies import (
     get_scoped_equipment_or_404,
     scope_equipment_query,
 )
-from ..enums import Capability
+from ..enums import Capability, EventType
+from .. import audit_trail
 from .. import authz
 from .. import clock
 from .. import models
@@ -165,9 +166,30 @@ def create_equipment(
         sensitivity=item.sensitivity.value if item.sensitivity is not None else None,
     )
     db.add(new_item)
+
+    # DATA-H4-3. Equipment has no created_at column (models.py), so this row is
+    # the only record the system will ever hold of when an item entered the
+    # inventory -- which is the answer to "a creation is not a movement".
+    #
+    # The flush is what gives new_item an id, and record_event REFUSES an
+    # equipment without one rather than writing an unreachable row -- so
+    # deleting this line fails loudly instead of producing an audit row that no
+    # scoped query can return. The reasoning for refusing rather than flushing
+    # inside the writer is at that check.
+    #
+    # Below the CatalogItem commit above and inside the Equipment insert's own
+    # transaction, so the log cannot outlive the item it records.
+    db.flush()
+    audit_trail.record_event(
+        db,
+        equipment=new_item,
+        actor=current_user,
+        event_type=EventType.CREATE,
+    )
+
     db.commit()
     db.refresh(new_item)
-    
+
     return schemas.EquipmentResponse(
         id=new_item.id,
         type=new_item.item_name,
@@ -217,14 +239,25 @@ def set_sensitivity(
     advance it as a side effect of paperwork; classifying an item is not
     laying eyes on it.
 
-    Writes no audit record, exactly like assign_owner -- which is DATA-H4's
-    ticket, and named here rather than half-fixed: adding bespoke logging at a
-    fifth site is the shape DATA-H4 exists to replace with one helper.
+    DATA-H4-3. This route wrote no audit record at all, and the note that used
+    to stand here said so and deferred, on the argument that bespoke logging at
+    a fifth site was the thing DATA-H4 existed to replace. It is now the helper
+    that both assigns the column and logs the decision -- the route no longer
+    names `sensitivity` on the left of an `=` at all, and an AST guard in
+    tests/test_audit_trail.py refuses any file under backend/ that does.
     """
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
     authz.require(db, current_user.id, Capability.SET_SENSITIVITY, item.group_id)
 
-    item.sensitivity = req.sensitivity.value
+    # Below the gate, so a refused classification leaves nothing behind, and
+    # inside the same commit as the assignment it records.
+    audit_trail.set_sensitivity(
+        db,
+        equipment=item,
+        actor=current_user,
+        new_sensitivity=req.sensitivity.value,
+    )
+
     db.commit()
     db.refresh(item)
 
@@ -300,7 +333,30 @@ def assign_owner(
     item.actual_location_id = None
     item.last_verified_at = clock.utcnow()
     item.custom_location = None
-    
+
+    # DATA-H4's headline. This route changed owner, holder, group and the
+    # verification clock and recorded none of it, so a change of custody --
+    # the most auditable event this system has -- left no trace and never
+    # appeared in the movement report.
+    #
+    # Below both authz.require calls, so a refused assignment logs nothing,
+    # and inside the same commit as the mutation, so the row cannot outlive a
+    # rollback of what it describes.
+    #
+    # recipient=, not a hand-spelled location string: record_event owns the
+    # "User:{name}" convention so this event and HANDOVER cannot drift apart
+    # in the one column that records who received the item.
+    #
+    # last_verified_at is still reset above and this only records that it
+    # happened; DATA-H5 is the ticket that stops it.
+    audit_trail.record_event(
+        db,
+        equipment=item,
+        actor=current_user,
+        event_type=EventType.ASSIGN,
+        recipient=target,
+    )
+
     db.commit()
     return {"status": "Ownership Assigned", "state": item.current_state_description}
 
@@ -396,14 +452,13 @@ def transfer_equipment(
             if destination is not None:
                 item.group_id = destination
 
-            log = models.TransactionLog(
-                equipment_id=item.id,
-                involved_user_id=current_user.id,
-                event_type="HANDOVER",
-                user_status_at_time=current_user.is_active_duty,
-                location=f"User:{target.full_name}" 
+            audit_trail.record_event(
+                db,
+                equipment=item,
+                actor=current_user,
+                event_type=EventType.HANDOVER,
+                recipient=target,
             )
-            db.add(log)
             result_msg = {"status": "Transferred", "new_holder": target.full_name}
 
         else:
@@ -415,14 +470,13 @@ def transfer_equipment(
             item.custom_location = req.to_location
             item.holder_user_id = None
             
-            log = models.TransactionLog(
-                equipment_id=item.id,
-                involved_user_id=current_user.id,
-                event_type="HANDOVER_LOC",
-                user_status_at_time=current_user.is_active_duty,
-                location=req.to_location
+            audit_trail.record_event(
+                db,
+                equipment=item,
+                actor=current_user,
+                event_type=EventType.HANDOVER_LOC,
+                location=req.to_location,
             )
-            db.add(log)
             result_msg = {"status": "Transferred", "location": req.to_location}
 
         item.actual_location_id = None
@@ -468,15 +522,16 @@ def verify_equipment_daily(
 
     item.last_verified_at = clock.utcnow()
     
-    trans_log = models.TransactionLog(
-        equipment_id=item.id,
-        involved_user_id=current_user.id,
-        event_type="VERIFICATION",
-        user_status_at_time=current_user.is_active_duty,
-        timestamp=clock.utcnow()
+    # VERIFICATION means THIS route -- the daily presence confirmation, gated
+    # on possession alone. verifications.create_verification is a different
+    # act with a different gate and does not share the string.
+    audit_trail.record_event(
+        db,
+        equipment=item,
+        actor=current_user,
+        event_type=EventType.VERIFICATION,
     )
-    db.add(trans_log)
-    
+
     db.commit()
     
     new_status = get_daily_status(item.last_verified_at)

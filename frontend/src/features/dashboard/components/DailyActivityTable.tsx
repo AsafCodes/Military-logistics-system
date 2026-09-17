@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Clock, ArrowUpDown, AlertCircle, Wrench } from 'lucide-react';
+import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle, ShieldAlert, PackagePlus, ClipboardCheck } from 'lucide-react';
 import api from '@/api';
 
 // ============================================================
@@ -26,40 +26,69 @@ interface DailyActivityTableProps {
 // Helpers
 // ============================================================
 
+// DATA-H4-1. One table, three switches before this ticket -- and they had
+// already fallen out of step with each other: VERIFICATION had a label arm but
+// no icon or colour arm, so a verification row rendered with the fallback
+// clock. Three switches means three edits per event type and three chances to
+// forget one, which is how that gap arrived.
+//
+// The vocabulary itself was also fiction. These switches knew 'movement',
+// 'transfer', 'repair' and 'verify'; `git log -S` over backend/ shows no
+// router has ever written any of them. What the backend emits is
+// backend/enums.py EventType -- HANDOVER, HANDOVER_LOC, VERIFICATION, FIX and
+// now ASSIGN -- so every handover in the system fell through to the default
+// arm and printed raw English into an RTL Hebrew table, for as long as the
+// feature has existed. The dead arms are deleted rather than kept: there are
+// no legacy rows carrying those strings to protect.
+//
+// tests/test_audit_trail.py asserts every EventType value has an entry here,
+// so a backend member added without a label fails the backend suite.
+
+type EventMeta = { icon: typeof Clock; color: string; label: string };
+
+const EVENT_META: Record<string, EventMeta> = {
+    handover: { icon: ArrowUpDown, color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10', label: 'העברה' },
+    handover_loc: { icon: ArrowUpDown, color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10', label: 'העברה למיקום' },
+    assign: { icon: UserCheck, color: 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10', label: 'שינוי בעלות' },
+    verification: { icon: ShieldCheck, color: 'text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-500/10', label: 'אימות' },
+    fix: { icon: Wrench, color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10', label: 'תיקון' },
+    // DATA-H4-2. Amber against fix's emerald: a fault and its repair are the
+    // two ends of one story and the eye should separate them at a glance.
+    fault: { icon: AlertTriangle, color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10', label: 'דיווח תקלה' },
+    // DATA-H4-3. Rose is the loudest swatch in this map and the only one that
+    // is loud on purpose: a classification decision is the rarest event here
+    // and the one an auditor scans for.
+    reclassify: { icon: ShieldAlert, color: 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10', label: 'שינוי סיווג' },
+    // Slate, deliberately quiet. An item entering the inventory is the most
+    // routine line the report carries.
+    create: { icon: PackagePlus, color: 'text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-500/10', label: 'יצירת פריט' },
+    // Indigo against verification's sky, and adjacent on purpose -- the daily
+    // presence check and the condition report are the same family and
+    // different acts, which is exactly what the backend refuses to spell with
+    // one EventType. Same reasoning as fault's amber against fix's emerald.
+    condition_report: { icon: ClipboardCheck, color: 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10', label: 'דיווח מצב' },
+};
+
+// Derived, not restated. This was a byte-for-byte copy of handover's colour,
+// which is the drift this map was created to end -- retouch the blue in one
+// place and the fallback silently stops matching the swatch it is meant to be.
+const FALLBACK_COLOR = EVENT_META.handover.color;
+
+function eventMeta(eventType: string): EventMeta | undefined {
+    return EVENT_META[eventType?.toLowerCase()];
+}
+
 function getEventIcon(eventType: string) {
-    switch (eventType?.toLowerCase()) {
-        case 'movement':
-        case 'transfer': return <ArrowUpDown size={14} />;
-        case 'fault':
-        case 'report_fault': return <AlertCircle size={14} />;
-        case 'fix':
-        case 'repair': return <Wrench size={14} />;
-        default: return <Clock size={14} />;
-    }
+    const Icon = eventMeta(eventType)?.icon ?? Clock;
+    return <Icon size={14} />;
 }
 
 function getEventColor(eventType: string) {
-    switch (eventType?.toLowerCase()) {
-        case 'fault':
-        case 'report_fault': return 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10';
-        case 'fix':
-        case 'repair': return 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10';
-        default: return 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10';
-    }
+    return eventMeta(eventType)?.color ?? FALLBACK_COLOR;
 }
 
 function getEventLabel(eventType: string) {
-    switch (eventType?.toLowerCase()) {
-        case 'movement':
-        case 'transfer': return 'העברה';
-        case 'fault':
-        case 'report_fault': return 'דיווח תקלה';
-        case 'fix':
-        case 'repair': return 'תיקון';
-        case 'verify':
-        case 'verification': return 'אימות';
-        default: return eventType || 'אירוע';
-    }
+    return eventMeta(eventType)?.label ?? (eventType || 'אירוע');
 }
 
 // ============================================================
