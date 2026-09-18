@@ -42,6 +42,22 @@ REVISION_BEFORE_LEGACY_DROP = "b1c4e7a90f52"
 # hierarchy columns but still carries Profile/UserRole, the shape H1-12 drops.
 REVISION_BEFORE_PROFILE_DROP = "c93f2a615d84"
 
+# The newest revision that changes SCHEMA. A pre-Alembic database whose schema
+# already matches the models has had every schema revision and none of the
+# data-only ones, so this -- not "head" -- is the true stamp for that shape.
+#
+# DATA-H5-2 is why the distinction exists. It is the first revision in this
+# chain that only rewrites rows: stamping such a database at "head" would
+# record its backfill as applied to a database that never ran it, leaving
+# exactly the forged compliance timestamps the revision was written to repair,
+# on exactly the legacy databases that have them. The same silent-skip shape
+# H1-11 and H1-12 each had to fix here, now reachable without any schema
+# difference to notice it by.
+#
+# Kept honest by test_group_schema.py's staleness guard, which fails if any
+# revision after this one touches schema.
+LAST_SCHEMA_REVISION = "e5f1b8d24a07"
+
 
 def alembic_config() -> Config:
     """Alembic config resolved from the project root, not the working directory.
@@ -75,6 +91,12 @@ def baseline_revision(inspector) -> str:
     what they add; H1-11 drops columns and tightens equipment.group_id, so a
     stamped database would have kept the columns, kept a nullable group_id, and
     still called itself up to date.
+
+    A data-only revision cannot be told apart by inspecting the schema at all,
+    which is why the last branch answers LAST_SCHEMA_REVISION rather than
+    "head": a schema that matches the models has had every SCHEMA revision, and
+    says nothing about whether a revision that only rewrites rows has run. See
+    that constant for the case it exists for.
 
     Two shapes reach this function, and the legacy column is what tells them
     apart. A create_all database from before H1-11 still carries
@@ -112,7 +134,7 @@ def baseline_revision(inspector) -> str:
         return REVISION_BEFORE_LEGACY_DROP
     if inspector.has_table("profiles"):
         return REVISION_BEFORE_PROFILE_DROP
-    return "head"
+    return LAST_SCHEMA_REVISION
 
 
 def run_migrations() -> None:

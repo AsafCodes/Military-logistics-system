@@ -13,13 +13,16 @@ discover later: that the Alembic migration and Base.metadata.create_all() build
 the same schema (the suite uses the second, CI and production use the first),
 and that the batch-mode rebuild of `equipment` preserves its rows.
 """
+import ast
 import sqlite3
+from pathlib import Path
 
 import pytest
 from sqlalchemy import UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
+from alembic.script import ScriptDirectory
 from backend import authz, database, migrations, models
 from backend.database import Base
 from backend.enums import Capability, GroupKind
@@ -605,7 +608,9 @@ def test_the_baseline_revision_is_chosen_by_what_the_schema_carries(tmp_path):
     the function returned the right answer for the wrong reason. This pins the
     rule for each: unit_hierarchy present means the oldest shape, profiles
     present (with it already gone) means the middle one, and neither present
-    means head.
+    means the newest SCHEMA revision -- not head, because a schema that matches
+    the models says nothing about whether a data-only revision has run
+    (DATA-H5-2, and migrations.LAST_SCHEMA_REVISION).
     """
     legacy = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
     _upgrade(legacy, GROUPS_REVISION)
@@ -622,8 +627,172 @@ def test_the_baseline_revision_is_chosen_by_what_the_schema_carries(tmp_path):
     modern = create_engine(f"sqlite:///{tmp_path / 'modern.db'}")
     Base.metadata.create_all(bind=modern)
     with modern.connect() as conn:
-        assert migrations.baseline_revision(inspect(conn)) == "head"
+        assert migrations.baseline_revision(inspect(conn)) == migrations.LAST_SCHEMA_REVISION
     modern.dispose()
+
+
+# Raw SQL that changes shape rather than rows. The op.* check below cannot see
+# these, and this revision chain's data migrations establish
+# conn.execute(text(...)) as their idiom -- so a "quick" ALTER through the same
+# door is the likely way a schema change lands after the marker.
+DDL_SQL = ("alter table", "create table", "drop table", "create index",
+           "drop index", "add column", "drop column")
+
+
+def schema_work_in_upgrade(source):
+    """Every schema operation an Alembic revision's upgrade() performs.
+
+    Two spellings, because a revision has two ways to reach the schema and a
+    guard that knows only the tidy one is a guard against tidy mistakes.
+
+    op.* is matched by PREFIX rather than against a list of DDL verbs: the whole
+    of that module's surface is schema work, so a list would silently miss
+    whichever verb a future revision reaches for. get_bind is the one member
+    that touches no schema, and data revisions need it.
+
+    Two limits, both known and neither worth more machinery than the risk:
+
+    The op arm matches the NAME `op`, which every revision in this chain and
+    every one Alembic's own template generates binds with `from alembic import
+    op`. An alias -- `from alembic import op as o` -- would walk past it. That
+    is an unenforced convention rather than a guarantee, so an author tidying
+    the imports of a revision should know they are also tidying away its guard.
+
+    The SQL arm can flag a string that merely CONTAINS one of these phrases,
+    such as an error message naming the table it refuses to create. That fails
+    in the safe direction -- a spurious red on a data revision, never a silent
+    pass on a schema one -- so it is left blunt.
+    """
+    tree = ast.parse(source)
+    upgrade = next(
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "upgrade"
+    )
+
+    found = []
+    for node in ast.walk(upgrade):
+        if not isinstance(node, ast.Call):
+            continue
+
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "op"
+            and node.func.attr != "get_bind"
+        ):
+            found.append(f"op.{node.func.attr}()")
+
+        # Strings PASSED TO a call, not every string in the body. A docstring
+        # is an expression rather than an argument, which is what keeps this
+        # off the prose -- these revisions discuss ALTER TABLE at length, and a
+        # guard that flagged the discussion would be turned off within a week.
+        for argument in ast.walk(node):
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                statement = " ".join(argument.value.lower().split())
+                found += [phrase for phrase in DDL_SQL if phrase in statement]
+
+    # Nested calls -- execute(text(...)) -- are walked twice, so the same
+    # statement can arrive more than once. The offender list is read by a human
+    # deciding whether to move a marker; saying it twice helps nobody.
+    return list(dict.fromkeys(found))
+
+
+def test_no_revision_after_the_schema_marker_touches_schema():
+    """LAST_SCHEMA_REVISION cannot quietly fall behind the chain it names.
+
+    baseline_revision stamps a modern create_all database at that revision, so
+    every revision after it RUNS against a database that already has today's
+    schema. That is correct exactly while those revisions only move data: a
+    schema revision landing after the marker without the constant moving with
+    it would re-add a column that is already there and fail at startup -- the
+    loud half of the asymmetry baseline_revision's docstring describes, but
+    still a broken start for whoever meets it.
+
+    Checked by walking the revisions rather than by trusting a comment, in the
+    same spirit as tests/test_audit_trail.py's AST guards: the constant is
+    kept honest by something that fails, not by a note asking for care.
+    """
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+
+    # walk_revisions yields newest first, so everything seen before the marker
+    # is what a stamp at the marker skips past.
+    newer = []
+    found_marker = False
+    for rev in script.walk_revisions("base", "heads"):
+        if rev.revision == migrations.LAST_SCHEMA_REVISION:
+            found_marker = True
+            break
+        newer.append(rev)
+
+    assert found_marker, (
+        f"migrations.LAST_SCHEMA_REVISION names {migrations.LAST_SCHEMA_REVISION}, "
+        "which is not a revision in the chain at all"
+    )
+
+    offenders = []
+    for rev in newer:
+        source = Path(rev.module.__file__).read_text(encoding="utf-8")
+        offenders += [f"{rev.revision}: {found}" for found in schema_work_in_upgrade(source)]
+
+    assert offenders == [], (
+        "a revision after migrations.LAST_SCHEMA_REVISION changes schema, so a "
+        "pre-Alembic database stamped at that marker would be told it already "
+        f"has DDL it has never run: {offenders}"
+    )
+
+
+PLANTED_SCHEMA_WORK = {
+    "op call": "    op.add_column('equipment', sa.Column('x', sa.String()))",
+    "batch mode": (
+        "    with op.batch_alter_table('equipment') as b:\n"
+        "        b.drop_column('x')"
+    ),
+    "raw sql": '    conn.execute(text("ALTER TABLE equipment ADD COLUMN x VARCHAR"))',
+    "raw sql wrapped over lines": (
+        '    conn.execute(text(\n'
+        '        "CREATE INDEX ix"\n'
+        '        " ON equipment (id)"\n'
+        '    ))'
+    ),
+}
+
+
+@pytest.mark.parametrize("spelling", sorted(PLANTED_SCHEMA_WORK), ids=lambda s: s.replace(" ", "_"))
+def test_the_schema_marker_guard_sees_every_spelling(spelling):
+    """The guard asserts == [] against a chain that has no violation to find.
+
+    So on the real tree it passes whether or not it can detect anything, which
+    is a detector nobody has watched detect -- the trap
+    tests/test_audit_trail.py documents for its own guards. These plant one.
+
+    The wrapped case is the one worth spelling out: adjacent string literals
+    concatenate at parse time, so "CREATE INDEX ix" " ON equipment (id)" is one
+    constant by the time the walk sees it, and a check reading raw source lines
+    would miss it.
+    """
+    source = f"def upgrade():\n{PLANTED_SCHEMA_WORK[spelling]}\n"
+
+    assert schema_work_in_upgrade(source), (
+        f"a {spelling} schema change in upgrade() was not seen by the guard"
+    )
+
+
+def test_the_schema_marker_guard_ignores_a_data_only_revision():
+    """The other half: prose about DDL, and row work, must not be flagged.
+
+    This revision chain's comments discuss ALTER TABLE at length, so a guard
+    reading whole files rather than upgrade() bodies would flag the very
+    revisions it is meant to allow.
+    """
+    source = (
+        'def upgrade():\n'
+        '    """Rewrites rows. Not an ALTER TABLE, which would need op.alter_column()."""\n'
+        '    conn = op.get_bind()\n'
+        '    conn.execute(text("UPDATE equipment SET last_verified_at = NULL"))\n'
+    )
+
+    assert schema_work_in_upgrade(source) == []
 
 
 def test_migration_and_create_all_build_the_same_schema(tmp_path):
