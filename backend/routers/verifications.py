@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List
 
 from ..database import get_db
-from .. import audit_trail, models, schemas
-from ..enums import ChangeReason, EventType
+from .. import audit_trail, authz, models, schemas
+from ..enums import Capability, ChangeReason, EquipmentStatus, EventType
 from ..dependencies import (
     get_current_active_user,
     get_scoped_equipment_or_404,
@@ -28,6 +28,53 @@ async def create_verification(
     require_status_authority(db, current_user, equipment)
 
     reported_status = data.reported_status.value
+
+    # Declaring a broken item serviceable is closing a fault, whichever route
+    # says it, so it asks the verb that closes faults.
+    #
+    # require_status_authority is possession-OR-REPORT_STATUS, and its own
+    # docstring states the invariant this route was breaking: "a soldier
+    # holding a broken item can report it and cannot declare it fixed. That
+    # asymmetry is the whole reason the two verbs exist." It was enforced only
+    # by which routes call which helper -- and this route wrote the caller's
+    # reported_status straight onto equipment.status through set_status, so
+    # POST /verifications/ with "Functional" did exactly what
+    # maintenance.fix_equipment refuses to do without RESOLVE_FAULT. Verified
+    # against the fixtures before fixing: grant-less soldier_a, holding SA100,
+    # got 403 from POST /maintenance/fix/{id} and 200 from this route.
+    #
+    # WHAT THIS DOES NOT FIX, stated plainly because the gate invites the
+    # opposite assumption: fix_equipment also closes the item's open
+    # MaintenanceLog rows and this route still does not, so a verification that
+    # declares an item Functional leaves its ticket Open -- readiness
+    # (analytics counts status == "Functional") then disagrees with the fault
+    # list. This change decides WHO may reach that state, not whether it
+    # exists, and a RESOLVE_FAULT holder still reaches it here. The mirror gap
+    # is open too: this is the only route that writes Malfunctioning, and it
+    # opens no ticket, where maintenance.report_fault always does. Both want
+    # one shared status-transition helper owning the ticket side-effect, which
+    # is a larger change than this ticket and is not smuggled into it.
+    #
+    # ON THE TRANSITION, not on the value. An item already Functional that is
+    # verified as Functional closes no fault; that is the ordinary condition
+    # report this route exists for, and set_status no-ops on it anyway.
+    # Gating the value rather than the move would demand RESOLVE_FAULT for
+    # every routine check of a working item, which is the possession arm's
+    # entire purpose.
+    #
+    # Refuses the whole request rather than writing the verification and
+    # silently declining the status change: a stored report whose reported
+    # status the system did not act on is a record that lies about what
+    # happened. Raised BEFORE any write, so a refused report leaves nothing
+    # behind -- no verification row, no clock advance.
+    declares_serviceable = (
+        reported_status == EquipmentStatus.FUNCTIONAL.value
+        and equipment.status != EquipmentStatus.FUNCTIONAL.value
+    )
+    if declares_serviceable:
+        authz.require(
+            db, current_user.id, Capability.RESOLVE_FAULT, equipment.group_id
+        )
 
     # equipment.id, not data.equipment_id, at both writes below. They are the
     # same value today and only because the resolver filtered on it -- taking

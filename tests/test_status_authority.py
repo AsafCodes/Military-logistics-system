@@ -535,3 +535,147 @@ def test_the_daily_verify_route_keeps_its_holder_rule(
     assert verify_daily(client, "u_cmdr_a", item.id).status_code == 403
     assert verify_daily(client, "u_tech_b", item.id).status_code == 404
     assert verify_daily(client, "u_soldier_a", item.id).status_code == 200
+
+
+# --- declaring an item serviceable is closing a fault ------------------------
+#
+# require_status_authority's docstring states the invariant these three pin:
+# "a soldier holding a broken item can report it and cannot declare it fixed.
+# That asymmetry is the whole reason the two verbs exist." It was enforced only
+# by which route called which helper, and POST /verifications/ wrote the
+# caller's reported_status straight onto equipment.status -- so the possession
+# arm reached a transition RESOLVE_FAULT exists to guard, and did it without
+# closing the ticket that fix_equipment closes.
+
+
+def break_it(client, db, item):
+    """Put the item in the state a fault-close has to move it out of.
+
+    Through the real route rather than by hand. A MaintenanceLog built here
+    directly gets fault_type_id NULL, which report_fault never produces and
+    which makes GET /tickets/ raise a ValidationError -- so the fixture would
+    be a state the application cannot reach, and any assertion about tickets
+    made against it would be meaningless.
+    """
+    assert report(client, "u_soldier_a", item.id).status_code == 200
+    db.expire_all()
+
+
+def test_a_holder_cannot_declare_their_own_broken_item_functional(
+    client, db_session, mock_matrix_db
+):
+    """The bypass itself: possession must not close a fault.
+
+    soldier_a holds SA100 and has no RESOLVE_FAULT anywhere. They may report it
+    broken -- that is the possession arm doing its job -- and must not be able
+    to report it fixed.
+    """
+    item = item_named(db_session, "SA100")
+    break_it(client, db_session, item)
+
+    refused = submit_verification(client, "u_soldier_a", item.id, status="Functional")
+
+    assert refused.status_code == 403, (
+        "a holder with no RESOLVE_FAULT declared their own item serviceable "
+        "through POST /verifications/, which maintenance.fix_equipment refuses"
+    )
+    db_session.expire_all()
+    assert item_named(db_session, "SA100").status == "Malfunctioning"
+
+
+def test_report_status_alone_cannot_declare_an_item_functional(
+    client, db_session, mock_matrix_db
+):
+    """THE test that tells the two verbs apart at this gate.
+
+    This module's own docstring says it: "a gate reading the wrong one would
+    pass almost every test that could be written. The pair that separates them
+    is Company A's commander and Company A's tech." Every other test here is
+    satisfied by any gate at all -- soldier_a holds NEITHER verb, and tech_a
+    holds BOTH -- so swapping this gate to REPORT_STATUS passed the entire
+    suite until this test existed. Verified by doing exactly that.
+
+    company_cmdr_a holds REPORT_STATUS over 188/53/A and not RESOLVE_FAULT
+    (conftest's RESOLVE_FAULT table excludes both company commanders, which is
+    the whole of the difference between the two tables). They may report the
+    item broken all day; declaring it fixed is the technical function's call.
+    """
+    item = item_named(db_session, "SA100")
+    break_it(client, db_session, item)
+
+    assert submit_verification(
+        client, "u_cmdr_a", item.id, status="In Repair"
+    ).status_code == 200, "REPORT_STATUS must still write a non-serviceable status"
+
+    refused = submit_verification(client, "u_cmdr_a", item.id, status="Functional")
+
+    assert refused.status_code == 403, (
+        "REPORT_STATUS alone closed a fault -- the gate is reading the wrong verb"
+    )
+
+
+def test_the_refusal_leaves_no_verification_row_behind(
+    client, db_session, mock_matrix_db
+):
+    """A refused report must not be recorded as having happened.
+
+    The gate sits above every write for this reason: a stored verification
+    whose reported status the system declined to act on is a record that lies,
+    and it would also advance last_verified_at -- marking an item inspected on
+    the strength of a request that was denied (DATA-H5's shape).
+    """
+    item = item_named(db_session, "SA100")
+    break_it(client, db_session, item)
+    before = client.get(
+        f"/verifications/equipment/{item.id}", headers=create_auth_header("u_cmdr_a")
+    ).json()
+    clock_before = item_named(db_session, "SA100").last_verified_at
+
+    refused = submit_verification(client, "u_soldier_a", item.id, status="Functional")
+
+    assert refused.status_code == 403
+    after = client.get(
+        f"/verifications/equipment/{item.id}", headers=create_auth_header("u_cmdr_a")
+    ).json()
+    assert len(after) == len(before)
+    db_session.expire_all()
+    assert item_named(db_session, "SA100").last_verified_at == clock_before, (
+        "a refused report advanced the verification clock -- DATA-H5's shape: "
+        "the item is marked inspected on the strength of a denied request"
+    )
+
+
+def test_reporting_functional_on_a_working_item_is_still_an_ordinary_report(
+    client, db_session, mock_matrix_db
+):
+    """The gate is on the TRANSITION, not on the word.
+
+    SA100 starts Functional. A holder confirming that closes no fault, and
+    demanding RESOLVE_FAULT for it would break the routine daily check the
+    possession arm exists to allow. This is the test that fails if the gate is
+    ever widened from `moved into Functional` to `says Functional`.
+    """
+    item = item_named(db_session, "SA100")
+    assert item.status == "Functional"
+
+    assert submit_verification(
+        client, "u_soldier_a", item.id, status="Functional"
+    ).status_code == 200
+
+
+def test_resolve_fault_holder_may_declare_it_functional(
+    client, db_session, mock_matrix_db
+):
+    """And the gate opens for the verb it names.
+
+    company_tech_a holds RESOLVE_FAULT over 188/53/A. Without this the fix
+    could be "always refuse", which would pass all three tests above.
+    """
+    item = item_named(db_session, "SA100")
+    break_it(client, db_session, item)
+
+    assert submit_verification(
+        client, "u_tech_a", item.id, status="Functional"
+    ).status_code == 200
+    db_session.expire_all()
+    assert item_named(db_session, "SA100").status == "Functional"
