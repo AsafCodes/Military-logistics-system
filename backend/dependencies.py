@@ -112,6 +112,49 @@ async def get_current_active_user(current_user: models.User = Depends(get_curren
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
+# DATA-H8. The relationships an EquipmentResponse touches, loaded up front.
+#
+# The set is not a guess and it is not "everything on the model". It is exactly
+# what the three properties schemas.EquipmentResponse is built from traverse:
+#
+#     item_name                  -> catalog_item                 (models.py:147)
+#     current_state_description  -> holder, owner, location      (models.py:151)
+#     compliance_level / report_status -> columns only, nothing  (models.py:184)
+#
+# Anything that changes what those properties read has to change this tuple in
+# the same breath. Read them together.
+#
+# owner_location is declared on Equipment and read by nothing, so it is absent.
+# `group` is absent for the opposite reason: only reports.py's unit_association
+# reads it, which is why that route keeps its own inline list rather than this
+# one -- the two sets genuinely differ, and folding them together would load a
+# join for every caller to spare one.
+#
+# location is here even though no route in this application ever writes
+# actual_location_id to a non-null value -- it is only ever set to None (see
+# DATA-M18, and grep the column). The property reads it, so a database filled
+# from anywhere but this API -- a migration, a seed, a legacy import -- fans out
+# on it once per row. One LEFT OUTER JOIN against a leaf table is the right
+# price for not depending on that.
+#
+# Defined ONCE because two routes need the identical set: equipment router's
+# accessible listing and users router's /users/me/equipment. Two copies is
+# DATA-H9's shape applied to loader options -- a fifth relationship added to
+# current_state_description would get eager-loaded on one route and fan out on
+# the other, and nothing would fail. Loader options are immutable and reusable
+# across queries, so one tuple spread into both call sites is safe.
+#
+# joinedload rather than selectinload throughout: all four are many-to-one, so
+# there is no row multiplication to defend against, and joinedload is the only
+# idiom in this tree (reports.py:28).
+EQUIPMENT_RESPONSE_LOADS = (
+    joinedload(models.Equipment.catalog_item),
+    joinedload(models.Equipment.holder),
+    joinedload(models.Equipment.owner),
+    joinedload(models.Equipment.location),
+)
+
+
 def scope_equipment_query(q, user: models.User):
     """Restrict an Equipment query to what `user` is allowed to see.
 

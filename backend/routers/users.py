@@ -4,7 +4,12 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 
 from ..database import get_db
-from ..dependencies import get_current_active_user, get_daily_status, scope_user_query
+from ..dependencies import (
+    EQUIPMENT_RESPONSE_LOADS,
+    get_current_active_user,
+    get_daily_status,
+    scope_user_query,
+)
 from ..enums import Capability
 from .. import authz
 from .. import models
@@ -69,7 +74,20 @@ def update_user_group(user_id: int, req: schemas.UpdateUserGroupRequest, current
 
 @router.get("/users/me/equipment", response_model=List[schemas.EquipmentResponse])
 def get_my_equipment(current_user: models.User = Depends(get_current_active_user), db: Session = Depends(get_db)):
-    items = db.query(models.Equipment).filter(models.Equipment.holder_user_id == current_user.id).order_by(models.Equipment.id.asc()).all()
+    # DATA-H8, and the same tuple the equipment router's listing spreads -- this
+    # builds the identical response from the identical properties, so it needs
+    # the identical loads. Sharing the definition is what stops the two from
+    # drifting the next time a property learns to read something new.
+    #
+    # Two of the four can never fire HERE: the filter is holder == me, so holder
+    # resolves to one row the identity map already holds, and location is
+    # unreachable because the holder arm of current_state_description wins
+    # ahead of it. They are not dead weight -- a LEFT OUTER JOIN against a leaf
+    # on a row set bounded by one person's kit is free, and the alternative is a
+    # second, subtly-different tuple that has to be kept in step by hand.
+    items = db.query(models.Equipment).options(*EQUIPMENT_RESPONSE_LOADS).filter(
+        models.Equipment.holder_user_id == current_user.id
+    ).order_by(models.Equipment.id.asc()).all()
     return [schemas.EquipmentResponse(
         id=item.id, type=item.item_name, item_name=item.item_name, status=item.status,
         current_state_description=item.current_state_description, compliance_check=item.report_status,

@@ -38,6 +38,7 @@ os.environ["COOKIE_SECURE"] = "false"
 # --------------------------------------------------------------------------
 
 import pytest
+from contextlib import contextmanager
 from functools import lru_cache
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -91,6 +92,95 @@ def client(db_session):
     app.dependency_overrides[get_db] = override_get_db
     yield TestClient(app)
     del app.dependency_overrides[get_db]
+
+@contextmanager
+def recorded(engine):
+    """Collect every SQL statement the block actually sends to the database.
+
+    Moved here from test_query_surface.py, which wrote it first and still uses
+    it; count_queries below is the second caller and the reason it is shared
+    rather than written twice.
+    """
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+class QueryLog:
+    """Every statement the engine executed inside one measured block."""
+
+    def __init__(self, statements):
+        self.statements = statements
+
+    @property
+    def count(self):
+        return len(self.statements)
+
+    def against(self, table):
+        """The subset touching one table, for pinning WHICH query multiplied."""
+        return [s for s in self.statements if table in s]
+
+    def __repr__(self):  # shows up in the assertion diff, so make it useful
+        return f"<QueryLog {self.count} statements>"
+
+
+@pytest.fixture
+def count_queries(db_session):
+    """Count SQL statements issued while the block runs. DATA-H8.
+
+    A query fan-out is invisible from outside: the response bytes are identical
+    whether the route eager-loads or issues one SELECT per row. The only way to
+    assert the fix is to count statements, so this listens on the engine the
+    whole suite shares and hands back the log.
+
+    THE expire_all() IS LOAD-BEARING AND THIS FIXTURE EXISTS TO NOT FORGET IT.
+    The client fixture overrides get_db with the *same* session the test seeded
+    through, and SQLAlchemy serves an identity-map hit without going to the
+    database -- so a warm map hides a lazy load completely.
+
+    What warms it is the subtle part, and the obvious answer is wrong. Seeding
+    alone does NOT: sessionmaker leaves expire_on_commit at its default, so the
+    setup's own commit expires everything it just wrote. What warms it is a test
+    READING ITS OWN SETUP BACK afterwards -- an assertion about a fixture row, a
+    list comprehension over the items, anything that touches an attribute. That
+    is an ordinary thing for a test to do and it silently destroys the
+    measurement.
+
+    Measured on the accessible listing at 10 rows, loads stripped out:
+
+        stripped, expired          29 statements   (19 on users, 9 on catalog)
+        stripped, map left warm     2 statements   <- identical to fixed code
+        fixed                       2 statements
+
+    So a fan-out test written without this line passes against the defect it
+    exists to catch, and goes on passing forever. Expiring here rather than in
+    each test means no test can be vacuous by omission. It costs nothing a test
+    wants: the route issues its own query regardless, and a joinedload
+    un-expires what it loads in the same round trip.
+
+    Bound to db_session.get_bind() rather than the module-level `engine`, and
+    that is not paranoia: pytest imports this file TWICE, once as `conftest` and
+    once as `tests.conftest`, so there are two module objects each holding their
+    own engine. A listener attached to the wrong one records nothing at all and
+    reports a flat, perfect query count. Ask the session which engine it is
+    actually on.
+    """
+
+    @contextmanager
+    def _count():
+        db_session.expire_all()
+        with recorded(db_session.get_bind()) as statements:
+            yield QueryLog(statements)
+
+    return _count
+
 
 FIXTURE_GROUP_TREE = {
     "188": None,

@@ -2,7 +2,7 @@
 Equipment Verification & Status History Router
 """
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List
 
 from ..database import get_db
@@ -116,7 +116,19 @@ async def get_equipment_verifications(
     # already see, list, and hold.
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
 
-    verifications = db.query(models.Verification).filter(
+    # DATA-H8. reporter_name below reads v.reporter.full_name, so an item with a
+    # long inspection history cost one SELECT per verification -- and the rows
+    # are worst-case for the identity map, since a different person files each
+    # one, so nothing is cached between iterations.
+    #
+    # Inline rather than through dependencies.EQUIPMENT_RESPONSE_LOADS: that
+    # tuple is about Equipment's response properties and this is a single
+    # relationship on a different model. A shared name covering both would have
+    # to mean "whatever the loop happens to touch", which is not a thing that
+    # can be kept honest.
+    verifications = db.query(models.Verification).options(
+        joinedload(models.Verification.reporter)
+    ).filter(
         models.Verification.equipment_id == item.id
     ).order_by(models.Verification.created_date.desc()).all()
     
@@ -150,7 +162,12 @@ async def get_equipment_status_history(
     # user who made each one named.
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
 
-    history = db.query(models.EquipmentStatusHistory).filter(
+    # DATA-H8, the sibling of the load above and for the same reason: user_name
+    # below reads h.user.full_name once per row, and a status history is exactly
+    # the table that grows without bound on a well-used item.
+    history = db.query(models.EquipmentStatusHistory).options(
+        joinedload(models.EquipmentStatusHistory.user)
+    ).filter(
         models.EquipmentStatusHistory.equipment_id == item.id
     ).order_by(models.EquipmentStatusHistory.created_date.desc()).all()
     

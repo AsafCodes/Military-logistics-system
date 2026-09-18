@@ -3,11 +3,12 @@ Equipment Router - Equipment CRUD and transfer endpoints
 Scoping lives in dependencies.scope_equipment_query()
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from ..database import get_db
 from ..dependencies import (
+    EQUIPMENT_RESPONSE_LOADS,
     get_current_active_user,
     get_daily_status,
     get_scoped_equipment_or_404,
@@ -72,7 +73,21 @@ def get_accessible_equipment(
     """
     Get ALL equipment the user is allowed to see (Matrix Security).
     """
-    q = scope_equipment_query(db.query(models.Equipment), current_user)
+    # DATA-H8. The loop below reads item_name and current_state_description on
+    # every row, and each of those walks a relationship -- so this listing cost
+    # up to four extra SELECTs per item, on the single most-requested read in
+    # the system. The options are the fix; the tuple is where the set is
+    # justified.
+    #
+    # Applied to the base query, ABOVE the scoping call rather than after it,
+    # matching reports.py:28-41. Either order produces the same SQL -- Query is
+    # immutable and .options() and .filter() commute -- but reading it this way
+    # keeps the shape of the row (what gets loaded) separate from and ahead of
+    # the question of which rows (who may see them), and it means the scoping
+    # helper is the last thing applied to the query in both routers.
+    q = scope_equipment_query(
+        db.query(models.Equipment).options(*EQUIPMENT_RESPONSE_LOADS), current_user
+    )
 
     # Optional text filter
     if query_str:
