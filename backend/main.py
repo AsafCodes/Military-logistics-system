@@ -2,6 +2,8 @@
 Military Logistics System - FastAPI Entry Point
 Modular Architecture v4.1
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
@@ -29,11 +31,34 @@ def wait_for_db():
             time.sleep(retry_interval)
     raise Exception("Database connection failed after multiple retries")
 
-wait_for_db()
-run_migrations()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Connect and migrate when the server starts, not when the module is imported.
+
+    Both calls used to run at module scope, so `import backend.main` -- from a
+    test, a script, or a tool reading the app object -- opened a connection,
+    blocked up to 60s waiting for it, ran Alembic against whatever database
+    DATABASE_URL happened to name, and raised on failure with no server around
+    to recover. Uvicorn runs this handler after the process is up, so a failure
+    here is a startup failure rather than an import failure.
+
+    wait_for_db stays synchronous on purpose: uvicorn serves nothing until
+    lifespan startup returns, so blocking the loop here is the intended
+    semantics, not an oversight.
+
+    NOT a fix for the multi-worker race: lifespan runs once per worker process,
+    so N workers still run N migrations concurrently. Nothing in this repo runs
+    more than one worker today; a deployment that does needs the migration
+    hoisted out of the server entirely.
+    """
+    wait_for_db()
+    run_migrations()
+    print("✅ SYSTEM READY: Backend is running on port 8000 and accepting connections from Port 3000")
+    yield
+
 
 # --- FastAPI App ---
-app = FastAPI(title="Military Logistics System", version="0.5.0")
+app = FastAPI(title="Military Logistics System", version="0.5.0", lifespan=lifespan)
 
 # --- CORS Middleware (Strict Origins) ---
 # SEC-H9 CAVEAT, and it costs an hour if you meet it without warning: since the
@@ -78,5 +103,3 @@ app.include_router(verifications.history_router)
 @app.get("/")
 def read_root():
     return {"message": "Military Logistics System V4.1 (Modular) 🛡️"}
-
-print("✅ SYSTEM READY: Backend is running on port 8000 and accepting connections from Port 3000")
