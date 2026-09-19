@@ -18,7 +18,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from sqlalchemy import UniqueConstraint, create_engine, inspect, text
+from sqlalchemy import UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
@@ -286,7 +286,7 @@ def test_the_ondelete_rules_depend_entirely_on_the_sqlite_pragma(tmp_path):
     assert delete_parent(pragma_on=True) == 0, "cascade did not fire with the pragma on"
 
 
-def test_the_application_enforces_foreign_keys_and_migrations_do_not():
+def test_the_application_enforces_foreign_keys_and_migrations_do_not(tmp_path, monkeypatch):
     """The two engines must disagree, deliberately and in this direction.
 
     The application and the suite run under enforcement so declared cascades
@@ -295,10 +295,36 @@ def test_the_application_enforces_foreign_keys_and_migrations_do_not():
     because four tables reference it. The pragma cannot be toggled off for the
     duration either -- SQLite ignores it inside a transaction and says nothing
     -- so the separation has to be two engines. See create_database_engine.
+
+    Asserted WITHOUT connecting to either singleton. This test used to open
+    database.engine and migrations.engine and read the pragma straight off
+    them, which worked only because tests/conftest.py pinned DATABASE_URL at a
+    SQLite file. DATA-H10 deleted that pin, so those engines now address
+    whatever the environment names: the developer's real sql_app.db locally,
+    and in CI a Postgres service, where PRAGMA foreign_keys does not exist and
+    the old assertion would have failed for a dialect reason.
+
+    Neither assertion below is sufficient alone. event.contains reads the
+    singletons' wiring without opening anything, and is what holds
+    migrations.py's enforce_foreign_keys=False -- but a listener that is
+    attached and does nothing would satisfy it just as well. So the pragma is
+    also read for real, from engines built over a file this test owns.
     """
-    for engine, expected in ((database.engine, 1), (migrations.engine, 0)):
-        with engine.connect() as conn:
-            assert conn.execute(text("PRAGMA foreign_keys")).scalar() == expected
+    assert event.contains(database.engine, "connect", database._enforce_sqlite_foreign_keys)
+    assert not event.contains(migrations.engine, "connect", database._enforce_sqlite_foreign_keys)
+
+    # create_database_engine reads the module global rather than accepting a
+    # URL, so redirecting the global is the only way to aim it at a file this
+    # test owns.
+    monkeypatch.setattr(database, "DATABASE_URL", f"sqlite:///{(tmp_path / 'fk.db').as_posix()}")
+
+    for enforce_foreign_keys, expected in ((True, 1), (False, 0)):
+        engine = database.create_database_engine(enforce_foreign_keys=enforce_foreign_keys)
+        try:
+            with engine.connect() as conn:
+                assert conn.execute(text("PRAGMA foreign_keys")).scalar() == expected
+        finally:
+            engine.dispose()
 
 
 def test_the_test_suite_runs_under_the_applications_integrity_rules(db_session):

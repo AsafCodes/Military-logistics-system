@@ -1,20 +1,15 @@
 import os
-import tempfile
 
-# --- DATA-H10 containment -------------------------------------------------
-# backend/main.py calls wait_for_db() and run_migrations() at MODULE SCOPE, so
-# merely importing the app connects to a database and runs Alembic against it.
-# backend/database.py defaults DATABASE_URL to sqlite:///./sql_app.db, which
-# would make every test run migrate a real file in the repo root.
+# DATABASE_URL is deliberately NOT set here. It used to be, because
+# backend/main.py ran wait_for_db() and run_migrations() at module scope and
+# importing the app therefore migrated whatever database that variable named.
+# DATA-H10 moved both into a lifespan handler, so importing the app now touches
+# nothing and the suite has no reason to care what the ambient value is.
 #
-# Point that import-time work at a throwaway file before importing the app.
-# The tests themselves do NOT use this database -- they use the in-memory
-# engine below, wired in via the get_db dependency override.
-#
-# Delete this block when DATA-H10 moves both calls into a lifespan handler.
-os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
-    tempfile.gettempdir(), "vector_test_import_sink.db"
-)
+# Nothing in the suite connects to backend.database.engine or
+# backend.migrations.engine, and refuse_connections_to_the_ambient_database
+# below is what keeps that true: the pin contained the damage, that fixture
+# reports it instead.
 os.environ.setdefault("SECRET_KEY", "test_secret_key")
 
 # --- SEC-H9 -----------------------------------------------------------------
@@ -32,8 +27,8 @@ os.environ.setdefault("SECRET_KEY", "test_secret_key")
 # ASSIGNED, not setdefault: the suite's correctness depends on this value, so it
 # must not yield to whatever the developer happens to have exported. With
 # setdefault, a shell carrying COOKIE_SECURE=true made three cookie tests fail
-# with a bare 401 and no indication why. Same reasoning as DATABASE_URL above;
-# SECRET_KEY differs precisely because any value works there.
+# with a bare 401 and no indication why. SECRET_KEY above is setdefault instead
+# precisely because any value works there.
 os.environ["COOKIE_SECURE"] = "false"
 # --------------------------------------------------------------------------
 
@@ -45,7 +40,7 @@ from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.database import Base, get_db, _enforce_sqlite_foreign_keys
-from backend import authz, clock, models
+from backend import authz, clock, database, migrations, models
 from backend.enums import Capability, Sensitivity
 import backend.security as security
 from datetime import timedelta
@@ -68,6 +63,44 @@ engine = create_engine(
 # because Alembic's batch mode cannot run under enforcement.
 event.listen(engine, "connect", _enforce_sqlite_foreign_keys)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def refuse_connections_to_the_ambient_database():
+    """Fail loudly if any test opens database.engine or migrations.engine.
+
+    Until DATA-H10 those two were harmless: this file pinned DATABASE_URL at a
+    throwaway file, so a test that reached them found a sink. The pin is gone
+    -- importing the app no longer needs one -- and the engines now address
+    whatever the environment names: the developer's real sql_app.db locally, a
+    live Postgres service in CI.
+
+    A test that connects there reads and writes real data while looking exactly
+    like a passing test. That is the failure the pin used to absorb, so
+    containment is replaced by detection rather than by nothing. Nothing in the
+    suite connects to either engine today; this is what keeps that true.
+
+    Tests that need a real engine build one over tmp_path, or monkeypatch the
+    module attribute before calling in -- which is what every run_migrations
+    test does, in test_group_schema.py and test_verification_backfill.py alike.
+    They are unaffected: monkeypatching the attribute never touches the Engine
+    object this listener is attached to.
+    """
+    def refuse(dbapi_connection, connection_record):
+        raise RuntimeError(
+            "a test opened a connection to the ambient DATABASE_URL "
+            f"({database.DATABASE_URL!r}) -- the real database on this machine. "
+            "Build an engine over tmp_path instead, or monkeypatch the module's "
+            "engine attribute before calling into it."
+        )
+
+    ambient = (database.engine, migrations.engine)
+    for target in ambient:
+        event.listen(target, "connect", refuse)
+    yield
+    for target in ambient:
+        event.remove(target, "connect", refuse)
+
 
 @pytest.fixture(scope="function")
 def db_session():

@@ -40,10 +40,10 @@ def _import_main(env_overrides, cwd=PROJECT_ROOT):
     sys.modules would hand back the cached one -- the import under test would
     never actually run.
 
-    The environment is built explicitly rather than inherited wholesale for
-    DATABASE_URL: conftest.py pins it at the suite's sink database, and
-    inheriting that would hand the child a database that opens fine, which is
-    the one thing these tests must not do.
+    DATABASE_URL is overridden rather than inherited: whatever the ambient
+    value names opens fine -- the repo's own sql_app.db locally, the Postgres
+    service in CI -- and handing the child a database that opens is the one
+    thing these tests must not do.
 
     The timeout is caught here rather than in each caller so that both absence
     tests name the defect when it returns, instead of reporting a bare

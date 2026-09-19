@@ -5,8 +5,8 @@ it. So these tests run it the way an operator does: `python -m backend.seed_data
 --reset` in a subprocess, against a throwaway database, with real migrations.
 Importing seed_matrix() and calling it in-process would test a different thing
 -- backend/seed_data.py binds its session at module scope to whatever
-DATABASE_URL said at import time, which the suite has already pointed at its own
-sink (conftest.py:16).
+DATABASE_URL said at import time, which since DATA-H10 is the ambient value:
+the repo's own sql_app.db locally, a deployment database anywhere else.
 
 What H1-4 claimed was an equivalence -- the group graph reproduces, over real
 seeded rows, exactly the visibility the path ladder produced. H1-5 deleted that

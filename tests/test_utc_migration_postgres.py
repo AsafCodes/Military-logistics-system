@@ -1,12 +1,13 @@
 """DATA-H1-2: the TIMESTAMPTZ migration preserves every instant it moves.
 
 The only Postgres-backed test in this suite, and it exists because nothing else
-here *can* be. tests/conftest.py assigns DATABASE_URL to SQLite at import time,
-so every other test -- including in CI, where the job sets a Postgres URL --
-runs against SQLite. A migration that is a deliberate no-op on SQLite and does
-all its work on Postgres is therefore invisible to the entire rest of the
-suite, and CI's `alembic upgrade head` step only proves the DDL parses against
-an EMPTY database. Neither notices timestamps being silently shifted.
+here *can* be. tests/conftest.py builds an in-memory SQLite engine and
+overrides the get_db dependency with it, so every other test -- including in
+CI, where the job sets a Postgres URL -- runs against SQLite. A migration that
+is a deliberate no-op on SQLite and does all its work on Postgres is therefore
+invisible to the entire rest of the suite, and CI's `alembic upgrade head` step
+only proves the DDL parses against an EMPTY database. Neither notices
+timestamps being silently shifted.
 
 WHY THE SESSION TIMEZONE IS SET TO SOMETHING WRONG
 --------------------------------------------------
