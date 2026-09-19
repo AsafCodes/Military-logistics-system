@@ -98,7 +98,7 @@ Marker_System/
 ├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
 ├── alembic/                    # Migration environment + versions/
 ├── requirements.txt            # Python dependencies
-├── .env / .env.example         # SECRET_KEY configuration
+├── .env / .env.example         # SECRET_KEY + DATABASE_URL configuration
 └── SYSTEM_MAP.md               # ← You are here
 ```
 
@@ -345,20 +345,20 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
-| `db` | `postgres:15-alpine` | `5432` | PostgreSQL database with persistent volume |
+| `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
 | `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn with hot-reload |
 | `frontend` | `frontend/Dockerfile` (Node) | `3000` | React dev server |
 
 ### Database Connection
 - **Docker:** `DATABASE_URL=postgresql://user:password@db:5432/military_db` (from env)
-- **Local fallback:** `sqlite:///./sql_app.db` (when `DATABASE_URL` not set)
+- **Local (host):** no fallback — `backend/database.py` raises at import when `DATABASE_URL` is missing or empty (DATA-H11). `sqlite:///./sql_app.db` is the suggested host value; see `.env.example`
 - **File:** `backend/database.py` — auto-detects SQLite vs PostgreSQL and adjusts `connect_args`
 
 ### Key Environment Variables
 | Variable | Where | Description |
 |----------|-------|-------------|
 | `SECRET_KEY` | `.env` | JWT signing key (required, crashes if missing) |
-| `DATABASE_URL` | `docker-compose.yml` | PostgreSQL connection string |
+| `DATABASE_URL` | `docker-compose.yml` (containers); `.env` or shell (host) | Connection string (required, crashes if missing) |
 | `VITE_API_URL` | `docker-compose.yml` | Backend URL for frontend Axios |
 | `SEED_ENABLED` | shell, per-run | Must be `1` for `seed_data.py` to run at all |
 | `BOOTSTRAP_ADMIN_ENABLED` | shell, per-run | Must be `1` for `bootstrap_admin.py` to create the first MASTER |

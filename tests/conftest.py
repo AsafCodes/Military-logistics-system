@@ -1,16 +1,38 @@
 import os
 
-# DATABASE_URL is deliberately NOT set here. It used to be, because
-# backend/main.py ran wait_for_db() and run_migrations() at module scope and
-# importing the app therefore migrated whatever database that variable named.
-# DATA-H10 moved both into a lifespan handler, so importing the app now touches
-# nothing and the suite has no reason to care what the ambient value is.
-#
-# Nothing in the suite connects to backend.database.engine or
-# backend.migrations.engine, and refuse_connections_to_the_ambient_database
-# below is what keeps that true: the pin contained the damage, that fixture
-# reports it instead.
 os.environ.setdefault("SECRET_KEY", "test_secret_key")
+
+# --- DATA-H11 ---------------------------------------------------------------
+# backend/database.py refuses to import without DATABASE_URL, and the imports
+# below reach it during COLLECTION -- so where nothing supplies one, removing
+# this line means `pytest` collects nothing at all: not one failing test, an
+# error.
+#
+# What counts as "supplied" is narrower than it looks, and was measured rather
+# than reasoned. This runs before that import, and load_dotenv() does not
+# override variables that are already set, so the pin BEATS a DATABASE_URL in
+# .env and yields only to one already exported. That is the useful split: .env
+# is where a developer names the database they actually work against and the
+# suite has no business addressing it, while an export is how CI names its
+# Postgres. test_app_startup.py pins both halves.
+#
+# sqlite:// -- in memory -- rather than an unopenable path, because
+# refuse_connections_to_the_ambient_database below reports through a `connect`
+# listener, and a driver that raises first means that listener never fires. An
+# unopenable URL would trade the fixture's message for an opaque
+# OperationalError. Nothing may connect here either way; the difference is only
+# what a test sees when something does.
+#
+# Not a revert of DATA-H10-2, which deleted an ASSIGNMENT to a writable temp
+# file that absorbed the migrations importing the app used to run. Nothing
+# writes to this one, and nothing can.
+#
+# Compensation, not a fix: the pin is only needed because this file imports
+# backend.main at module scope, so configuration is required at collection
+# time. Deferring those imports into fixtures would remove the need for it
+# entirely -- a suite-wide refactor, deliberately not attempted here.
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+# --------------------------------------------------------------------------
 
 # --- SEC-H9 -----------------------------------------------------------------
 # The session cookie defaults to Secure (see security._cookie_secure_from_env),
@@ -70,13 +92,13 @@ def refuse_connections_to_the_ambient_database():
     """Fail loudly if any test opens database.engine or migrations.engine.
 
     Until DATA-H10 those two were harmless: this file pinned DATABASE_URL at a
-    throwaway file, so a test that reached them found a sink. The pin is gone
-    -- importing the app no longer needs one -- and the engines now address
-    whatever the environment names: the developer's real sql_app.db locally, a
-    live Postgres service in CI.
+    throwaway file, so a test that reached them found a sink. That pin is gone.
+    DATA-H11 added a different one at the top of this file, but it only applies
+    where the environment is silent -- so these engines still address whatever
+    the environment names, and in CI that is a live Postgres service.
 
     A test that connects there reads and writes real data while looking exactly
-    like a passing test. That is the failure the pin used to absorb, so
+    like a passing test. That is the failure the old pin used to absorb, so
     containment is replaced by detection rather than by nothing. Nothing in the
     suite connects to either engine today; this is what keeps that true.
 
@@ -89,9 +111,10 @@ def refuse_connections_to_the_ambient_database():
     def refuse(dbapi_connection, connection_record):
         raise RuntimeError(
             "a test opened a connection to the ambient DATABASE_URL "
-            f"({database.DATABASE_URL!r}) -- the real database on this machine. "
-            "Build an engine over tmp_path instead, or monkeypatch the module's "
-            "engine attribute before calling into it."
+            f"({database.DATABASE_URL!r}) -- whatever database this environment "
+            "names, which in CI is a live one. Build an engine over tmp_path "
+            "instead, or monkeypatch the module's engine attribute before "
+            "calling into it."
         )
 
     ambient = (database.engine, migrations.engine)

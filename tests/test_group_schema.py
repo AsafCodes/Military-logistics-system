@@ -299,10 +299,11 @@ def test_the_application_enforces_foreign_keys_and_migrations_do_not(tmp_path, m
     Asserted WITHOUT connecting to either singleton. This test used to open
     database.engine and migrations.engine and read the pragma straight off
     them, which worked only because tests/conftest.py pinned DATABASE_URL at a
-    SQLite file. DATA-H10 deleted that pin, so those engines now address
-    whatever the environment names: the developer's real sql_app.db locally,
-    and in CI a Postgres service, where PRAGMA foreign_keys does not exist and
-    the old assertion would have failed for a dialect reason.
+    SQLite file it chose. Those engines now address whatever the environment
+    names -- in CI a Postgres service, where PRAGMA foreign_keys does not exist
+    and the old assertion would have failed for a dialect reason. DATA-H11's
+    pin does not restore the old guarantee: it yields to an exported variable,
+    which is exactly what CI sets, so it cannot be relied on to name SQLite.
 
     Neither assertion below is sufficient alone. event.contains reads the
     singletons' wiring without opening anything, and is what holds
