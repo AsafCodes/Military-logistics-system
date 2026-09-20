@@ -117,9 +117,13 @@ async def get_current_active_user(current_user: models.User = Depends(get_curren
 # The set is not a guess and it is not "everything on the model". It is exactly
 # what the three properties schemas.EquipmentResponse is built from traverse:
 #
-#     item_name                  -> catalog_item                 (models.py:147)
-#     current_state_description  -> holder, owner, location      (models.py:151)
-#     compliance_level / report_status -> columns only, nothing  (models.py:184)
+#     item_name                  -> catalog_item
+#     current_state_description  -> holder, owner, location
+#     compliance_level / report_status -> columns only, nothing
+#
+# All four are properties on models.Equipment; find them by name rather than by
+# line, which is what this comment used to give and which silently went wrong
+# the first time anything was inserted above them.
 #
 # Anything that changes what those properties read has to change this tuple in
 # the same breath. Read them together.

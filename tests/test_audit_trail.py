@@ -28,12 +28,14 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import backend
 from backend import audit_trail, models
-from backend.enums import ChangeReason, EventType
+from backend.enums import ChangeReason, EquipmentStatus, EventType
 from tests.conftest import create_auth_header
 
 BACKEND_ROOT = Path(backend.__file__).parent
@@ -923,22 +925,79 @@ def test_no_history_view_keeps_its_own_reason_vocabulary():
 # --- 6. Adverse input --------------------------------------------------------
 
 
-@pytest.mark.parametrize("corrupt", ["NULL", "''"], ids=["null", "empty_string"])
-def test_an_absent_status_is_refused_however_it_is_spelled(
-    client, db_session, mock_matrix_db, monkeypatch, corrupt
+def test_an_empty_status_is_refused_by_the_column_before_the_route_sees_it(
+    db_session, mock_matrix_db
 ):
-    """Both falsy spellings, because guarding one and not the other is the bug.
+    """The empty string half, which DATA-H12 moved one layer earlier.
 
-    NULL crashes loudly against a NOT NULL column; the empty string does not
-    crash at all -- it satisfies the constraint and writes a history row
+    This used to be the second parameter of the route-level test below, planting
+    `status = ''` by raw SQL. ck_equipment_status now refuses that write, so the
+    precondition can no longer be built and the case has to be asserted where it
+    is still reachable -- here for the column, and directly against set_status
+    for the guard.
+
+    Not deleted along with the reachable path, because the guard it covers is
+    the one that matters: NULL crashes loudly against a NOT NULL column, while
+    the empty string used to satisfy every constraint and write a history row
     claiming a transition out of nothing, quietly, into the table an
-    investigation reads. The silent one is the worse outcome, and a guard
-    written as `is None` catches only the loud one.
+    investigation reads. A guard written as `is None` catches only the loud one,
+    which is DATA-M1's defect exactly ("validation tests for explicit absence
+    while the branch tests for truthiness").
+    """
+    item = item_named(db_session, "SA100")
+    with pytest.raises(IntegrityError) as excinfo:
+        db_session.execute(
+            text("UPDATE equipment SET status = '' WHERE id = :id"), {"id": item.id}
+        )
+    db_session.rollback()
 
-    That asymmetry is DATA-M1's defect exactly ("validation tests for explicit
-    absence while the branch tests for truthiness"), catalogued elsewhere in
-    this same audit -- so shipping it here would have meant reintroducing a
-    known bug inside the fix for another one.
+    assert "ck_equipment_status" in str(excinfo.value)
+
+
+def test_set_status_still_refuses_both_falsy_spellings_itself(db_session, mock_matrix_db):
+    """set_status's own guard, pinned without the database's help.
+
+    The constraint above sits in FRONT of this guard, which means it masks it:
+    with `''` unwritable, `if not old_status` could be narrowed to
+    `if old_status is None` -- or deleted for the empty-string case entirely --
+    and nothing reaching the route would notice. That is the DATA-H7 shape, a
+    second layer quietly weakening the tests for the first, so the guard is
+    exercised directly rather than through a row that can no longer exist.
+
+    The 409 is asserted rather than the ValueError beside it because these are
+    deliberately different errors: an absent OLD status is a corrupt record,
+    which a conflict describes, while an absent NEW one is this module being
+    called wrongly. See set_status's docstring.
+    """
+    item = item_named(db_session, "SA100")
+    actor = db_session.query(models.User).first()
+
+    for absent in (None, ""):
+        item.status = absent
+        with pytest.raises(HTTPException) as excinfo:
+            audit_trail.set_status(
+                db_session,
+                equipment=item,
+                actor=actor,
+                new_status=EquipmentStatus.MALFUNCTIONING.value,
+                reason=ChangeReason.FAULT_REPORT,
+            )
+        assert excinfo.value.status_code == 409, (
+            f"an old status of {absent!r} was not refused as a corrupt record"
+        )
+
+    db_session.rollback()
+
+
+def test_an_absent_status_is_refused_however_it_is_spelled(
+    client, db_session, mock_matrix_db, monkeypatch
+):
+    """The NULL spelling, end to end through the route.
+
+    NULL is the spelling the database still admits -- a CHECK is satisfied by
+    NULL, and equipment.status stays nullable until DATA-M12 -- so this is the
+    one case that can still be planted and driven through create_verification.
+    The empty string is covered by the two tests above.
 
     Atomicity is asserted by counting COMMITS rather than rows, and that is not
     stylistic. create_verification flushes the Verification before it calls
@@ -951,7 +1010,7 @@ def test_an_absent_status_is_refused_however_it_is_spelled(
     """
     item = item_named(db_session, "SA100")
     db_session.execute(
-        text(f"UPDATE equipment SET status = {corrupt} WHERE id = :id"), {"id": item.id}
+        text("UPDATE equipment SET status = NULL WHERE id = :id"), {"id": item.id}
     )
     db_session.commit()
 

@@ -10,17 +10,19 @@ import enum
 class EquipmentStatus(str, enum.Enum):
     """The statuses an equipment record is meant to hold.
 
-    Enforced on the write paths, not by the column: it is still a plain String,
-    so a value from outside this enum remains reachable by hand-written SQL.
-    Analytics counts readiness by matching FUNCTIONAL exactly
-    (routers/analytics.py), so such a value still corrupts the metric.
+    Enforced by the column as of DATA-H12-1: equipment.status carries a
+    ck_equipment_status CHECK built from these members, as do the three other
+    columns holding this vocabulary (verifications.reported_status and both
+    ends of equipment_status_history). A value from outside this enum is no
+    longer reachable, by hand-written SQL or otherwise. That matters because
+    analytics counts readiness by matching FUNCTIONAL exactly
+    (routers/analytics.py), so one such value used to corrupt the metric
+    silently.
 
     "routers/maintenance.py assigns literals directly" was true of this
     docstring until DATA-H4-2, which cut report_fault and fix_equipment onto
-    audit_trail.set_status and made them pass members from here. Every
-    application path now writes a member; DATA-H12 is the ticket that
-    constrains the column and makes that true by construction rather than by
-    every caller remembering.
+    audit_trail.set_status. The column is what guarantees the vocabulary now,
+    rather than every caller remembering -- which is what DATA-H12 was for.
 
     These are the four options the verification form offers
     (frontend VerificationForm.tsx); keep the two in sync.
@@ -42,14 +44,18 @@ class Sensitivity(str, enum.Enum):
     Capability docstring below opens by warning about. Extending is one line
     the moment something real needs the distinction.
 
-    Constrains the RESPONSE, the REQUEST and the model default. The column is
-    still a plain String (models.py), so an out-of-vocabulary value remains
-    reachable by hand-written SQL -- DATA-H12 is the ticket that constrains the
-    column, and until it lands such a value fails validation loudly rather than
-    being silently reported as UNCLASSIFIED, which is the trade DATA-H3-1 makes
-    on purpose. See tests/test_sensitivity_contract.py for that behaviour, and
-    for the contrast with a bad value arriving on a REQUEST, which is refused
-    with a 422 before the route runs at all.
+    Constrains the RESPONSE, the REQUEST, the model default and -- as of
+    DATA-H12-1 -- the column itself, through ck_equipment_sensitivity. An
+    out-of-vocabulary value is no longer reachable even by hand-written SQL.
+
+    The response typing is still load-bearing and is NOT made redundant by the
+    constraint: it is the layer that fails CLOSED if a junk value ever does
+    appear, rather than reporting a record of unknown classification as
+    unclassified, which is the trade DATA-H3-1 made on purpose. Because the
+    constraint now sits in front of it, that behaviour is pinned against the
+    schema directly in tests/test_sensitivity_contract.py rather than through a
+    corrupt row -- see there also for a bad value arriving on a REQUEST, which
+    is refused with a 422 before the route runs at all.
 
     WRITABLE, as of DATA-H3-2: Capability.SET_SENSITIVITY gates both a
     dedicated PATCH route and the sensitivity clause of equipment creation, so
@@ -87,6 +93,42 @@ class Sensitivity(str, enum.Enum):
     """
     UNCLASSIFIED = "UNCLASSIFIED"
     CLASSIFIED = "CLASSIFIED"
+
+
+class TicketStatus(str, enum.Enum):
+    """The statuses a maintenance_logs row is meant to hold.
+
+    DATA-H12 moved this here from models.py, where it sat below a mid-file
+    `import enum` (DATA-L4) and was referenced by nothing at all -- the column
+    was a plain String defaulting to the bare literal "Open". DATA-M14 is the
+    entry that catalogues that, and its fix reads "either adopt it as the
+    column type or delete it"; this is the adopt half. Constraining the column
+    was not free to defer to it, because the delete half would have left the
+    column exactly as free-text as it started.
+
+    All four members are admitted by the check constraint, and two of them are
+    written by nothing today. That is deliberate, and each is a different case:
+
+      - IN_PROGRESS is offered as a filter tab by the maintenance page
+        (frontend MaintenancePage.tsx), so a client already asks for it. No
+        backend path assigns it, which makes the tab permanently empty -- a
+        product gap, not a vocabulary one. Admitting it means implementing that
+        tab is a route change rather than a migration.
+      - WAITING_PARTS appears nowhere else in this repository, frontend
+        included. It is kept because narrowing the vocabulary to what happens
+        to be written today would make the constraint a record of current
+        behaviour rather than of the domain, and because removing a member
+        later is a migration either way.
+
+    The two that ARE written are OPEN (this column's default, and report_fault)
+    and CLOSED (fix_equipment) -- both still as bare string literals in
+    routers/maintenance.py at the time of writing; DATA-H12-2 is what sources
+    them from here.
+    """
+    OPEN = "Open"
+    IN_PROGRESS = "In Progress"
+    WAITING_PARTS = "Waiting for Parts"
+    CLOSED = "Closed"
 
 
 class EventType(str, enum.Enum):

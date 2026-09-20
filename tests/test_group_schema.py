@@ -18,14 +18,15 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from alembic.script import ScriptDirectory
 from sqlalchemy import UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
-from alembic.script import ScriptDirectory
 from backend import authz, database, migrations, models
 from backend.database import Base
 from backend.enums import Capability, GroupKind
+from tests.conftest import recorded
 
 BASELINE_REVISION = "4acc9d5f6339"
 # The revision that added the group tables, before H1-11 dropped the legacy
@@ -37,6 +38,11 @@ GROUPS_REVISION = migrations.REVISION_BEFORE_LEGACY_DROP
 # now that H1-12 lands more migrations after it and would otherwise drop
 # battalion/company out from under an assertion about H1-11 specifically.
 LEGACY_DROP_REVISION = "c93f2a615d84"
+# The last revision before DATA-H12's check constraints -- DATA-H5-2's
+# backfill, and the same revision migrations.BASELINE_STAMP sits one behind.
+# A database here has today's tables and none of the vocabulary constraints,
+# which is the only state in which a row holding a bad status can be planted.
+CONSTRAINTS_REVISION_PARENT = "6f821fc450b8"
 
 NEW_TABLES = ("groups", "group_edges", "group_closure", "group_memberships", "grants")
 
@@ -51,7 +57,7 @@ def _upgrade(engine, revision):
 
     begin(), not connect(): Alembic runs inside the caller's transaction when
     handed a connection, so the alembic_version write needs a commit at exit
-    (backend/migrations.py:59).
+    (see run_migrations, which wraps the same call in engine.begin()).
     """
     cfg = migrations.alembic_config()
     with engine.begin() as conn:
@@ -635,9 +641,17 @@ def test_the_baseline_revision_is_chosen_by_what_the_schema_carries(tmp_path):
     the function returned the right answer for the wrong reason. This pins the
     rule for each: unit_hierarchy present means the oldest shape, profiles
     present (with it already gone) means the middle one, and neither present
-    means the newest SCHEMA revision -- not head, because a schema that matches
-    the models says nothing about whether a data-only revision has run
-    (DATA-H5-2, and migrations.LAST_SCHEMA_REVISION).
+    means the baseline stamp -- not head, because a schema that matches the
+    models says nothing about whether a data-only revision has run
+    (DATA-H5-2, and migrations.BASELINE_STAMP).
+
+    The last branch is UNCONDITIONAL, and a create_all database is the shape
+    that proves it has to be. Since DATA-H12 such a database carries check
+    constraints that a pre-Alembic one built years ago does not, which makes it
+    tempting to read them as evidence and stamp this shape later. The branch
+    deliberately does not: see baseline_revision's docstring, and
+    tests/test_verification_backfill.py for the database that carries the
+    constraints and still needs the backfill.
     """
     legacy = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
     _upgrade(legacy, GROUPS_REVISION)
@@ -654,7 +668,7 @@ def test_the_baseline_revision_is_chosen_by_what_the_schema_carries(tmp_path):
     modern = create_engine(f"sqlite:///{tmp_path / 'modern.db'}")
     Base.metadata.create_all(bind=modern)
     with modern.connect() as conn:
-        assert migrations.baseline_revision(inspect(conn)) == migrations.LAST_SCHEMA_REVISION
+        assert migrations.baseline_revision(inspect(conn)) == migrations.BASELINE_STAMP
     modern.dispose()
 
 
@@ -726,15 +740,26 @@ def schema_work_in_upgrade(source):
 
 
 def test_no_revision_after_the_schema_marker_touches_schema():
-    """LAST_SCHEMA_REVISION cannot quietly fall behind the chain it names.
+    """A revision after the stamp must move data, or survive being re-run.
 
-    baseline_revision stamps a modern create_all database at that revision, so
+    baseline_revision stamps a modern create_all database at BASELINE_STAMP, so
     every revision after it RUNS against a database that already has today's
-    schema. That is correct exactly while those revisions only move data: a
-    schema revision landing after the marker without the constant moving with
-    it would re-add a column that is already there and fail at startup -- the
-    loud half of the asymmetry baseline_revision's docstring describes, but
-    still a broken start for whoever meets it.
+    schema. That is automatically correct while those revisions only move data.
+    A schema revision landing there re-applies DDL to a database that already
+    has it, which is loud on Postgres and SILENT on SQLite -- batch_alter_table
+    reflects the existing table and collapses a duplicate constraint into the
+    original, so the suite stays green while a deployment breaks.
+
+    DATA-H12 needed such a revision and could not avoid it: the chain already
+    had a data-only revision at its head, so any new schema revision lands
+    after the stamp. Moving the stamp instead is the one thing that must not
+    happen -- it tells every legacy database DATA-H5-2's backfill already ran.
+    So the escape is an explicit allowlist of revisions that tolerate a re-run,
+    and this guard admits those and nothing else.
+
+    The allowlist is not taken on trust: the test below applies each name in it
+    twice and asserts the second run is a no-op. This one answers "is it
+    allowed", that one answers "is it actually safe", and an entry needs both.
 
     Checked by walking the revisions rather than by trusting a comment, in the
     same spirit as tests/test_audit_trail.py's AST guards: the constant is
@@ -747,26 +772,213 @@ def test_no_revision_after_the_schema_marker_touches_schema():
     newer = []
     found_marker = False
     for rev in script.walk_revisions("base", "heads"):
-        if rev.revision == migrations.LAST_SCHEMA_REVISION:
+        if rev.revision == migrations.BASELINE_STAMP:
             found_marker = True
             break
         newer.append(rev)
 
     assert found_marker, (
-        f"migrations.LAST_SCHEMA_REVISION names {migrations.LAST_SCHEMA_REVISION}, "
+        f"migrations.BASELINE_STAMP names {migrations.BASELINE_STAMP}, "
         "which is not a revision in the chain at all"
     )
 
     offenders = []
     for rev in newer:
+        if rev.revision in migrations.IDEMPOTENT_SCHEMA_REVISIONS:
+            continue
         source = Path(rev.module.__file__).read_text(encoding="utf-8")
         offenders += [f"{rev.revision}: {found}" for found in schema_work_in_upgrade(source)]
 
     assert offenders == [], (
-        "a revision after migrations.LAST_SCHEMA_REVISION changes schema, so a "
-        "pre-Alembic database stamped at that marker would be told it already "
-        f"has DDL it has never run: {offenders}"
+        "a revision after migrations.BASELINE_STAMP changes schema, so a "
+        "pre-Alembic database stamped there would be told it already has DDL "
+        "it has never run. Either that revision must only move data, or it "
+        "must tolerate being re-run and be named in "
+        f"migrations.IDEMPOTENT_SCHEMA_REVISIONS: {offenders}"
     )
+
+
+def test_every_allowlisted_revision_actually_survives_a_second_run(tmp_path):
+    """The allowlist is a claim about behaviour, so check the behaviour.
+
+    IDEMPOTENT_SCHEMA_REVISIONS lets a revision past the guard above. An entry
+    added without the property it asserts would buy exactly the silent failure
+    that guard exists to catch, and nothing else in the suite would notice --
+    the re-run happens only on a database that already has the changes, which
+    is not the shape the migration tests build.
+
+    Applied twice against one database, asserting the second run EMITS NO DDL.
+    Neither weaker check works, and finding that out took a mutation: on SQLite
+    batch_alter_table reflects the existing table and collapses a duplicate
+    constraint into the original, so re-running a revision with no skip at all
+    raises nothing AND leaves the schema identical. This test asserted exactly
+    those two things first, and a revision stripped of its skip sailed through
+    it. What separates the two cases is whether the work is DONE again, not
+    whether the result differs -- and on Postgres that same re-run is a
+    DuplicateObject at startup, which no test in this suite would reach.
+
+    Deliberately not parametrized over the set: the whole set has to run in
+    CHAIN order against one database, so a later revision meets the state an
+    earlier one leaves. `sorted()` would not give that -- revision ids are
+    hex and sort lexicographically, which has nothing to do with the chain --
+    so the order comes from walk_revisions, reversed to run oldest first.
+    """
+    assert migrations.IDEMPOTENT_SCHEMA_REVISIONS, (
+        "nothing is allowlisted, so this test is asserting nothing -- delete it "
+        "together with the allowlist rather than leaving it to look like cover"
+    )
+
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    in_chain_order = allowlisted_in_chain_order(script)
+    unknown = migrations.IDEMPOTENT_SCHEMA_REVISIONS - set(in_chain_order)
+    assert unknown == set(), (
+        f"IDEMPOTENT_SCHEMA_REVISIONS names revisions not in the chain: {sorted(unknown)}"
+    )
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'twice.db'}")
+    _upgrade(engine, "head")
+    before = _schema_snapshot(engine)
+
+    with recorded(engine) as statements:
+        for revision in in_chain_order:
+            with engine.begin() as conn:
+                _rerun_upgrade(conn, script, revision)
+
+    after = _schema_snapshot(engine)
+    engine.dispose()
+
+    ddl = [
+        s for s in statements
+        if any(verb in s.upper() for verb in ("CREATE TABLE", "ALTER TABLE", "DROP TABLE"))
+    ]
+    assert ddl == [], (
+        "re-running an allowlisted revision emitted DDL against a database that "
+        "already has its changes. SQLite absorbs that; Postgres raises at "
+        f"startup. The revision needs to detect its own work and skip it: {ddl}"
+    )
+    assert after == before, (
+        "re-running an allowlisted revision changed the schema, so it is not "
+        f"idempotent: {sorted(k for k in after if after[k] != before.get(k))}"
+    )
+
+
+def test_the_migration_refuses_rows_outside_the_vocabulary(tmp_path):
+    """The pre-flight guard, fired on purpose. DATA-H12.
+
+    Postgres validates existing rows as part of ADD CONSTRAINT, so without this
+    check a database holding one bad status fails the upgrade with a constraint
+    name and no row attached to it. The transaction rolls back either way; what
+    the pre-flight buys is a message naming the rows, and naming all of them.
+
+    Written because the guard survived a mutation otherwise: deleting the
+    refusal entirely left the whole suite green, since every other migration
+    test builds its rows through code that already writes enum members. A guard
+    nothing fires is a guard nothing is holding.
+
+    Two bad rows in two different tables, asserted together, because the
+    revision collects every violation before raising rather than stopping at
+    the first -- an operator who has to re-run once per bad row is the other
+    failure this avoids.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'dirty.db'}")
+    _upgrade(engine, CONSTRAINTS_REVISION_PARENT)
+
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO groups (id, name, kind) VALUES (1, '188', 'UNIT')"))
+        conn.execute(text("INSERT INTO catalog_items (id, name) VALUES (1, 'M4')"))
+        conn.execute(text(
+            "INSERT INTO equipment (id, catalog_item_id, group_id, status, serial_number)"
+            " VALUES (7, 1, 1, 'Functinoal', 'SN-BAD')"
+        ))
+        conn.execute(text(
+            "INSERT INTO equipment (id, catalog_item_id, group_id, status, serial_number)"
+            " VALUES (8, 1, 1, 'Functional', 'SN-OK')"
+        ))
+        conn.execute(text(
+            "INSERT INTO maintenance_logs (id, equipment_id, status) VALUES (3, 8, 'Pending')"
+        ))
+
+    before = _schema_snapshot(engine)
+    with pytest.raises(RuntimeError) as excinfo:
+        _upgrade(engine, "head")
+    message = str(excinfo.value)
+    after = _schema_snapshot(engine)
+    engine.dispose()
+
+    assert "equipment.status #7" in message and "Functinoal" in message, message
+    assert "maintenance_logs.status #3" in message and "Pending" in message, (
+        "only the first table's violations were reported, so an operator learns "
+        f"about the rest one re-run at a time: {message}"
+    )
+    assert "SN-OK" not in message and "#8" not in message, (
+        f"a row holding a valid status was named as a violation: {message}"
+    )
+    assert after == before, "the refusal changed the schema; it must change nothing"
+
+
+def test_a_legacy_row_holding_null_does_not_block_the_upgrade(tmp_path):
+    """The refusal's other half: what it must NOT stop.
+
+    equipment.status is nullable and a CHECK is satisfied by NULL, so a legacy
+    database carrying NULLs is compliant with the new constraint and has to be
+    able to migrate. A pre-flight written to refuse "anything that is not a
+    member" rather than "anything that is a non-member" would refuse exactly
+    those databases -- turning a constraint nobody violates into an upgrade
+    nobody can run, discovered on the deploy rather than here.
+
+    This is the false-positive companion to the test above, and the pair is the
+    point: one shows the guard fires, this shows it fires only when it should.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'nulls.db'}")
+    _upgrade(engine, CONSTRAINTS_REVISION_PARENT)
+
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO groups (id, name, kind) VALUES (1, '188', 'UNIT')"))
+        conn.execute(text("INSERT INTO catalog_items (id, name) VALUES (1, 'M4')"))
+        conn.execute(text(
+            "INSERT INTO equipment (id, catalog_item_id, group_id, status, sensitivity)"
+            " VALUES (1, 1, 1, NULL, NULL)"
+        ))
+
+    _upgrade(engine, "head")
+
+    with engine.connect() as conn:
+        survived = conn.execute(text("SELECT status, sensitivity FROM equipment")).one()
+    names = {c["name"] for c in inspect(engine).get_check_constraints("equipment")}
+    engine.dispose()
+
+    assert survived == (None, None), "the migration rewrote a NULL it was asked to leave alone"
+    assert "ck_equipment_status" in names, "the upgrade did not actually run"
+
+
+def allowlisted_in_chain_order(script):
+    """migrations.IDEMPOTENT_SCHEMA_REVISIONS, oldest revision first.
+
+    walk_revisions yields newest first, so this reverses it. Shared with the
+    Postgres half of this check in tests/test_utc_migration_postgres.py, which
+    needs the same ordering for the same reason and must not re-derive it.
+    """
+    chain = [rev.revision for rev in script.walk_revisions("base", "heads")]
+    chain.reverse()
+    return [r for r in chain if r in migrations.IDEMPOTENT_SCHEMA_REVISIONS]
+
+
+def _rerun_upgrade(conn, script, revision):
+    """Run one revision's upgrade() again, against an already-migrated database.
+
+    Alembic will not replay an applied revision through `command.upgrade`, and
+    that is the whole situation being tested: baseline_revision hands a legacy
+    database a stamp that predates this revision, so Alembic runs it against a
+    schema that may already carry its changes. Driving upgrade() directly with
+    a MigrationContext bound to the live connection reproduces exactly that,
+    without faking the version table.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    context = MigrationContext.configure(conn)
+    with Operations.context(context):
+        script.get_revision(revision).module.upgrade()
 
 
 PLANTED_SCHEMA_WORK = {
@@ -822,13 +1034,77 @@ def test_the_schema_marker_guard_ignores_a_data_only_revision():
     assert schema_work_in_upgrade(source) == []
 
 
+def _schema_snapshot(engine):
+    """Everything about a schema that two ways of building it must agree on.
+
+    Column ORDER is excluded: ALTER TABLE ADD COLUMN always appends, so a
+    migrated `equipment` carries group_id last while create_all places it as
+    declared. That difference is unavoidable and harmless to a named-column ORM.
+
+    CHECK CONSTRAINTS are included as of DATA-H12, and that is what makes an
+    enum and a migration unable to drift apart quietly. The models generate
+    their constraint text from backend/enums.py; a revision freezes its
+    literals. Add a member to EquipmentStatus without writing a revision and
+    create_all starts emitting a vocabulary `head` does not -- this comparison
+    is the only thing that notices. Expect this test, not a failing feature, to
+    be what tells you a migration is missing.
+
+    The text is compared with whitespace collapsed and nothing else normalized.
+    Quoting and case are left alone on purpose: they are what carries the
+    vocabulary, so normalizing them would keep the constraint's SHAPE pinned
+    while letting its MEANING drift, which is the opposite of the point. This
+    only works because both sides here are SQLite, which reflects the literal
+    source text -- Postgres answers through pg_get_constraintdef and rewrites
+    `IN (...)` as `= ANY (ARRAY[...])`, so anything comparing across dialects
+    must match on constraint NAME alone.
+    """
+    insp = inspect(engine)
+    out = {}
+    for table in insp.get_table_names():
+        if table == "alembic_version":
+            continue
+        out[table] = {
+            "columns": sorted((c["name"], str(c["type"]), c["nullable"]) for c in insp.get_columns(table)),
+            # options carries ondelete/onupdate, and the constraint name is
+            # what downgrade()'s drop_constraint targets on Postgres.
+            # Comparing only columns/referred_table would let the migration
+            # lose every ondelete rule with the suite still green -- the one
+            # promise H1-1 leads with, unpinned on the side that ships.
+            "foreign_keys": sorted(
+                (
+                    tuple(fk["constrained_columns"]),
+                    fk["referred_table"],
+                    tuple(fk["referred_columns"]),
+                    fk.get("name"),
+                    tuple(sorted((fk.get("options") or {}).items())),
+                )
+                for fk in insp.get_foreign_keys(table)
+            ),
+            "indexes": sorted((i["name"], tuple(i["column_names"]), i["unique"]) for i in insp.get_indexes(table)),
+            "pk": tuple(insp.get_pk_constraint(table)["constrained_columns"]),
+            "unique": sorted(
+                (u.get("name"), tuple(u["column_names"])) for u in insp.get_unique_constraints(table)
+            ),
+            # Unnamed constraints are dropped rather than compared: SQLite
+            # reflects them as name=None with no stable identity to line up
+            # across two databases. Everything this repository declares is
+            # named, and models._one_of is why -- an unnamed CHECK would also
+            # be invisible to the revision's own by-name skip.
+            "checks": sorted(
+                (c["name"], " ".join(c["sqltext"].split()))
+                for c in insp.get_check_constraints(table)
+                if c.get("name")
+            ),
+        }
+    return out
+
+
 def test_migration_and_create_all_build_the_same_schema(tmp_path):
     """The suite builds its schema with create_all; CI and production migrate.
 
     Any divergence means tests pass against a schema that is not the one that
-    ships. Column ORDER is excluded: ALTER TABLE ADD COLUMN always appends, so
-    a migrated `equipment` carries group_id last while create_all places it as
-    declared. That difference is unavoidable and harmless to a named-column ORM.
+    ships. What is compared, and what is deliberately not, is in
+    _schema_snapshot.
     """
     migrated = create_engine(f"sqlite:///{tmp_path / 'migrated.db'}")
     _upgrade(migrated, "head")
@@ -836,38 +1112,7 @@ def test_migration_and_create_all_build_the_same_schema(tmp_path):
     created = create_engine(f"sqlite:///{tmp_path / 'created.db'}")
     Base.metadata.create_all(bind=created)
 
-    def snapshot(engine):
-        insp = inspect(engine)
-        out = {}
-        for table in insp.get_table_names():
-            if table == "alembic_version":
-                continue
-            out[table] = {
-                "columns": sorted((c["name"], str(c["type"]), c["nullable"]) for c in insp.get_columns(table)),
-                # options carries ondelete/onupdate, and the constraint name is
-                # what downgrade()'s drop_constraint targets on Postgres.
-                # Comparing only columns/referred_table would let the migration
-                # lose every ondelete rule with the suite still green -- the one
-                # promise H1-1 leads with, unpinned on the side that ships.
-                "foreign_keys": sorted(
-                    (
-                        tuple(fk["constrained_columns"]),
-                        fk["referred_table"],
-                        tuple(fk["referred_columns"]),
-                        fk.get("name"),
-                        tuple(sorted((fk.get("options") or {}).items())),
-                    )
-                    for fk in insp.get_foreign_keys(table)
-                ),
-                "indexes": sorted((i["name"], tuple(i["column_names"]), i["unique"]) for i in insp.get_indexes(table)),
-                "pk": tuple(insp.get_pk_constraint(table)["constrained_columns"]),
-                "unique": sorted(
-                    (u.get("name"), tuple(u["column_names"])) for u in insp.get_unique_constraints(table)
-                ),
-            }
-        return out
-
-    a, b = snapshot(migrated), snapshot(created)
+    a, b = _schema_snapshot(migrated), _schema_snapshot(created)
     migrated.dispose()
     created.dispose()
 

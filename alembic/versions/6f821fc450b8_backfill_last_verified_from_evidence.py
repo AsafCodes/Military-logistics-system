@@ -55,12 +55,19 @@ all three columns are TIMESTAMPTZ on Postgres and naive ISO-8601 text on
 SQLite, and the comparison in the second statement is correct within either.
 
 THIS REVISION IS DATA-ONLY, AND THAT IS LOAD-BEARING rather than incidental.
-backend.migrations.LAST_SCHEMA_REVISION names the revision before it, so a
+backend.migrations.BASELINE_STAMP names the revision before it, so a
 pre-Alembic database is stamped there and this one still runs -- which is the
 only reason the repair reaches the legacy databases that need it. Adding DDL
-here, or to any revision after that marker, breaks that arrangement and is
-refused by tests/test_group_schema.py's staleness guard. A schema change after
-this point needs the marker moved with it.
+here breaks that arrangement and is refused by tests/test_group_schema.py's
+staleness guard.
+
+A SCHEMA CHANGE AFTER THIS POINT MUST NOT MOVE THE STAMP, which is the
+opposite of what this paragraph said until DATA-H12 and the reason the
+constant was renamed. Advancing it past this revision is precisely how a
+legacy database gets told this backfill already ran. Such a revision instead
+has to tolerate running against a database that already has its changes, and
+be named in backend.migrations.IDEMPOTENT_SCHEMA_REVISIONS; d3a9c17be540 is
+the first, and its docstring carries the reasoning.
 
 The AST guard in tests/test_audit_trail.py -- "only audit_trail.py may assign
 last_verified_at" -- walks backend/ and does not see this file. That is right

@@ -32,8 +32,8 @@ import pytest
 import sqlalchemy.orm
 
 from backend import models
+from backend.enums import ChangeReason
 from tests.conftest import create_auth_header
-
 
 # --- fixture construction ---------------------------------------------------
 
@@ -118,7 +118,7 @@ def _stock_history(db_session, equipment_id, n, *, start=0):
 
         db_session.add(models.EquipmentStatusHistory(
             equipment_id=equipment_id, old_status="Functional",
-            new_status="Functional", change_reason="VERIFICATION",
+            new_status="Functional", change_reason=ChangeReason.VERIFICATION.value,
             verification_id=verification.id, notes=f"note {i}",
             created_by=author.id,
         ))
@@ -300,10 +300,11 @@ def test_location_is_live_on_my_equipment_despite_the_holder_filter(
     can never be read -- therefore two of the four loads are dead weight there
     and the route should get a narrower tuple.
 
-    It misreads the property. models.py:169 returns early only when holder and
-    owner DIFFER. For kit you both hold and own -- the ordinary case on a "my
-    equipment" page -- that test is false, control falls through to
-    models.py:176, and `self.location` IS read. Narrowing the tuple would
+    It misreads the property. Equipment.current_state_description returns early
+    only when holder and owner DIFFER. For kit you both hold and own -- the
+    ordinary case on a "my equipment" page -- that test is false, control falls
+    through to its location branch, and `self.location` IS read. Narrowing the
+    tuple would
     reintroduce exactly the fan-out this ticket closed, on the most common row
     shape the route serves.
 

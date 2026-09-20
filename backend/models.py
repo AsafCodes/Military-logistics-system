@@ -1,9 +1,8 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float
-from sqlalchemy.orm import relationship
+import enum
 from datetime import timedelta
-from .database import Base # Use shared Base from backend package
-from .enums import EquipmentStatus, Sensitivity
-from . import clock
+
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
 
 # Imported for its side effect: it registers the group algebra tables on
 # Base.metadata, which is how alembic/env.py and the test suite's create_all()
@@ -11,7 +10,45 @@ from . import clock
 # declared by table-name string -- so the import direction is free. The
 # 'groups.id' target below is resolved lazily, when DDL is emitted or a join is
 # built, not at mapper configuration.
-from . import authz  # noqa: F401
+from . import (
+    authz,  # noqa: F401
+    clock,
+)
+from .database import Base  # Use shared Base from backend package
+from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+
+
+def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
+    """A CHECK that admits exactly this enum's values, and NULL.
+
+    DATA-H12. Generated from the enum rather than repeated beside it, so
+    create_all always emits today's vocabulary and adding a member cannot leave
+    the constraint describing the old one. The Alembic revision that ships this
+    deliberately does NOT call this function -- a revision is a snapshot of what
+    was true when it was written, not a view of the current models, so it
+    inlines its literals. The two are therefore free to drift, which is the
+    whole point: test_group_schema.py compares a migrated schema against a
+    create_all one and goes red when they do.
+
+    NULL PASSES, in SQL and by intent. A CHECK is satisfied by NULL, so this
+    constrains WHICH string a column may hold and says nothing about whether it
+    must hold one. equipment.status and equipment.sensitivity are both still
+    nullable; DATA-M12 owns non-null constraints and the backfill decision they
+    need. Pinned by a test rather than left to be rediscovered.
+
+    Interpolates rather than binds, because DDL cannot take bind parameters --
+    which makes the values' own spelling load-bearing. Quoted by doubling any
+    apostrophe, which is SQL's own escape and what the revision does; repr()
+    reads more naturally here and is wrong, because Python switches to DOUBLE
+    quotes for a string containing an apostrophe and Postgres reads a
+    double-quoted token as an identifier. A test asserts no value needs the
+    escape at all, so this is the second of two guards rather than the only
+    one; it lives here because a value that needs it should still emit valid
+    SQL rather than depending on the test having been run.
+    """
+    allowed = ", ".join("'" + member.value.replace("'", "''") + "'" for member in values)
+    return CheckConstraint(f"{column} IN ({allowed})", name=name)
+
 
 # --- Users & Authentication ---
 class User(Base):
@@ -79,7 +116,15 @@ class Location(Base):
 
 class Equipment(Base):
     __tablename__ = 'equipment'
-    
+
+    # DATA-H12. The two columns this table carries that are a vocabulary rather
+    # than free text. Until this landed, analytics.unit_readiness counted one
+    # exact literal against a column that would accept any typo of it.
+    __table_args__ = (
+        _one_of('status', EquipmentStatus, 'ck_equipment_status'),
+        _one_of('sensitivity', Sensitivity, 'ck_equipment_sensitivity'),
+    )
+
     id = Column(Integer, primary_key=True, index=True) 
     serial_number = Column(String, unique=True, nullable=True) 
     
@@ -237,11 +282,16 @@ class FaultType(Base):
 
 class MaintenanceLog(Base):
     __tablename__ = 'maintenance_logs'
+
+    __table_args__ = (
+        _one_of('status', TicketStatus, 'ck_maintenance_logs_status'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     equipment_id = Column(Integer, ForeignKey('equipment.id'))
     fault_type_id = Column(Integer, ForeignKey('fault_types.id'))
     description = Column(String)
-    status = Column(String, default="Open") 
+    status = Column(String, default=TicketStatus.OPEN.value)
     opened_at = Column(clock.UtcDateTime, default=clock.utcnow)
     closed_at = Column(clock.UtcDateTime, nullable=True)
     
@@ -270,7 +320,11 @@ class DailyStats(Base):
 class Verification(Base):
     """Records equipment verification events."""
     __tablename__ = 'verifications'
-    
+
+    __table_args__ = (
+        _one_of('reported_status', EquipmentStatus, 'ck_verifications_reported_status'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False)
     verification_type = Column(String, nullable=False)
@@ -287,7 +341,24 @@ class Verification(Base):
 class EquipmentStatusHistory(Base):
     """Audit trail for equipment status changes."""
     __tablename__ = 'equipment_status_history'
-    
+
+    # Both ends of the transition, because a history row asserting a move out
+    # of a status that never existed is as corrupt as one asserting a move into
+    # it -- and the reason beside them, which is the column that says WHY the
+    # row exists and was the last free-text field left in this table.
+    #
+    # change_reason was left out of DATA-H12's own list and added right after,
+    # deliberately rather than by widening the ticket: it is not a status, so
+    # the ticket's title does not reach it, but it is the same defect and it
+    # has an enum already. Two test fixtures were writing values outside that
+    # enum when the constraint went on -- 'probe', and 'VERIFICATION' in the
+    # wrong case -- which is the evidence that nothing was enforcing it.
+    __table_args__ = (
+        _one_of('old_status', EquipmentStatus, 'ck_equipment_status_history_old_status'),
+        _one_of('new_status', EquipmentStatus, 'ck_equipment_status_history_new_status'),
+        _one_of('change_reason', ChangeReason, 'ck_equipment_status_history_change_reason'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False)
     old_status = Column(String, nullable=False)
@@ -301,12 +372,3 @@ class EquipmentStatusHistory(Base):
     equipment = relationship("Equipment", backref="status_history")
     verification = relationship("Verification", backref="status_changes")
     user = relationship("User", foreign_keys=[created_by])
-
-
-# --- Ticket Status Enum ---
-import enum
-class TicketStatus(str, enum.Enum):
-    OPEN = "Open"
-    IN_PROGRESS = "In Progress"
-    WAITING_PARTS = "Waiting for Parts"
-    CLOSED = "Closed"
