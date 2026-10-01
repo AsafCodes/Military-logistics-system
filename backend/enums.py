@@ -17,7 +17,15 @@ class EquipmentStatus(str, enum.Enum):
     longer reachable, by hand-written SQL or otherwise. That matters because
     analytics counts readiness by matching FUNCTIONAL exactly
     (routers/analytics.py), so one such value used to corrupt the metric
-    silently.
+    silently. As of DATA-H12-2 that count reads the member below rather than a
+    bare literal of its own, so the two sides of the comparison cannot drift
+    apart the way a fifth member or a changed spelling would have let them.
+
+    Also the type of every response field carrying this vocabulary
+    (schemas.EquipmentResponse.status, VerificationResponse.reported_status,
+    StatusHistoryResponse's two ends) and of the /reports/query status filter,
+    all DATA-H12-2. A request naming a status outside this enum is refused with
+    a 422 before the route runs.
 
     "routers/maintenance.py assigns literals directly" was true of this
     docstring until DATA-H4-2, which cut report_fault and fix_equipment onto
@@ -121,9 +129,10 @@ class TicketStatus(str, enum.Enum):
         later is a migration either way.
 
     The two that ARE written are OPEN (this column's default, and report_fault)
-    and CLOSED (fix_equipment) -- both still as bare string literals in
-    routers/maintenance.py at the time of writing; DATA-H12-2 is what sources
-    them from here.
+    and CLOSED (fix_equipment). Both were bare string literals in
+    routers/maintenance.py until DATA-H12-2, which sources them from here --
+    along with the ticket-list filter, which is typed to this enum and so
+    answers 422 for a status outside it rather than 200 with an empty list.
     """
     OPEN = "Open"
     IN_PROGRESS = "In Progress"

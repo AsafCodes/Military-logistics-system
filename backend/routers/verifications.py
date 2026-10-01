@@ -119,11 +119,17 @@ async def create_verification(
     # the reason it cannot move. audit_trail.set_status owns both halves of the
     # change now -- the assignment and the row -- so the "did the status
     # actually move" question is asked once, there, rather than at each caller.
+    #
+    # DATA-H12-2. The MEMBER here, not the `reported_status` string built at
+    # the top of this route: set_status is annotated EquipmentStatus and
+    # enforces it, and the local is the spelling the Verification COLUMN wants.
+    # They are the same vocabulary in two shapes, and passing each where it
+    # belongs is what keeps the annotation honest.
     audit_trail.set_status(
         db,
         equipment=equipment,
         actor=current_user,
-        new_status=reported_status,
+        new_status=data.reported_status,
         reason=ChangeReason.VERIFICATION,
         notes=data.findings,
         verification_id=verification.id,

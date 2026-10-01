@@ -8,7 +8,7 @@ from .database import DATABASE_URL, SessionLocal, engine
 from . import authz
 from . import models
 from . import security
-from .enums import Capability
+from .enums import Capability, EquipmentStatus
 from .migrations import run_migrations
 import os
 import sys
@@ -412,29 +412,29 @@ def seed_matrix(reset=False):
     items = []
 
     items.append(models.Equipment(
-        catalog_item_id=catalogs[0].id, status="Functional", **belongs_to("188"),
+        catalog_item_id=catalogs[0].id, status=EquipmentStatus.FUNCTIONAL.value, **belongs_to("188"),
         holder_user_id=u_brig_cmdr.id, owner_user_id=u_brig_cmdr.id, serial_number="BRIG-001"
     ))
 
     items.append(models.Equipment(
-        catalog_item_id=catalogs[1].id, status="Functional", **belongs_to("188/53"),
+        catalog_item_id=catalogs[1].id, status=EquipmentStatus.FUNCTIONAL.value, **belongs_to("188/53"),
         holder_user_id=u_bn_cmdr.id, owner_user_id=u_bn_cmdr.id, serial_number="BAT-001"
     ))
 
     for i in range(10):
         items.append(models.Equipment(
-            catalog_item_id=catalogs[i % 5].id, status="Functional", **belongs_to("188/53/A"),
+            catalog_item_id=catalogs[i % 5].id, status=EquipmentStatus.FUNCTIONAL.value, **belongs_to("188/53/A"),
             holder_user_id=u_co_cmdr_a.id, owner_user_id=u_co_cmdr_a.id, serial_number=f"CO-A-{i}"
         ))
 
     for i in range(10):
         items.append(models.Equipment(
-            catalog_item_id=catalogs[i % 5].id, status="Functional", **belongs_to("188/53/B"),
+            catalog_item_id=catalogs[i % 5].id, status=EquipmentStatus.FUNCTIONAL.value, **belongs_to("188/53/B"),
             holder_user_id=u_co_cmdr_b.id, owner_user_id=u_co_cmdr_b.id, serial_number=f"CO-B-{i}"
         ))
 
     items.append(models.Equipment(
-        catalog_item_id=catalogs[2].id, status="Functional", **belongs_to("188/53/A"),
+        catalog_item_id=catalogs[2].id, status=EquipmentStatus.FUNCTIONAL.value, **belongs_to("188/53/A"),
         holder_user_id=u_soldier.id, owner_user_id=u_soldier.id, serial_number="9876543"
     ))
 

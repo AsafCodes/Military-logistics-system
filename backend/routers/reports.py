@@ -11,6 +11,7 @@ from ..dependencies import (
     scope_equipment_derived_query,
     scope_equipment_query,
 )
+from ..enums import EquipmentStatus
 from .. import clock
 from .. import models
 
@@ -20,7 +21,23 @@ router = APIRouter(tags=["reports"])
 def get_inventory_report(
     equipment_type: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    # DATA-H12-2, and a DELIBERATE behaviour change rather than a tightening
+    # with no visible effect. This was Optional[str] fed into a SQL equality
+    # test, so `?status=Functinoal` answered 200 with an empty list -- the
+    # caller cannot tell "nothing is broken" from "you misspelled the filter",
+    # which is the same silent-typo failure DATA-H12 is about, on the read side.
+    # FastAPI now answers 422 naming the four accepted values.
+    #
+    # The empty spelling changes too: `?status=` used to be falsy and skip the
+    # filter, and is now a 422 like any other non-member. Nothing sends it --
+    # the only in-repo caller of this route passes no params at all
+    # (GeneralReportPage.tsx), and services/reports.service.ts omits the key
+    # when the filter is unset rather than sending it blank.
+    #
+    # The two neighbours stay Optional[str] on purpose: both are ilike
+    # substring searches over open vocabularies, so there is nothing to
+    # enumerate and a misspelling there legitimately matches nothing.
+    status: Optional[EquipmentStatus] = Query(None),
     holder_name: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
@@ -45,8 +62,13 @@ def get_inventory_report(
         q = q.join(models.CatalogItem).filter(models.CatalogItem.name.ilike(f"%{equipment_type}%"))
     if location:
         q = q.filter(models.Equipment.custom_location.ilike(f"%{location}%"))
-    if status:
-        q = q.filter(models.Equipment.status == status)
+    if status is not None:
+        # `.value`, not the member. A str-mixin enum binds as its own string
+        # data so both spellings happen to work here, but `str()` of a member
+        # is "EquipmentStatus.FUNCTIONAL" -- so the day this moves into an
+        # f-string or a driver that stringifies, the bare member would compare
+        # against a value no row holds and silently match nothing.
+        q = q.filter(models.Equipment.status == status.value)
     if holder_name:
         q = q.join(models.User, models.Equipment.holder_user_id == models.User.id).filter(
             models.User.full_name.ilike(f"%{holder_name}%")

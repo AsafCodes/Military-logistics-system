@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..dependencies import get_current_active_user, scope_equipment_query
+from ..enums import EquipmentStatus
 from .. import models
 
 router = APIRouter(tags=["analytics"])
@@ -36,8 +37,16 @@ def get_unit_readiness(
     # tests/test_sensitivity_contract.py so the behaviour cannot drift quietly.
     visible = scope_equipment_query(db.query(models.Equipment), current_user)
     total = visible.count()
+    # DATA-H12-2. THIS is the literal DATA-H12's "why it matters" is about --
+    # the one exact-match comparison whose counterpart on the write side, a
+    # single misspelled status, silently lowered a unit's reported readiness
+    # with nothing anywhere reporting an error. H12-1 made the bad value
+    # unwritable; this makes the two sides the same object, so a fifth member
+    # or a changed spelling cannot move one without the other.
     functional = scope_equipment_query(
-        db.query(models.Equipment).filter(models.Equipment.status == "Functional"),
+        db.query(models.Equipment).filter(
+            models.Equipment.status == EquipmentStatus.FUNCTIONAL.value
+        ),
         current_user,
     ).count()
     

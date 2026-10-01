@@ -270,7 +270,7 @@ def set_sensitivity(
         db,
         equipment=item,
         actor=current_user,
-        new_sensitivity=req.sensitivity.value,
+        new_sensitivity=req.sensitivity,
     )
 
     db.commit()
