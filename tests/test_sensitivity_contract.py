@@ -351,21 +351,46 @@ def test_the_response_still_refuses_a_junk_classification_on_its_own():
     Fail-CLOSED is the direction that matters for a classification field: the
     alternative to raising is reporting a record of UNKNOWN classification as
     unclassified, which is the exact falsehood DATA-H3-1 existed to remove.
+
+    THE KWARGS BELOW ARE COMPLETE, and that is load-bearing rather than
+    tidiness. This test used to pass three fields the model does not declare
+    (`name`, `group_id`, `compliance_status`) and omit nine it requires, so
+    the error it caught was mostly nine "Field required" entries -- and
+    `"sensitivity" in str(...)` discriminated only because Pydantic truncates
+    the `input_value` repr before reaching that key. It did still go red when
+    the field was reverted to a bare `str` (confirmed by mutation, not
+    assumed), but it did so by accident of a repr budget rather than by
+    construction. The positive control is what makes it deliberate: if
+    EquipmentResponse gains a required field, `valid` is wrong and this test
+    says so instead of passing for the wrong reason.
     """
     from backend import schemas
 
-    with pytest.raises(ValidationError) as excinfo:
-        schemas.EquipmentResponse(
-            id=1,
-            name="rifle",
-            serial_number="SA100",
-            status="Functional",
-            sensitivity="BANANA",
-            group_id=1,
-            compliance_status="GOOD",
-        )
+    valid = dict(
+        id=1,
+        type="Rifle",
+        serial_number="SA100",
+        status="Functional",
+        holder_user_id=1,
+        custom_location=None,
+        actual_location_id=None,
+        sensitivity=Sensitivity.UNCLASSIFIED.value,
+        item_name="Rifle",
+        current_state_description="Functional",
+        compliance_level="GOOD",
+        report_status="Reported",
+        compliance_check="GOOD",
+    )
 
-    assert "sensitivity" in str(excinfo.value)
+    schemas.EquipmentResponse(**valid)  # positive control: complete, in-vocabulary
+
+    with pytest.raises(ValidationError) as excinfo:
+        schemas.EquipmentResponse(**{**valid, "sensitivity": "BANANA"})
+
+    assert "sensitivity" in str(excinfo.value), (
+        "a junk classification was accepted -- the response field is a bare "
+        f"str again, so a corrupt row would be reported as valid: {excinfo.value}"
+    )
 
 
 # --- 3. Scope is unchanged ----------------------------------------------------
