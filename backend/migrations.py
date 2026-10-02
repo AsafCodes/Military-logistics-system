@@ -86,7 +86,11 @@ BASELINE_STAMP = "e5f1b8d24a07"
 # because batch_alter_table rebuilds from a reflection and absorbs the
 # duplicate. Adding a name without the property makes that test red, rather
 # than making this comment wrong.
-IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540"})
+#
+# DATA-H13-1's index revision is here for the same structural reason and a
+# plainer consequence: a second CREATE INDEX of the same name fails on both
+# dialects, so its skip is what lets a create_all database start at all.
+IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540", "f4d81b2c6a93"})
 
 
 def alembic_config() -> Config:
@@ -101,9 +105,36 @@ def alembic_config() -> Config:
 
 
 def describe_drift(conn) -> list:
-    """Return the diffs where the live schema is missing something the models declare."""
+    """Return the diffs where the live schema is missing something the models declare.
+
+    A missing NON-UNIQUE index is not counted, as of DATA-H13-1. Drift exists
+    to refuse a database that would fail at query time, and a missing plain
+    index fails nothing -- it makes a query slow. Counting it would also refuse
+    every pre-Alembic database the day a revision adds an index, since such a
+    database lacks it by definition and the revision that would create it runs
+    only AFTER the stamp this check gates. That is the same reason add_constraint
+    is absent from BEHIND.
+
+    THE EXEMPTION IS WIDER THAN THE CASE THAT NEEDED IT, and the cost is worth
+    knowing. It covers every non-unique index, not only the ones a revision
+    after the stamp goes on to create. A pre-Alembic database that has lost an
+    OLDER index -- ix_equipment_group_id, say -- used to be refused and is now
+    stamped past the revision that would have built it, so it reports itself
+    current and stays slow on that column until someone creates the index by
+    hand. Narrowing this to the names later revisions create would close that,
+    at the price of a second list to keep in step with the chain. Chosen as it
+    is because the failure is a slow query on a database that was already
+    outside the supported path, rather than a wrong answer.
+
+    A missing UNIQUE index is still drift. It is a rule about the data rather
+    than a way of finding it, and a database without one accepts rows the
+    models promise cannot exist.
+    """
     context = MigrationContext.configure(conn)
-    return [d for d in compare_metadata(context, models.Base.metadata) if d[0] in BEHIND]
+    return [
+        d for d in compare_metadata(context, models.Base.metadata)
+        if d[0] in BEHIND and not (d[0] == "add_index" and not d[1].unique)
+    ]
 
 
 def baseline_revision(inspector) -> str:
@@ -191,7 +222,7 @@ def run_migrations() -> None:
     alembic_version, so `upgrade head` would fail trying to recreate them. If
     such a schema is missing nothing the models declare, it is stamped at the
     revision its schema actually matches (see baseline_revision). Note that
-    only missing tables/columns/indexes are treated as
+    only missing tables, columns and unique indexes are treated as
     drift: a column of the wrong type or nullability will still be stamped. If
     it is missing anything the models declare, we refuse rather than stamp --
     stamping a drifted database records a version it does not actually have,

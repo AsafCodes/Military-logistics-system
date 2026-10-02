@@ -203,25 +203,33 @@ def test_equipment_group_id_deliberately_has_no_ondelete_rule():
     assert fk.ondelete is None
 
 
-def test_every_new_foreign_key_column_is_covered_by_an_index():
+def test_every_foreign_key_column_is_covered_by_an_index():
     """Otherwise every scoped join degrades to a scan as the tables grow.
 
     "Covered" means usable as a leading column, not necessarily owning a
     dedicated index: a column that leads the composite primary key or a
     composite unique constraint is already served by that index, and adding a
     second single-column index on it would be a redundant prefix.
+
+    Every table the models declare, as of DATA-H13-1. This walked NEW_TABLES
+    alone until then, because the legacy tables indexed none of their
+    seventeen foreign keys and the rule could only be asserted where it held.
+    There is no exception list, on purpose: a foreign key added tomorrow
+    without an index fails here rather than joining a list of known gaps.
     """
     uncovered = []
-    for table_name in NEW_TABLES:
-        table = Base.metadata.tables[table_name]
-
+    for table_name, table in sorted(Base.metadata.tables.items()):
         leading = {next(iter(table.primary_key.columns)).name}
         leading |= {
             next(iter(c.columns)).name
             for c in table.constraints
             if isinstance(c, UniqueConstraint) and len(c.columns) > 0
         }
-        indexed = {c.name for idx in table.indexes for c in idx.columns}
+        # The LEADING column of each index, like the two sets above. This used
+        # to take every column of every index, which would have counted a
+        # foreign key sitting second in a composite as covered when no lookup
+        # on it alone can use that index.
+        indexed = {next(iter(idx.columns)).name for idx in table.indexes}
         indexed |= {c.name for c in table.columns if c.index}
 
         for fk in table.foreign_key_constraints:
@@ -672,6 +680,55 @@ def test_the_baseline_revision_is_chosen_by_what_the_schema_carries(tmp_path):
     modern.dispose()
 
 
+def _drift_after(tmp_path, statement):
+    """describe_drift's answer for a head database with one statement applied."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'drift.db'}")
+    _upgrade(engine, "head")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(statement)
+    with engine.connect() as conn:
+        drift = migrations.describe_drift(conn)
+    engine.dispose()
+    return drift
+
+
+def test_a_missing_plain_index_is_not_drift(tmp_path):
+    """DATA-H13-1. A database without an index is slow, not wrong.
+
+    The day a revision adds an index, every pre-Alembic database lacks it, and
+    the revision that would create it runs only after the stamp that
+    describe_drift gates. Counting it refused all of them at startup -- which
+    the run_migrations() tests above meet end to end wherever they build their
+    legacy database from an old revision. This asserts the rule itself.
+    """
+    drift = _drift_after(tmp_path, "DROP INDEX ix_equipment_holder_user_id")
+
+    assert drift == [], f"a missing non-unique index was counted as drift: {drift}"
+
+
+@pytest.mark.parametrize(
+    "statement, kind",
+    [
+        ("DROP INDEX ix_users_personal_number", "add_index"),
+        ("ALTER TABLE fault_types DROP COLUMN severity", "add_column"),
+        ("DROP TABLE daily_stats", "add_table"),
+    ],
+    ids=["unique_index", "column", "table"],
+)
+def test_what_a_query_or_a_rule_depends_on_is_still_drift(tmp_path, statement, kind):
+    """The other half: the exemption above must be exactly as wide as it says.
+
+    A unique index is a rule about the data, and a database without
+    ix_users_personal_number accepts two accounts with one military ID. An
+    exemption written as "ignore add_index" rather than "ignore a NON-UNIQUE
+    add_index" would wave that through, and so would one that emptied the
+    check altogether -- which is why a column and a table sit beside it.
+    """
+    drift = _drift_after(tmp_path, statement)
+
+    assert [d[0] for d in drift] == [kind], drift
+
+
 # Raw SQL that changes shape rather than rows. The op.* check below cannot see
 # these, and this revision chain's data migrations establish
 # conn.execute(text(...)) as their idiom -- so a "quick" ALTER through the same
@@ -849,7 +906,10 @@ def test_every_allowlisted_revision_actually_survives_a_second_run(tmp_path):
 
     ddl = [
         s for s in statements
-        if any(verb in s.upper() for verb in ("CREATE TABLE", "ALTER TABLE", "DROP TABLE"))
+        if any(
+            verb in s.upper()
+            for verb in ("CREATE TABLE", "ALTER TABLE", "DROP TABLE", "CREATE INDEX", "DROP INDEX")
+        )
     ]
     assert ddl == [], (
         "re-running an allowlisted revision emitted DDL against a database that "

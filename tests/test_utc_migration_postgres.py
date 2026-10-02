@@ -637,3 +637,51 @@ def _check_constraint_names(engine):
             for c in insp.get_check_constraints(table)
             if c.get("name")
         }
+
+
+def test_the_index_revision_builds_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-H13-1, on the dialect that will carry the data.
+
+    tests/test_foreign_key_indexes.py covers every state this revision meets,
+    on SQLite. Three things there are worth asking again here, because the
+    answer is the dialect's rather than the revision's.
+
+    That the indexes exist after a migration from nothing. CI's own `alembic
+    upgrade head` step runs the same DDL and asserts nothing about the result.
+
+    That a second run is a no-op. Postgres refuses a second CREATE INDEX of the
+    same name outright -- the raise is the assertion, as it is for the
+    constraint revision above -- so what is checked afterwards is only that
+    nothing was lost.
+
+    That the downgrade removes exactly these and the upgrade restores them.
+    DROP INDEX names no table on either dialect, so on Postgres the name is
+    resolved through the search_path -- which this fixture narrows to one
+    schema, and which is the only thing keeping the drop off CI's real one.
+    """
+    from tests.test_foreign_key_indexes import (
+        INDEX_REVISION,
+        PARENT_REVISION,
+        _expected_indexes,
+        _indexes,
+    )
+    from tests.test_group_schema import _rerun_upgrade
+
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    expected = _expected_indexes()
+
+    _migrate(pg_schema, "head")
+    at_head = _indexes(pg_schema)
+    assert {name: at_head.get(name) for name in expected} == {
+        name: (table, (column,), False) for name, (table, column) in expected.items()
+    }
+
+    with pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, INDEX_REVISION)
+    assert _indexes(pg_schema) == at_head
+
+    _migrate(pg_schema, PARENT_REVISION, backwards=True)
+    assert set(_indexes(pg_schema)) == set(at_head) - set(expected)
+
+    _migrate(pg_schema, "head")
+    assert _indexes(pg_schema) == at_head

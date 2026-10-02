@@ -128,7 +128,7 @@ class Equipment(Base):
     id = Column(Integer, primary_key=True, index=True) 
     serial_number = Column(String, unique=True, nullable=True) 
     
-    catalog_item_id = Column(Integer, ForeignKey('catalog_items.id'), nullable=False)
+    catalog_item_id = Column(Integer, ForeignKey('catalog_items.id'), nullable=False, index=True)
     status = Column(String, default=EquipmentStatus.FUNCTIONAL.value)
     
     # Matrix Security Fields
@@ -164,14 +164,14 @@ class Equipment(Base):
     )
     
     # --- Ownership vs Possession ---
-    owner_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    owner_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True) 
-    holder_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    owner_user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    owner_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True, index=True) 
+    holder_user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     
     # Custom Location String (e.g. "Armory", "Warehouse 1")
     custom_location = Column(String, nullable=True) 
 
-    actual_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
+    actual_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True, index=True)
 
     # Verification. No default (DATA-H5): a new item has never been checked, so
     # it starts NULL -- "never reported" -- until audit_trail.set_last_verified_at
@@ -253,10 +253,10 @@ class Equipment(Base):
 class TransactionLog(Base):
     __tablename__ = 'transaction_logs'
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'))
-    involved_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    involved_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
-    timestamp = Column(clock.UtcDateTime, default=clock.utcnow)
+    equipment_id = Column(Integer, ForeignKey('equipment.id'), index=True)
+    involved_user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    involved_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True, index=True)
+    timestamp = Column(clock.UtcDateTime, default=clock.utcnow, index=True)
     user_status_at_time = Column(Boolean, nullable=True)
     event_type = Column(String) 
     
@@ -278,7 +278,7 @@ class FaultType(Base):
     
     # Manager Approval
     is_pending = Column(Boolean, default=False)
-    requested_by_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    requested_by_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
 
 class MaintenanceLog(Base):
     __tablename__ = 'maintenance_logs'
@@ -288,14 +288,14 @@ class MaintenanceLog(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'))
-    fault_type_id = Column(Integer, ForeignKey('fault_types.id'))
+    equipment_id = Column(Integer, ForeignKey('equipment.id'), index=True)
+    fault_type_id = Column(Integer, ForeignKey('fault_types.id'), index=True)
     description = Column(String)
     status = Column(String, default=TicketStatus.OPEN.value)
     opened_at = Column(clock.UtcDateTime, default=clock.utcnow)
     closed_at = Column(clock.UtcDateTime, nullable=True)
     
-    technician_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    technician_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     
     equipment = relationship("Equipment")
     fault_type = relationship("FaultType")
@@ -326,13 +326,13 @@ class Verification(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False)
+    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False, index=True)
     verification_type = Column(String, nullable=False)
     reported_status = Column(String, nullable=False)
     findings = Column(String, nullable=True)
     action_required = Column(Boolean, default=False)
     created_date = Column(clock.UtcDateTime, default=clock.utcnow)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
 
     equipment = relationship("Equipment", backref="verifications")
     reporter = relationship("User", foreign_keys=[created_by])
@@ -360,14 +360,14 @@ class EquipmentStatusHistory(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False)
+    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False, index=True)
     old_status = Column(String, nullable=False)
     new_status = Column(String, nullable=False)
     change_reason = Column(String, nullable=False)
-    verification_id = Column(Integer, ForeignKey('verifications.id'), nullable=True)
+    verification_id = Column(Integer, ForeignKey('verifications.id'), nullable=True, index=True)
     notes = Column(String, nullable=True)
     created_date = Column(clock.UtcDateTime, default=clock.utcnow)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
     
     equipment = relationship("Equipment", backref="status_history")
     verification = relationship("Verification", backref="status_changes")
