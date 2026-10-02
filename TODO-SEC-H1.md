@@ -207,7 +207,7 @@ Legacy comes out only once nothing reads it.
 
 Closed by this work, not to be worked separately: **SEC-H2**, **SEC-H4**, **DATA-H9**, **DATA-M15**, **DATA-M16**, **DATA-M17**.
 
-Partially touched, ticket stays open: **DATA-M2** (H1-6 validates the target on `assign_owner` only), **DATA-H6** (the broad `except` at `equipment.py:183` survives), **DATA-H13** (new tables carry indexes and deletion rules; existing ones still do not).
+Partially touched, ticket stays open: **DATA-M2** (H1-6 validates the target on `assign_owner` only), **DATA-H6** (the broad `except` at `equipment.py:183` survives), **DATA-H13** (new tables carry indexes and deletion rules; existing ones gained their indexes at DATA-H13-1 and still declare no deletion rule).
 
 Explicitly **not** in scope: **SEC-H5** — four endpoints apply no scoping at all. This document changes *how* scoping is computed; adding it where none exists is separate work, and easier once H1-5 lands.
 
