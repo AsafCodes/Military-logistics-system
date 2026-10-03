@@ -242,25 +242,29 @@
   are still reachable by no code path (DATA-M22), and the columns stay nullable
   because a CHECK passes NULL (DATA-M12).
 
-- [ ] **DATA-H13 · No foreign key is indexed, and none declares a deletion rule** — [models.py](backend/models.py) throughout · `[CARRY FORWARD]`
+- [V] **DATA-H13 · No foreign key is indexed, and none declares a deletion rule** — [models.py](backend/models.py) throughout · `[CARRY FORWARD]`
   **Evidence:** Every referencing column across all twelve tables lacks both an index and a deletion rule; no relationship declares a cascade. The heavily filtered columns — holder, status, log timestamp, ticket status and open date, history dates, and role — are likewise unindexed.
   **Why it matters:** The database does not auto-index the referencing side, so every hot query path is a sequential scan over monotonically growing tables. Deleting any user or equipment row raises a constraint violation, and orphan cleanup is impossible.
   **Fix:** Add indexes and explicit deletion rules. Blocked on DATA-C1.
-  **Half closed. H13-1 (indexes) landed at `04b4c41`; H13-2 (deletion rules) is open**, which is why
-  the box is still unchecked. The evidence above is now stale in three ways: the seventeen foreign keys
-  on the six legacy tables are indexed, the group tables always were, and `role` no longer exists.
-  "Blocked on DATA-C1" stopped being true when Alembic was adopted.
-  H13-1 added eighteen indexes -- the seventeen foreign keys plus `transaction_logs.timestamp` -- through
-  revision `f4d81b2c6a93`, and stopped `describe_drift` counting a missing non-unique index, without which
-  every pre-Alembic database was refused at startup. Five columns this entry names were measured or
-  reasoned out and deliberately NOT indexed: `maintenance_logs.opened_at` (the ticket list has no LIMIT,
-  so at 50,000 tickets the index was never chosen; revisit with DATA-M10's pagination), the two `status`
-  columns (four values each), and the two `created_date` columns (only sorted within one item's rows).
-  The Postgres path of that revision was not run locally; CI's `postgres:15` job is its only gate.
-  H13-2 is decided but not built: `ON DELETE RESTRICT` on all seventeen, plus `equipment.group_id`,
-  with the foreign keys named `fk_<table>_<column>` so `create_all` and the migration agree. It rebuilds
-  six tables on SQLite, and it will meet legacy SQLite databases holding dangling references from before
-  enforcement was switched on -- a rebuild neither validates nor repairs those, so it needs a decision.
+  **Closed at H13-1 (`04b4c41`) and H13-2 (`754009f`).** The evidence above was stale in three ways
+  by then: the group tables always had indexes and rules, `role` no longer exists, and "Blocked on
+  DATA-C1" stopped being true when Alembic was adopted.
+  H13-1 added eighteen indexes -- the seventeen legacy foreign keys plus `transaction_logs.timestamp` --
+  through revision `f4d81b2c6a93`, and stopped `describe_drift` counting a missing non-unique index,
+  without which every pre-Alembic database was refused at startup. Five columns this entry names were
+  measured or reasoned out and deliberately NOT indexed: `maintenance_logs.opened_at` (the ticket list
+  has no LIMIT, so at 50,000 tickets the index was never chosen; revisit with DATA-M10's pagination),
+  the two `status` columns (four values each), and the two `created_date` columns (only sorted within
+  one item's rows).
+  H13-2 declared `ON DELETE RESTRICT` on the seventeen and on `equipment.group_id`, through
+  `models._restrict` and revision `a8c2e5f19b47`, naming each `fk_<table>_<column>`. RESTRICT
+  everywhere was a decision, not a default: these rows are the record of what happened to an item and
+  by whom, and users are retired through `is_active_duty` rather than deleted. Behaviour is unchanged
+  -- a key with no rule already refused the delete -- and the downgrade keeps the names, because batch
+  mode cannot create an unnamed constraint. The "orphan cleanup is impossible" half of the evidence
+  stays true by design; dangling references already in a legacy SQLite database are DATA-M26.
+  Neither revision's Postgres path was run locally. Each has a gated test (build, re-run, downgrade)
+  that runs first in CI's `postgres:15` job.
 
 ### Medium
 
@@ -293,6 +297,7 @@
 - [ ] **DATA-M23 · The engine factory cannot build an engine for any URL but the ambient one** — [database.py:60](backend/database.py#L60) · `[CARRY FORWARD]` — *Evidence:* `create_database_engine()` takes only `enforce_foreign_keys` and reads the module-global `DATABASE_URL` for the connection string, so a caller cannot ask it for a different database. *Why:* The Postgres tests therefore cannot use the factory and call `create_engine` directly instead ([test_utc_migration_postgres.py:99](tests/test_utc_migration_postgres.py#L99)), bypassing the `_enforce_sqlite_foreign_keys` wiring the factory exists to attach — so the one place that most needs the factory's guarantees is the one place running without them. *Fix:* Accept a `url` parameter, defaulting to the module global. Surfaced by the DATA-H10 triage pass, not by the original audit.
 - [ ] **DATA-M24 · Migrations race once per worker** — [migrations.py](backend/migrations.py), [main.py](backend/main.py) · `[CARRY FORWARD]` — *Evidence:* `run_migrations()` is called from the lifespan handler, and a lifespan handler runs once per worker process, so N workers issue the same schema changes concurrently. *Why:* Named inside DATA-H10 ("multiple workers race the schema creation") and deliberately left open when it was closed — moving the call into a lifespan handler changed *when* it runs, not *how many times*. Today it is masked: `--reload` forces a single worker, so the race is unreachable until that changes. *Fix:* A Postgres advisory lock around the upgrade, or a once-per-deploy migration step outside the application. **Blocked on INF-H1**, which is what would introduce multiple workers and unmask this.
 - [ ] **DATA-M25 · A missing unique constraint is not schema drift, though a missing unique index is** — [migrations.py](backend/migrations.py) · `[CARRY FORWARD]` — *Evidence:* `describe_drift` keeps only the diff kinds in `BEHIND` (`add_table`, `add_column`, `add_index`). `catalog_items.name`, `locations.name`, `equipment.serial_number`, `fault_types.name` and `solution_types.name` are declared `unique=True` without `index=True`, so a database lacking one is reported, if at all, as `add_constraint`, which is not in the list (reasoned from the diff vocabulary, not reproduced). *Why:* A pre-Alembic database without the constraint is stamped as current and then accepts duplicate serial numbers the models promise cannot exist. DATA-H13-1 kept a missing unique *index* as drift on exactly that argument; the same rule under the other spelling is waved through. *Fix:* Count a missing unique constraint as drift. Not `add_constraint` wholesale -- every pre-Alembic database lacks the DATA-H12 check constraints by definition, and the revision that adds them runs after the stamp.
+- [ ] **DATA-M26 · Dangling references in a legacy SQLite database are never found** — [database.py](backend/database.py), [a8c2e5f19b47](alembic/versions/a8c2e5f19b47_declare_deletion_rules.py) · `[CARRY FORWARD]` — *Evidence:* SQLite ignores foreign keys unless `PRAGMA foreign_keys=ON`, which `backend/database.py` only began setting partway through this register; a database written before then can hold rows pointing at nothing. Enabling the pragma checks future writes, never existing rows, and DATA-H13-2's table rebuilds copy such rows across untouched, because migrations run without enforcement. *Why:* An item whose holder row is gone shows its holder as "Unknown", and nothing reports it. Postgres is not affected: it validated every row when each constraint was created. *Fix:* A check -- `PRAGMA foreign_key_check` -- run at startup or as a one-off, reporting rather than repairing; what to do with each orphan is a data decision.
 
 ### Low
 
@@ -305,6 +310,8 @@
 - [ ] **DATA-L6 · Tautological role comparisons and dead re-export aliases** — [dependencies.py:52](backend/dependencies.py#L52), [:18-22](backend/dependencies.py#L18-L22), [equipment.py:34](backend/routers/equipment.py#L34), [reports.py:32](backend/routers/reports.py#L32) · `[CARRY FORWARD]` — *Evidence:* Each comparison tests a constant against the identical literal it equals; three of five re-exported aliases are imported by nobody. *Why:* The doubled comparison signals genuine uncertainty about whether the role is an enumeration or a string — resolved by DATA-M15. *Fix:* Collapse the comparisons and delete the unused aliases.
 - [ ] **DATA-L7 · Every legacy table indexes its primary key twice** — [models.py](backend/models.py) throughout · `[CARRY FORWARD]` — *Evidence:* Every table in `models.py` declares `id = Column(Integer, primary_key=True, index=True)`, which builds `ix_<table>_id` beside the index the primary key already has. `test_no_redundant_single_column_index_on_a_leading_key_column` forbids exactly this and walks only the group tables, so the legacy ones were never held to it. *Why:* A second B-tree maintained on every insert for nothing; noticed while DATA-H13-1 widened the neighbouring coverage test to every table. *Fix:* Drop `index=True` from those primary keys with a revision that drops the indexes, and widen that test.
 - [ ] **DATA-L8 · The Postgres migration test file describes itself and the Inspector wrongly** — [test_utc_migration_postgres.py](tests/test_utc_migration_postgres.py) · `[CARRY FORWARD]` — *Evidence:* Its module docstring calls it the only Postgres-backed test in the suite; `tests/test_verification_backfill_postgres.py` exists. `_column_types` says SQLAlchemy's Inspector does not follow the `search_path` set in `connect_args` and reflects `public` instead; SQLAlchemy 2.0.52 filters on `pg_table_is_visible` when no schema is given, and two tests in the same file -- the constraint re-run test and the one DATA-H13-1 added -- depend on it doing so. *Why:* If the comment were true those two would be reading CI's real schema and passing vacuously, so a reader has to work out which half of the file to believe. Not verified against a live Postgres: Docker is down locally. *Fix:* Correct both statements, after confirming the Inspector's behaviour in CI rather than from the library source.
+- [ ] **DATA-L9 · Deleting an item or a user through the ORM would try to null required columns** — [models.py](backend/models.py) · `[CARRY FORWARD]` — *Evidence:* `Equipment` carries the backrefs `verifications` and `status_history`, and `User` carries `memberships`, all without `passive_deletes`. On `session.delete(parent)` SQLAlchemy first sets the children's foreign key to NULL, and `verifications.equipment_id`, `equipment_status_history.equipment_id` and `group_memberships.user_id` are NOT NULL or part of a primary key. *Why:* The delete fails with a NOT NULL error rather than the RESTRICT refusal DATA-H13-2 declared, and for memberships it pre-empts the CASCADE the schema promises. Unreachable today: no route deletes an item or a user. Found by review during DATA-H13-2, not reproduced. *Fix:* `passive_deletes=True` on those relationships, so the database's rule decides.
+- [ ] **DATA-L10 · Postgres never compares a migrated schema with create_all beyond column types** — [test_utc_migration_postgres.py](tests/test_utc_migration_postgres.py) · `[CARRY FORWARD]` — *Evidence:* `test_create_all_agrees_with_the_migration_on_postgres` compares `_column_types` only. Foreign key names and rules, indexes and check constraints are compared between the two builds on SQLite alone (`test_migration_and_create_all_build_the_same_schema`). *Why:* A revision whose DDL differs between dialects -- most batch-mode operations -- can leave Postgres disagreeing with the models while every check passes. DATA-H13's gated tests cover their own two revisions, not the comparison. *Fix:* Extend the Postgres test to the same snapshot the SQLite one takes, matching check constraints by name only.
 
 ---
 
