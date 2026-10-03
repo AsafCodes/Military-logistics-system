@@ -27,8 +27,8 @@ class OAuth2PasswordBearerWithCookie(OAuth2PasswordBearer):
     pytest suite and Swagger's Authorize button use. Removing it breaks both.
 
     Subclassed rather than written as a fresh SecurityBase so that tokenUrl,
-    the OpenAPI security metadata that drives `npm run generate-client`, and the
-    401 + WWW-Authenticate shape all stay exactly as they were.
+    the OpenAPI security metadata that Swagger's Authorize button relies on, and
+    the 401 + WWW-Authenticate shape all stay exactly as they were.
 
     An explicit Authorization header WINS over the cookie. The precedence is
     deliberate and pinned by tests/test_cookie_auth.py. Cookie-first is the
@@ -71,8 +71,8 @@ class OAuth2PasswordBearerWithCookie(OAuth2PasswordBearer):
 # scheme_name pinned to the ORIGINAL class name on purpose. FastAPI derives the
 # securitySchemes key in openapi.json from the class, so subclassing silently
 # renamed it to "OAuth2PasswordBearerWithCookie" -- a published contract change,
-# visible to `npm run generate-client`, in exchange for nothing. The transport
-# changed; the scheme did not.
+# visible to anything generated from the specification, in exchange for
+# nothing. The transport changed; the scheme did not.
 oauth2_scheme = OAuth2PasswordBearerWithCookie(
     tokenUrl="login", scheme_name="OAuth2PasswordBearer"
 )

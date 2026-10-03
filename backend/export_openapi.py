@@ -10,7 +10,7 @@ file declared a version the application had long since left, and ten paths,
 two of them since removed, where the application serves twenty-nine.
 
 The specification is deliberately not tracked. Generate it when something needs
-it, e.g. before `npm run generate-client`, which reads frontend/openapi.json:
+it; frontend/openapi.json is the conventional, git-ignored path:
 
     python -m backend.export_openapi frontend/openapi.json
 

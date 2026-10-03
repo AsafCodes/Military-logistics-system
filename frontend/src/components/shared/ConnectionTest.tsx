@@ -13,7 +13,7 @@ export default function ConnectionTest() {
             try {
                 console.log(`Sending request to: ${BACKEND_URL}`);
 
-                // Use direct axios call, bypassing the generated client
+                // Bare axios against the hardcoded URL above, not lib/axios
                 const response = await axios.get(BACKEND_URL);
 
                 console.log("Response received:", response.data);

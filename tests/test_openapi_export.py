@@ -3,7 +3,8 @@
 frontend/openapi.json was a tracked copy of the specification that nobody
 regenerated: it declared version "4.0 - Secured" against the app's 0.5.0, and
 listed ten paths -- two of them since removed -- where the app serves
-twenty-nine. It was the input `npm run generate-client` reads.
+twenty-nine. It was the input the generated frontend client was built from,
+until API-H2 deleted that client and its generator.
 
 The fix is to stop tracking it and generate it from the application on demand
 (backend/export_openapi.py), in CI on every green run. With no tracked copy there is
@@ -174,8 +175,8 @@ def test_no_openapi_specification_is_tracked_anywhere():
 
 
 def test_the_frontend_spec_path_is_ignored():
-    # The path `npm run generate-client` reads, which is where a developer
-    # exports to. Ignored so that `git add -A` cannot re-track it by accident.
+    # The path CI exports to and the one a developer is pointed at. Ignored so
+    # that `git add -A` cannot re-track it by accident.
     result = _git("check-ignore", "-q", f"frontend/{SPEC_NAME}")
 
     assert result.returncode == 0
