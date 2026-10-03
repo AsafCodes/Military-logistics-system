@@ -7,12 +7,11 @@ goes through an Alembic revision in alembic/versions/.
 """
 import os
 
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import inspect
-
-from alembic import command
 
 from . import models
 from .database import create_database_engine
@@ -42,6 +41,65 @@ REVISION_BEFORE_LEGACY_DROP = "b1c4e7a90f52"
 # hierarchy columns but still carries Profile/UserRole, the shape H1-12 drops.
 REVISION_BEFORE_PROFILE_DROP = "c93f2a615d84"
 
+# Where a pre-Alembic database is stamped when its schema matches the models.
+# Everything after this point RUNS against such a database.
+#
+# DATA-H5-2 is why this is a named point rather than "head". It is the first
+# revision in this chain that only rewrites rows: stamping at "head" would
+# record its backfill as applied to a database that never ran it, leaving
+# exactly the forged compliance timestamps the revision was written to repair,
+# on exactly the legacy databases that have them. The same silent-skip shape
+# H1-11 and H1-12 each had to fix here, now reachable without any schema
+# difference to notice it by.
+#
+# Called LAST_SCHEMA_REVISION until DATA-H12, and the rename is the point
+# rather than tidying. That name described how the value was CHOSEN -- the
+# newest revision that changes schema -- and the two stopped being the same
+# thing the moment a schema revision landed after a data-only one. Reading the
+# old name, the obvious move on adding such a revision is to advance the
+# constant to it, which silently stamps every legacy database past DATA-H5-2's
+# backfill: the precise regression this constant exists to prevent, invited by
+# its own name. What it has always meant is where to stamp.
+BASELINE_STAMP = "e5f1b8d24a07"
+
+# Schema revisions after BASELINE_STAMP that are safe to run against a database
+# that already has their changes.
+#
+# A schema revision after the stamp is normally a bug -- it re-applies DDL to a
+# database that already has it, which is loud on Postgres and, worse, SILENT on
+# SQLite, where batch_alter_table reflects the existing table and collapses a
+# duplicate constraint into the original. test_group_schema.py's staleness
+# guard refuses one for that reason.
+#
+# DATA-H12 needed exactly that shape and could not avoid it: the chain already
+# had a data-only revision at its head, so any new schema revision lands after
+# the stamp, and re-parenting it before the backfill would hide it from every
+# database already stamped there. So the revision was made to check for each of
+# its constraints by name and skip the ones present, and named here.
+#
+# THIS IS A REAL WEAKENING of the guard and worth knowing rather than
+# discovering: an entry here buys a revision past a check that exists to catch
+# a whole class of mistake. It is not taken on trust -- test_group_schema.py
+# applies every revision named here a second time against one database and
+# asserts it EMITS NO DDL. Not "does not fail" and not "leaves the schema
+# alone": on SQLite both of those are true of a revision with no skip at all,
+# because batch_alter_table rebuilds from a reflection and absorbs the
+# duplicate. Adding a name without the property makes that test red, rather
+# than making this comment wrong.
+#
+# DATA-H13-1's index revision is here for the same structural reason and a
+# plainer consequence: a second CREATE INDEX of the same name fails on both
+# dialects, so its skip is what lets a create_all database start at all.
+#
+# DATA-H13-2's deletion rules are a third shape, and the quietest. A second run
+# with no skip raises on NEITHER dialect: SQLite rebuilds the table again, and
+# Postgres drops each constraint and adds it back, which is valid SQL. What it
+# would do instead is put RESTRICT back over any rule chosen since. On a
+# database whose rules are all still RESTRICT, that leaves nothing in the
+# result to tell the two apart, so a re-run is asserted to emit no DDL, on both
+# dialects.
+IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47"})
+
 
 def alembic_config() -> Config:
     """Alembic config resolved from the project root, not the working directory.
@@ -55,9 +113,36 @@ def alembic_config() -> Config:
 
 
 def describe_drift(conn) -> list:
-    """Return the diffs where the live schema is missing something the models declare."""
+    """Return the diffs where the live schema is missing something the models declare.
+
+    A missing NON-UNIQUE index is not counted, as of DATA-H13-1. Drift exists
+    to refuse a database that would fail at query time, and a missing plain
+    index fails nothing -- it makes a query slow. Counting it would also refuse
+    every pre-Alembic database the day a revision adds an index, since such a
+    database lacks it by definition and the revision that would create it runs
+    only AFTER the stamp this check gates. That is the same reason add_constraint
+    is absent from BEHIND.
+
+    THE EXEMPTION IS WIDER THAN THE CASE THAT NEEDED IT, and the cost is worth
+    knowing. It covers every non-unique index, not only the ones a revision
+    after the stamp goes on to create. A pre-Alembic database that has lost an
+    OLDER index -- ix_equipment_group_id, say -- used to be refused and is now
+    stamped past the revision that would have built it, so it reports itself
+    current and stays slow on that column until someone creates the index by
+    hand. Narrowing this to the names later revisions create would close that,
+    at the price of a second list to keep in step with the chain. Chosen as it
+    is because the failure is a slow query on a database that was already
+    outside the supported path, rather than a wrong answer.
+
+    A missing UNIQUE index is still drift. It is a rule about the data rather
+    than a way of finding it, and a database without one accepts rows the
+    models promise cannot exist.
+    """
     context = MigrationContext.configure(conn)
-    return [d for d in compare_metadata(context, models.Base.metadata) if d[0] in BEHIND]
+    return [
+        d for d in compare_metadata(context, models.Base.metadata)
+        if d[0] in BEHIND and not (d[0] == "add_index" and not d[1].unique)
+    ]
 
 
 def baseline_revision(inspector) -> str:
@@ -75,6 +160,29 @@ def baseline_revision(inspector) -> str:
     what they add; H1-11 drops columns and tightens equipment.group_id, so a
     stamped database would have kept the columns, kept a nullable group_id, and
     still called itself up to date.
+
+    A data-only revision cannot be told apart by inspecting the schema at all,
+    which is why the last branch answers BASELINE_STAMP rather than "head": a
+    schema that matches the models says nothing about whether a revision that
+    only rewrites rows has run. See that constant for the case it exists for.
+
+    THE LAST BRANCH IS UNCONDITIONAL, and an attempt to make it clever is what
+    DATA-H12 rejected. That ticket adds check constraints, so it is tempting to
+    read `ck_equipment_status` as evidence and stamp a database carrying it
+    later -- the argument being that a table with the constraint was created
+    after the constraint existed, so its rows came from code that no longer
+    forges compliance timestamps. tests/test_verification_backfill.py builds
+    its legacy fixture with create_all and THEN inserts forged rows, which is
+    that argument's counterexample and not a contrived one: the constraint
+    dates the TABLE, a forged timestamp is a property of the ROWS, and rows
+    outlive tables through every dump and reload -- including the one
+    run_migrations' own refusal message suggests.
+
+    The rule the three branches above follow, and the one that branch would
+    have broken: each predicts SCHEMA from schema. Never predict DATA from
+    schema. A revision that leaves no schema behind cannot be detected, only
+    re-run, which is why the revisions after this stamp must tolerate that --
+    see IDEMPOTENT_SCHEMA_REVISIONS.
 
     Two shapes reach this function, and the legacy column is what tells them
     apart. A create_all database from before H1-11 still carries
@@ -112,7 +220,7 @@ def baseline_revision(inspector) -> str:
         return REVISION_BEFORE_LEGACY_DROP
     if inspector.has_table("profiles"):
         return REVISION_BEFORE_PROFILE_DROP
-    return "head"
+    return BASELINE_STAMP
 
 
 def run_migrations() -> None:
@@ -122,7 +230,7 @@ def run_migrations() -> None:
     alembic_version, so `upgrade head` would fail trying to recreate them. If
     such a schema is missing nothing the models declare, it is stamped at the
     revision its schema actually matches (see baseline_revision). Note that
-    only missing tables/columns/indexes are treated as
+    only missing tables, columns and unique indexes are treated as
     drift: a column of the wrong type or nullability will still be stamped. If
     it is missing anything the models declare, we refuse rather than stamp --
     stamping a drifted database records a version it does not actually have,

@@ -109,6 +109,7 @@ a confidentiality guarantee -- with the two limits named at the top.
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from backend import authz, models
 from backend.enums import Capability, Sensitivity
@@ -308,45 +309,88 @@ def test_a_null_sensitivity_does_not_take_down_the_whole_list(
     )
 
 
-def test_an_out_of_vocabulary_value_fails_loudly_rather_than_reading_unclassified(
-    client, mock_matrix_db, db_session, token_master
-):
-    """Documents the trade DATA-H3-1 makes on purpose.
+def test_an_out_of_vocabulary_value_cannot_be_written_at_all(db_session, mock_matrix_db):
+    """DATA-H12 arrived, so the state this used to describe is unreachable.
 
-    The column is unconstrained free text (DATA-H12), so a hand-written value
-    outside the enum is reachable. Typing the response as the enum means such a
-    row now fails validation instead of being silently replaced by the old
-    "UNCLASSIFIED" constant.
+    This test asserted the trade DATA-H3-1 made on purpose: the column was
+    unconstrained free text, a hand-written 'BANANA' was reachable, and typing
+    the response as the enum meant such a row failed validation loudly instead
+    of being silently reported as UNCLASSIFIED. Its docstring asked for a
+    revisit when the column was constrained rather than a silent deletion, so
+    this is that revisit -- the write itself is now refused, one layer earlier.
 
-    That is a real cost -- one junk row blanks the list, DATA-M12's shape --
-    accepted because the alternative is the exact falsehood this ticket exists
-    to remove: reporting a record of UNKNOWN classification as unclassified.
-    Failing is the fail-CLOSED direction for a classification field.
-
-    This test asserts the behaviour rather than endorsing it permanently.
-    DATA-H12 constrains the column and makes the state unreachable; when it
-    lands, this test should be revisited, not silently deleted.
-
-    Asserts the ValidationError rather than a 500 because that is what actually
-    happens: response-model validation runs AFTER the route returns, so the
-    error escapes the request cycle rather than being caught by the router's
-    own exception handling. Starlette's TestClient re-raises it by default
-    (raise_server_exceptions), so it surfaces here as an exception, not a
-    status code. In deployment the same failure is a 500 -- the point being
-    pinned is that the junk value is never quietly reported as UNCLASSIFIED.
+    SPLIT IN TWO ON PURPOSE, and the test below is the other half. A database
+    constraint sitting in front of the response typing MASKS it: with the write
+    refused, the fail-closed behaviour that used to be pinned here can no longer
+    be reached through the database, so deleting `sensitivity: Sensitivity` from
+    the response schema would not turn anything red. That is the DATA-H7 shape
+    -- a second layer quietly weakening the tests for the first -- which is why
+    the response schema is now pinned directly instead of through a corrupt row.
     """
     item = _item(db_session, "SA100")
-    db_session.execute(
-        text("UPDATE equipment SET sensitivity = 'BANANA' WHERE id = :id"),
-        {"id": item.id},
+    with pytest.raises(IntegrityError) as excinfo:
+        db_session.execute(
+            text("UPDATE equipment SET sensitivity = 'BANANA' WHERE id = :id"),
+            {"id": item.id},
+        )
+    db_session.rollback()
+
+    assert "ck_equipment_sensitivity" in str(excinfo.value)
+
+
+def test_the_response_still_refuses_a_junk_classification_on_its_own():
+    """The other half: the schema fails closed without help from the database.
+
+    Asserted against the schema directly rather than through a route, because
+    there is no longer any way to get a junk value into the column and a test
+    that cannot construct its own precondition is not a test. This is what
+    stops the response typing being quietly deleted as redundant now that the
+    constraint exists -- defence in depth is only depth while both layers are
+    independently pinned.
+
+    Fail-CLOSED is the direction that matters for a classification field: the
+    alternative to raising is reporting a record of UNKNOWN classification as
+    unclassified, which is the exact falsehood DATA-H3-1 existed to remove.
+
+    THE KWARGS BELOW ARE COMPLETE, and that is load-bearing rather than
+    tidiness. This test used to pass three fields the model does not declare
+    (`name`, `group_id`, `compliance_status`) and omit nine it requires, so
+    the error it caught was mostly nine "Field required" entries -- and
+    `"sensitivity" in str(...)` discriminated only because Pydantic truncates
+    the `input_value` repr before reaching that key. It did still go red when
+    the field was reverted to a bare `str` (confirmed by mutation, not
+    assumed), but it did so by accident of a repr budget rather than by
+    construction. The positive control is what makes it deliberate: if
+    EquipmentResponse gains a required field, `valid` is wrong and this test
+    says so instead of passing for the wrong reason.
+    """
+    from backend import schemas
+
+    valid = dict(
+        id=1,
+        type="Rifle",
+        serial_number="SA100",
+        status="Functional",
+        holder_user_id=1,
+        custom_location=None,
+        actual_location_id=None,
+        sensitivity=Sensitivity.UNCLASSIFIED.value,
+        item_name="Rifle",
+        current_state_description="Functional",
+        compliance_level="GOOD",
+        report_status="Reported",
+        compliance_check="GOOD",
     )
-    db_session.commit()
+
+    schemas.EquipmentResponse(**valid)  # positive control: complete, in-vocabulary
 
     with pytest.raises(ValidationError) as excinfo:
-        client.get("/equipment/accessible", headers=token_master)
+        schemas.EquipmentResponse(**{**valid, "sensitivity": "BANANA"})
 
-    assert "sensitivity" in str(excinfo.value)
-    assert "BANANA" in str(excinfo.value)
+    assert "sensitivity" in str(excinfo.value), (
+        "a junk classification was accepted -- the response field is a bare "
+        f"str again, so a corrupt row would be reported as valid: {excinfo.value}"
+    )
 
 
 # --- 3. Scope is unchanged ----------------------------------------------------
@@ -688,7 +732,7 @@ def test_the_route_changes_sensitivity_and_nothing_else(
     of it. group_id is the sharper of the two: it decides who can see the item.
 
     last_verified_at must NOT advance. Both assign_owner and transfer_equipment
-    reset it, which is exactly what DATA-H5 reports as compliance forgeable by
+    used to reset it, which is exactly what DATA-H5 reported as compliance forgeable by
     paperwork; classifying an item is not laying eyes on it, so a green
     compliance badge must not fall out of this request.
     """

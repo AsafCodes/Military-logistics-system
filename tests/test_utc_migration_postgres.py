@@ -1,12 +1,13 @@
 """DATA-H1-2: the TIMESTAMPTZ migration preserves every instant it moves.
 
 The only Postgres-backed test in this suite, and it exists because nothing else
-here *can* be. tests/conftest.py assigns DATABASE_URL to SQLite at import time,
-so every other test -- including in CI, where the job sets a Postgres URL --
-runs against SQLite. A migration that is a deliberate no-op on SQLite and does
-all its work on Postgres is therefore invisible to the entire rest of the
-suite, and CI's `alembic upgrade head` step only proves the DDL parses against
-an EMPTY database. Neither notices timestamps being silently shifted.
+here *can* be. tests/conftest.py builds an in-memory SQLite engine and
+overrides the get_db dependency with it, so every other test -- including in
+CI, where the job sets a Postgres URL -- runs against SQLite. A migration that
+is a deliberate no-op on SQLite and does all its work on Postgres is therefore
+invisible to the entire rest of the suite, and CI's `alembic upgrade head` step
+only proves the DDL parses against an EMPTY database. Neither notices
+timestamps being silently shifted.
 
 WHY THE SESSION TIMEZONE IS SET TO SOMETHING WRONG
 --------------------------------------------------
@@ -37,7 +38,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, text
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from alembic import command
@@ -130,7 +132,7 @@ def _migrate(engine, revision, session_timezone=None, backwards=False):
     name that gets both right. command.upgrade asked to walk backwards does
     not fail; it finds no path forward and does nothing, which reads as a
     passing test until an assertion notices the schema never moved (the same
-    trap tests/test_group_schema.py:59 documents).
+    trap tests/test_group_schema.py's _upgrade documents).
 
     The SET runs on this very connection, which is the point -- it is the
     session the ALTER statements execute in.
@@ -275,7 +277,11 @@ def _seed(engine):
                 "INSERT INTO equipment_status_history"
                 " (equipment_id, old_status, new_status, change_reason, verification_id,"
                 "  created_date, created_by)"
-                " VALUES (:eq, 'Functional', 'Broken', 'probe', :ver, :ts, :usr)"
+                # 'Broken' and 'probe' were arbitrary markers until DATA-H12
+                # constrained both columns; real vocabulary values now, which
+                # costs this test nothing -- it is about timestamps.
+                " VALUES (:eq, 'Functional', 'Malfunctioning', 'verification',"
+                "         :ver, :ts, :usr)"
             ),
             {"eq": equipment_id, "ver": verification_id, "ts": SEEDED, "usr": user_id},
         )
@@ -566,3 +572,174 @@ def test_create_all_agrees_with_the_migration_on_postgres(pg_schema):
         "create_all and the migration disagree about column types on Postgres: "
         f"{ {k: (created.get(k), migrated.get(k)) for k in set(created) | set(migrated) if created.get(k) != migrated.get(k)} }"
     )
+
+
+def test_the_constraint_revision_can_be_re_run_on_postgres(pg_schema):
+    """DATA-H12-1's skip, exercised on the dialect it exists for.
+
+    backend.migrations.IDEMPOTENT_SCHEMA_REVISIONS lets d3a9c17be540 past the
+    staleness guard on the promise that re-running it is a no-op. That promise
+    is load-bearing: baseline_revision stamps a pre-Alembic database BEFORE
+    DATA-H5-2's backfill, so every database taking that path runs this revision
+    afterwards -- including one whose tables create_all already built with the
+    constraints on them.
+
+    The SQLite half of this is in tests/test_group_schema.py, and it cannot
+    cover what matters here. SQLite's batch_alter_table rebuilds a table from a
+    reflection, so a duplicate constraint is absorbed silently; Postgres issues
+    ALTER TABLE ... ADD CONSTRAINT and raises DuplicateObject. The failure this
+    guards against is therefore Postgres-only, and until this test existed the
+    only Postgres run of the revision was against an empty schema, where every
+    constraint is missing and the skip never engages.
+
+    Re-driving upgrade() rather than command.upgrade because Alembic will not
+    replay an applied revision -- which is exactly the situation being
+    reproduced: the revision running against a schema that already has it.
+
+    ASSERTS LESS THAN ITS SQLITE TWIN, deliberately. That one asserts the second
+    run emits no DDL; this one only asserts the constraints are unchanged, which
+    is enough for THIS revision because a duplicate ADD CONSTRAINT raises
+    DuplicateObject on Postgres rather than being absorbed -- the raise IS the
+    assertion. It is not enough for an allowlisted revision whose repeated DDL
+    is idempotent in SQL itself, and DATA-H13-2's is one: re-applying a rule
+    drops the constraint and adds it back, which Postgres accepts. The loop
+    below re-runs that revision too, but the no-DDL assertion it needs lives in
+    test_the_deletion_rules_build_re_run_and_reverse_on_postgres.
+    """
+    from tests.test_group_schema import _rerun_upgrade, allowlisted_in_chain_order
+
+    _migrate(pg_schema, "head")
+
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    # Read off the revision itself rather than retyping seven names here, so
+    # adding a constraint to it cannot leave this check quietly narrower than
+    # the thing it is guarding.
+    constrain_vocabularies = script.get_revision("d3a9c17be540").module
+    expected = {name for _table, _column, name, _values in constrain_vocabularies.CONSTRAINTS}
+    before = _check_constraint_names(pg_schema)
+    missing = expected - before
+    assert missing == set(), (
+        "the constraints this test re-applies are not all present after a fresh "
+        f"migration, so a second run would prove nothing: missing {sorted(missing)}"
+    )
+
+    for revision in allowlisted_in_chain_order(script):
+        with pg_schema.begin() as conn:
+            _rerun_upgrade(conn, script, revision)
+
+    assert _check_constraint_names(pg_schema) == before
+
+
+def _check_constraint_names(engine):
+    with engine.connect() as conn:
+        insp = inspect(conn)
+        return {
+            c["name"]
+            for table in insp.get_table_names()
+            for c in insp.get_check_constraints(table)
+            if c.get("name")
+        }
+
+
+def test_the_index_revision_builds_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-H13-1, on the dialect that will carry the data.
+
+    tests/test_foreign_key_indexes.py covers every state this revision meets,
+    on SQLite. Three things there are worth asking again here, because the
+    answer is the dialect's rather than the revision's.
+
+    That the indexes exist after a migration from nothing. CI's own `alembic
+    upgrade head` step runs the same DDL and asserts nothing about the result.
+
+    That a second run is a no-op. Postgres refuses a second CREATE INDEX of the
+    same name outright -- the raise is the assertion, as it is for the
+    constraint revision above -- so what is checked afterwards is only that
+    nothing was lost.
+
+    That the downgrade removes exactly these and the upgrade restores them.
+    DROP INDEX names no table on either dialect, so on Postgres the name is
+    resolved through the search_path -- which this fixture narrows to one
+    schema, and which is the only thing keeping the drop off CI's real one.
+    """
+    from tests.test_foreign_key_indexes import (
+        INDEX_REVISION,
+        PARENT_REVISION,
+        _expected_indexes,
+        _indexes,
+    )
+    from tests.test_group_schema import _rerun_upgrade
+
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    expected = _expected_indexes()
+
+    _migrate(pg_schema, "head")
+    at_head = _indexes(pg_schema)
+    assert {name: at_head.get(name) for name in expected} == {
+        name: (table, (column,), False) for name, (table, column) in expected.items()
+    }
+
+    with pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, INDEX_REVISION)
+    assert _indexes(pg_schema) == at_head
+
+    _migrate(pg_schema, PARENT_REVISION, backwards=True)
+    assert set(_indexes(pg_schema)) == set(at_head) - set(expected)
+
+    _migrate(pg_schema, "head")
+    assert _indexes(pg_schema) == at_head
+
+
+def test_the_deletion_rules_build_re_run_and_reverse_on_postgres(pg_schema):
+    """DATA-H13-2, on the dialect where it is two statements rather than a rebuild.
+
+    tests/test_deletion_rules.py covers this revision on SQLite, where every
+    foreign key it replaces but equipment.group_id is anonymous, and batch mode
+    rebuilds the table. None of that is what happens here. Postgres named every
+    anonymous one <table>_<column>_fkey, the revision has to drop it under THAT
+    name -- read from the catalog, since the revision hard-codes none of them --
+    and the replacement is an ALTER TABLE that validates every existing row.
+
+    So: that all of them end up named fk_<table>_<column> and RESTRICT after a
+    migration from nothing; that a second run EMITS NO DDL; and that the
+    downgrade leaves the names and takes the rules, exactly as on SQLite, with
+    the upgrade able to start again from there.
+
+    The second of those is asserted on the statements and not on the result,
+    because here the result cannot tell. Dropping a constraint and adding it
+    back under the same name is valid on Postgres, so a revision with no skip
+    at all raises nothing and leaves the same eighteen constraints behind. It
+    is the case test_the_constraint_revision_can_be_re_run_on_postgres warns
+    about in its own docstring: repeated DDL that is idempotent in SQL itself.
+    """
+    from tests.conftest import recorded
+    from tests.test_deletion_rules import (
+        PARENT_REVISION,
+        RULES_REVISION,
+        _expected_foreign_keys,
+        _foreign_keys,
+    )
+    from tests.test_group_schema import _rerun_upgrade
+
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    expected = _expected_foreign_keys()
+    ruled = {
+        (table, column): (f"fk_{table}_{column}", referred, "RESTRICT")
+        for (table, column), referred in expected.items()
+    }
+
+    _migrate(pg_schema, "head")
+    assert _foreign_keys(pg_schema) == ruled
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, RULES_REVISION)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision changed constraints that were already right: {ddl}"
+    assert _foreign_keys(pg_schema) == ruled
+
+    _migrate(pg_schema, PARENT_REVISION, backwards=True)
+    assert _foreign_keys(pg_schema) == {
+        key: (name, referred, None) for key, (name, referred, _rule) in ruled.items()
+    }
+
+    _migrate(pg_schema, "head")
+    assert _foreign_keys(pg_schema) == ruled

@@ -58,22 +58,65 @@ ROOT_CAPABILITIES = (
 
 
 def already_bootstrapped(db) -> bool:
-    """Whether a MASTER has already been granted root authority.
+    """Whether an account that can still administer the system exists.
 
     Replaces a `role == UserRole.MASTER` comparison (H1-12 drops role
-    entirely). grant_root_authority always issues a GroupMembership on every
-    root for the account it bootstraps, so checking for that membership finds
-    the same fact the role comparison used to approximate, without a column
-    dedicated to answering it.
+    entirely).
+
+    THIS ASKED ABOUT MEMBERSHIP AND HAD TO ASK ABOUT AUTHORITY. The reasoning
+    was that grant_root_authority always issues a GroupMembership on every root
+    for the account it bootstraps, so finding one finds the same fact -- true,
+    and the wrong direction. That membership is SUFFICIENT evidence of a
+    bootstrap, never NECESSARY for one: a membership on a root is an ordinary
+    placement that says where somebody stands, and `PUT /users/{id}/group`
+    hands the AdminPanel dropdown every group in the tree, the root included.
+    So placing any ordinary private at the top -- no grants, no authority,
+    possibly the whole point of putting them there -- made this function answer
+    yes forever. If the master account were then lost, the one supported
+    recovery path would refuse to run, permanently, on the strength of a
+    private's placement.
+
+    Asks for MANAGE_PERSONNEL over every root instead. It is the narrowest verb
+    in the seed -- u_master alone holds it -- and the top personnel authority
+    in the system, so its presence means somebody is still administering this
+    database and its absence means nobody is.
+
+    NOT because such an account could recreate this one. It could not: no route
+    anywhere in the backend issues a Grant, so create_user and
+    update_user_group mint accounts and never authority, and a user they create
+    holds no capability at all. Grants come from this script and seed_data and
+    nowhere else.
+
+    Which bounds what this fixes. A root MEMBERSHIP no longer blocks bootstrap,
+    because a placement is not authority. A lost master still does: the Grant
+    row survives the person, so an unreachable master -- password gone, or
+    is_active_duty false, which bars login outright -- keeps answering yes here
+    forever. That is a real gap and it is not this function's to close; it
+    wants a deliberate recovery path rather than a guard that guesses.
+
+    Through authz.may_global rather than a grant query written here, so this
+    and the routes agree by construction -- including the part that is easy to
+    get subtly wrong, that the verb must be held over EVERY root rather than
+    any one of them. The candidate set is narrowed first purely to avoid asking
+    it about every user in the force; a grant can only reach a root by sitting
+    on it, since a root has no ancestors, so no holder can be missed that way.
     """
-    root_ids = [group.id for group in authz.root_groups(db)]
-    if not root_ids:
+    roots = authz.root_groups(db)
+    if not roots:
         return False
-    return (
-        db.query(authz.GroupMembership)
-        .filter(authz.GroupMembership.group_id.in_(root_ids))
-        .first()
-        is not None
+
+    candidates = {
+        user_id
+        for (user_id,) in db.query(authz.Grant.user_id)
+        .filter(
+            authz.Grant.capability == Capability.MANAGE_PERSONNEL.value,
+            authz.Grant.group_id.in_([group.id for group in roots]),
+        )
+        .distinct()
+    }
+    return any(
+        authz.may_global(db, user_id, Capability.MANAGE_PERSONNEL)
+        for user_id in candidates
     )
 
 

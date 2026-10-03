@@ -406,8 +406,8 @@ def test_security_scheme_name_is_unchanged(client):
     """Subclassing OAuth2PasswordBearer renames the scheme unless pinned.
 
     FastAPI keys securitySchemes off the class name, so the subclass silently
-    republished the contract that `npm run generate-client` consumes. The
-    transport moved into a cookie; the scheme did not change.
+    republished the contract that the exported specification carries (API-H1).
+    The transport moved into a cookie; the scheme did not change.
     """
     schemes = client.app.openapi()["components"]["securitySchemes"]
     assert "OAuth2PasswordBearer" in schemes

@@ -2,7 +2,7 @@
 
 The defect: `TicketResponse` declared `created_at` ("Alias for timestamp") and
 `timestamp` ("DB field name") -- two names for a column actually called
-`opened_at` (models.py:238) -- and the route passed neither. It passed
+`opened_at` (on models.MaintenanceLog) -- and the route passed neither. It passed
 `opened_at=`, which the schema did not declare, and Pydantic v2 discards unknown
 `__init__` kwargs silently. So every ticket in the force went out with two null
 date fields and no open date at all, while MaintenancePage.tsx typed `opened_at`
@@ -101,7 +101,16 @@ def test_opened_at_is_the_stored_value_not_a_recomputed_now(
 
     ticket = next(t for t in _tickets(client, token_master) if t["id"] == ticket_id)
 
-    emitted = datetime.fromisoformat(ticket["opened_at"])
+    # The wire value ends in "Z" (DATA-H1's format, which the frontend depends
+    # on), and datetime.fromisoformat only accepts "Z" from Python 3.11. The
+    # project targets 3.10 -- Dockerfile.backend and CI both pin it -- so the
+    # bare call passed on a 3.11 dev machine and failed CI on every run. Same
+    # substitution as tests/test_utc_contract.py's _parse_and_check_aware_utc.
+    #
+    # Fixed HERE rather than by making clock.iso_z emit "+00:00": the "Z" is
+    # the contract, and this test is about where opened_at comes from, not
+    # about which designator it carries.
+    emitted = datetime.fromisoformat(ticket["opened_at"].replace("Z", "+00:00"))
     assert emitted.tzinfo is not None, "DATA-H1: the wire value must be aware"
     assert abs((emitted - backdated).total_seconds()) < 1, (
         f"emitted {emitted} is not the stored {backdated} -- "

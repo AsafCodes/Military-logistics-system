@@ -207,7 +207,7 @@ Legacy comes out only once nothing reads it.
 
 Closed by this work, not to be worked separately: **SEC-H2**, **SEC-H4**, **DATA-H9**, **DATA-M15**, **DATA-M16**, **DATA-M17**.
 
-Partially touched, ticket stays open: **DATA-M2** (H1-6 validates the target on `assign_owner` only), **DATA-H6** (the broad `except` at `equipment.py:183` survives), **DATA-H13** (new tables carry indexes and deletion rules; existing ones still do not).
+Partially touched, ticket stays open: **DATA-M2** (H1-6 validates the target on `assign_owner` only), **DATA-H6** (the broad `except` at `equipment.py:183` survives). **DATA-H13** was partially touched here too (the new tables carried indexes and deletion rules from the start) and has since closed in its own right, at DATA-H13-1 and DATA-H13-2.
 
 Explicitly **not** in scope: **SEC-H5** — four endpoints apply no scoping at all. This document changes *how* scoping is computed; adding it where none exists is separate work, and easier once H1-5 lands.
 
@@ -216,4 +216,4 @@ Explicitly **not** in scope: **SEC-H5** — four endpoints apply no scoping at a
 - `create_equipment` has no authorization gate whatsoever — any authenticated user can create equipment. H1-7's `require` makes the fix one line, but it is not itemized anywhere.
 - `assign_owner` and `transfer_equipment` perform no scope check on the *target*, so a cross-unit transfer permanently gives an item away with no undo path.
 - [migrations.py:77](backend/migrations.py#L77) stamps pre-Alembic databases to `"head"` instead of the baseline revision, silently skipping every data migration.
-- The generated frontend client under `frontend/src/client/` is stale and has no callers; API-H2 already covers it.
+- The generated frontend client under `frontend/src/client/` was stale and had no callers; API-H2 has since deleted it, with its generator.

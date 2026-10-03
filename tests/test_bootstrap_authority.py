@@ -130,14 +130,63 @@ def test_every_root_is_covered_when_the_graph_has_several(db_session, admin, gro
     }
 
 
-def test_already_bootstrapped_is_false_until_a_root_membership_exists(
+def test_a_root_membership_alone_does_not_count_as_bootstrapped(
+    db_session, group_graph
+):
+    """An ordinary user standing at the top is not an administrator.
+
+    The guard used to look for ANY GroupMembership on a root. That is evidence
+    a bootstrap happened but is not required for one: `PUT /users/{id}/group`
+    offers every group including the root, so an admin placing a private there
+    -- a placement, carrying no authority whatsoever -- flipped this to True
+    permanently. If the master account were then lost, the only supported
+    recovery path would refuse to run on the strength of that private's
+    placement, with no way to undo it short of editing the database by hand.
+
+    The private below holds no grant at all, so there is nobody who can create
+    the replacement administrator, so bootstrap must still be allowed.
+    """
+    private = models.User(personal_number="u_private", full_name="Private")
+    db_session.add(private)
+    db_session.flush()
+    root = next(g for g in authz.root_groups(db_session))
+    db_session.add(authz.GroupMembership(user_id=private.id, group_id=root.id))
+    db_session.commit()
+
+    assert already_bootstrapped(db_session) is False
+
+
+def test_a_root_grant_short_of_manage_personnel_does_not_count(
+    db_session, group_graph
+):
+    """Authority over equipment is not authority to create administrators.
+
+    A brigade commander legitimately holds verbs on the root -- the seeded
+    graph puts VIEW and TRANSFER there. None of them can mint a user, so if the
+    master is lost they cannot recover the system either, and bootstrap is
+    still the only way back.
+    """
+    commander = models.User(personal_number="u_brig", full_name="Brigade Cmdr")
+    db_session.add(commander)
+    db_session.flush()
+    root = next(g for g in authz.root_groups(db_session))
+    for capability in (Capability.VIEW, Capability.TRANSFER, Capability.RESOLVE_FAULT):
+        db_session.add(authz.Grant(
+            user_id=commander.id, group_id=root.id, capability=capability.value,
+        ))
+    db_session.commit()
+
+    assert already_bootstrapped(db_session) is False
+
+
+def test_already_bootstrapped_is_false_until_root_authority_is_granted(
     db_session, admin
 ):
     """The H1-12 replacement for `role == UserRole.MASTER`.
 
-    Before grant_root_authority runs there is no root and no membership, so
-    the guard must not refuse -- an empty database is exactly the state the
-    first bootstrap has to succeed from.
+    Before grant_root_authority runs there is no root and nobody holds
+    anything, so the guard must not refuse -- an empty database is exactly the
+    state the first bootstrap has to succeed from.
     """
     assert already_bootstrapped(db_session) is False
 

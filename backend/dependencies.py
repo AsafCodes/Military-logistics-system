@@ -27,8 +27,8 @@ class OAuth2PasswordBearerWithCookie(OAuth2PasswordBearer):
     pytest suite and Swagger's Authorize button use. Removing it breaks both.
 
     Subclassed rather than written as a fresh SecurityBase so that tokenUrl,
-    the OpenAPI security metadata that drives `npm run generate-client`, and the
-    401 + WWW-Authenticate shape all stay exactly as they were.
+    the OpenAPI security metadata that Swagger's Authorize button relies on, and
+    the 401 + WWW-Authenticate shape all stay exactly as they were.
 
     An explicit Authorization header WINS over the cookie. The precedence is
     deliberate and pinned by tests/test_cookie_auth.py. Cookie-first is the
@@ -71,8 +71,8 @@ class OAuth2PasswordBearerWithCookie(OAuth2PasswordBearer):
 # scheme_name pinned to the ORIGINAL class name on purpose. FastAPI derives the
 # securitySchemes key in openapi.json from the class, so subclassing silently
 # renamed it to "OAuth2PasswordBearerWithCookie" -- a published contract change,
-# visible to `npm run generate-client`, in exchange for nothing. The transport
-# changed; the scheme did not.
+# visible to anything generated from the specification, in exchange for
+# nothing. The transport changed; the scheme did not.
 oauth2_scheme = OAuth2PasswordBearerWithCookie(
     tokenUrl="login", scheme_name="OAuth2PasswordBearer"
 )
@@ -111,6 +111,53 @@ async def get_current_active_user(current_user: models.User = Depends(get_curren
     if not current_user.is_active_duty:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
+
+# DATA-H8. The relationships an EquipmentResponse touches, loaded up front.
+#
+# The set is not a guess and it is not "everything on the model". It is exactly
+# what the three properties schemas.EquipmentResponse is built from traverse:
+#
+#     item_name                  -> catalog_item
+#     current_state_description  -> holder, owner, location
+#     compliance_level / report_status -> columns only, nothing
+#
+# All four are properties on models.Equipment; find them by name rather than by
+# line, which is what this comment used to give and which silently went wrong
+# the first time anything was inserted above them.
+#
+# Anything that changes what those properties read has to change this tuple in
+# the same breath. Read them together.
+#
+# owner_location is declared on Equipment and read by nothing, so it is absent.
+# `group` is absent for the opposite reason: only reports.py's unit_association
+# reads it, which is why that route keeps its own inline list rather than this
+# one -- the two sets genuinely differ, and folding them together would load a
+# join for every caller to spare one.
+#
+# location is here even though no route in this application ever writes
+# actual_location_id to a non-null value -- it is only ever set to None (see
+# DATA-M18, and grep the column). The property reads it, so a database filled
+# from anywhere but this API -- a migration, a seed, a legacy import -- fans out
+# on it once per row. One LEFT OUTER JOIN against a leaf table is the right
+# price for not depending on that.
+#
+# Defined ONCE because two routes need the identical set: equipment router's
+# accessible listing and users router's /users/me/equipment. Two copies is
+# DATA-H9's shape applied to loader options -- a fifth relationship added to
+# current_state_description would get eager-loaded on one route and fan out on
+# the other, and nothing would fail. Loader options are immutable and reusable
+# across queries, so one tuple spread into both call sites is safe.
+#
+# joinedload rather than selectinload throughout: all four are many-to-one, so
+# there is no row multiplication to defend against, and joinedload is the only
+# idiom in this tree (reports.py:28).
+EQUIPMENT_RESPONSE_LOADS = (
+    joinedload(models.Equipment.catalog_item),
+    joinedload(models.Equipment.holder),
+    joinedload(models.Equipment.owner),
+    joinedload(models.Equipment.location),
+)
+
 
 def scope_equipment_query(q, user: models.User):
     """Restrict an Equipment query to what `user` is allowed to see.

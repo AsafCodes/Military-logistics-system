@@ -67,9 +67,7 @@ describe('nothing bypasses safeStorage', () => {
         return readdirSync(dir).flatMap(entry => {
             const full = join(dir, entry);
             if (statSync(full).isDirectory()) {
-                // The generated OpenAPI client is not hand-written and is slated
-                // for deletion (FE-H2).
-                return entry === 'client' ? [] : sourceFiles(full);
+                return sourceFiles(full);
             }
             return /\.tsx?$/.test(entry) ? [full] : [];
         });

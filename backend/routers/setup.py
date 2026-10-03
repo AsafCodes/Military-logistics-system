@@ -1,5 +1,6 @@
 """Setup Router - System initialization and fault types"""
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -10,6 +11,42 @@ from .. import models
 from .. import schemas
 
 router = APIRouter(tags=["setup"])
+
+
+def _tickets_holding(db: Session, fault_type_id: int) -> int:
+    """How many maintenance tickets reference this fault type.
+
+    Count rather than load: the number is the whole answer, and the tickets
+    themselves are none of the delete route's business.
+
+    Status is deliberately not filtered. A CLOSED ticket still holds the
+    reference, so "block only the open ones" would let the foreign key fail by
+    a narrower door. The constraint does not care whether the work finished.
+    """
+    return db.query(models.MaintenanceLog).filter(
+        models.MaintenanceLog.fault_type_id == fault_type_id
+    ).count()
+
+
+def _still_in_use(name: str, count: int) -> HTTPException:
+    """The one refusal both the pre-check and the commit-time backstop raise.
+
+    Built in one place because the two paths describe the SAME condition and a
+    caller must not be able to tell which one answered -- a second spelling
+    would drift, and the drift would be a disclosure about timing.
+
+    Names the fault type: global vocabulary any authenticated user can already
+    enumerate through GET /setup/fault_types, so nothing new is disclosed.
+    Never the table, the column or the constraint -- that leak is half of what
+    DATA-H7 reports, and audit_trail.set_status's 409 sets the precedent.
+    """
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"Fault type '{name}' is used by {count} maintenance "
+            "ticket(s) and cannot be deleted."
+        ),
+    )
 
 @router.get("/groups", response_model=list[schemas.GroupResponse])
 def list_groups(
@@ -109,8 +146,53 @@ def delete_fault_type(
     fault = db.query(models.FaultType).filter(models.FaultType.id == fault_id).first()
     if not fault:
         raise HTTPException(status_code=404, detail="Fault type not found")
-    
-    db.delete(fault)
-    db.commit()
-    
+
+    # DATA-H7. maintenance_logs.fault_type_id references this row, so deleting
+    # a type any ticket has ever used violates the foreign key. Unhandled, that
+    # surfaced as a 500 carrying the constraint's name -- the leak being half of
+    # what the ticket reports -- and left the session dirty behind it.
+    #
+    # Read the name BEFORE the delete: after a rollback the instance is expired,
+    # and refreshing it to build an error message is a query that can fail in
+    # its own right.
+    name = fault.name
+
+    in_use = _tickets_holding(db, fault.id)
+    if in_use:
+        raise _still_in_use(name, in_use)
+
+    try:
+        db.delete(fault)
+        db.commit()
+    except IntegrityError:
+        # The pre-check above is check-then-act and cannot be atomic: a report
+        # filed between the count and this commit passes it and still meets the
+        # constraint here. Narrow, and the same defect if left to surface raw,
+        # so the refusal is issued from both places rather than only the one
+        # that is easy to reach from a test.
+        #
+        # DATA-H13 did NOT close this. It declared the constraint ON DELETE
+        # RESTRICT, which names the refusal rather than removing it, so a
+        # route relying on the pre-check alone would still answer 500 here.
+        #
+        # Catching IntegrityError whole is safe only because exactly one
+        # foreign key points at fault_types. tests/test_fault_type_deletion.py
+        # pins that -- a second referencing table fails there and sends the
+        # reader here, because then this branch would be reporting the wrong
+        # reason for the refusal.
+        db.rollback()
+
+        # And the recount is what makes the claim honest rather than assumed.
+        # This branch may only say "tickets hold it" when tickets actually do:
+        # an IntegrityError this route cannot explain -- a dependency that
+        # starts writing earlier in the request, a constraint added later --
+        # must not be dressed up as a conflict naming a count of zero. Re-raise
+        # it instead and let it be the loud, wrong-looking 500 it is, because a
+        # plausible 409 is the version nobody investigates.
+        count = _tickets_holding(db, fault_id)
+        if not count:
+            raise
+
+        raise _still_in_use(name, count)
+
     return {"status": "Deleted"}

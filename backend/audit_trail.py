@@ -13,7 +13,7 @@ helper so no path CAN bypass it", and the operative word is `can`. A module
 plus a convention is not that -- a convention is what the four divergent call
 sites already were. The enforcement is in tests/test_audit_trail.py, which
 walks every file under backend/ with `ast` and fails on a construction of
-either table, or a write to `.status` or `.sensitivity`, outside this module.
+either table, or a write to an OWNED_COLUMNS entry, outside this module.
 That guard is the fix; this module is only what makes obeying it possible.
 
 What the guard actually promises is that no ORDINARY spelling gets past it,
@@ -55,7 +55,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from . import clock, models
-from .enums import ChangeReason, EventType
+from .enums import ChangeReason, EquipmentStatus, EventType, Sensitivity
 
 # The equipment columns this module OWNS: assigning one outside here is a test
 # failure, not a code review note. Declared as data because the guard in
@@ -69,7 +69,7 @@ from .enums import ChangeReason, EventType
 # Kept beside the setters rather than in the test, so adding `set_priority`
 # below and forgetting this line is caught by the staleness check next door
 # rather than by nobody.
-OWNED_COLUMNS = ("status", "sensitivity")
+OWNED_COLUMNS = ("status", "sensitivity", "last_verified_at")
 
 
 def record_event(
@@ -177,7 +177,7 @@ def set_status(
     *,
     equipment: models.Equipment,
     actor: models.User,
-    new_status: str,
+    new_status: EquipmentStatus,
     reason: ChangeReason,
     notes: str | None = None,
     verification_id: int | None = None,
@@ -210,8 +210,16 @@ def set_status(
     value into the audit trail to avoid an error message. DATA-H3-1 made the
     same call for a NULL sensitivity -- surface it, do not launder it. Only
     reachable by hand-written SQL today, because nothing in the application
-    writes a NULL status; DATA-M12 and DATA-H12 are what would make it
-    unreachable by construction.
+    writes a NULL status. DATA-H12-1's ck_equipment_status does NOT close this
+    and it is worth being exact about why: a CHECK is satisfied by NULL, so the
+    constraint decides WHICH string the column may hold and not whether it must
+    hold one. DATA-M12, which owns the non-null constraint, is the only ticket
+    that would make this branch unreachable.
+
+    THE NEW STATUS IS CHECKED AGAINST THE VOCABULARY, not merely against
+    emptiness, as of DATA-H12-2 -- see the coercion below. So the two arms are
+    no longer symmetric: an old status is read from a row and can only be
+    refused, while a new one is supplied by a caller and is normalised.
 
     `not old_status`, NOT `old_status is None`. The empty string is the same
     corruption wearing different clothes -- it satisfies a NOT NULL column, so
@@ -239,6 +247,30 @@ def set_status(
         raise ValueError(
             f"set_status requires a non-empty new_status, got {new_status!r}"
         )
+
+    # DATA-H12-2. The annotation above says EquipmentStatus and Python does not
+    # check it, so this is the line that makes it true rather than decorative --
+    # which is this module's own founding complaint ("a module plus a
+    # convention is not that") applied to its own signature.
+    #
+    # Accepts a member or its string spelling, and normalises to the string so
+    # the column keeps receiving exactly what it received before this ticket.
+    # That matters more than it looks: str() of a str-mixin member is
+    # "EquipmentStatus.FUNCTIONAL", so a member that reached a driver or an
+    # f-string unnormalised would write a value nothing can read back.
+    try:
+        new_status = EquipmentStatus(new_status).value
+    except ValueError as exc:
+        # Reached only through a caller that ignored the annotation. Before
+        # DATA-H12-1 this wrote silently and corrupted the readiness count;
+        # between H12-1 and here it reached the database and came back as an
+        # IntegrityError at commit time, naming a constraint rather than a
+        # caller, from whichever route happened to commit next.
+        raise ValueError(
+            f"set_status requires a value from EquipmentStatus, got "
+            f"{new_status!r}; accepted: "
+            + ", ".join(repr(m.value) for m in EquipmentStatus)
+        ) from exc
 
     old_status = equipment.status
     if not old_status:
@@ -271,7 +303,7 @@ def set_sensitivity(
     *,
     equipment: models.Equipment,
     actor: models.User,
-    new_sensitivity: str,
+    new_sensitivity: Sensitivity,
 ) -> None:
     """Assign equipment.sensitivity and log that somebody decided it.
 
@@ -316,10 +348,64 @@ def set_sensitivity(
             f"got {new_sensitivity!r}"
         )
 
+    # DATA-H12-2, set_status's coercion verbatim and for its reasons. What an
+    # out-of-vocabulary value costs HERE is the one difference worth naming:
+    # scope_equipment_query matches classification with is_distinct_from, under
+    # which any junk string is TRUE against CLASSIFIED, so a value this
+    # function accepted but no reader recognises makes the item visible to
+    # callers holding no VIEW_CLASSIFIED -- the same silent widening the
+    # emptiness guard above exists to stop, one step further in.
+    try:
+        new_sensitivity = Sensitivity(new_sensitivity).value
+    except ValueError as exc:
+        raise ValueError(
+            f"set_sensitivity requires a value from Sensitivity, got "
+            f"{new_sensitivity!r}; accepted: "
+            + ", ".join(repr(m.value) for m in Sensitivity)
+        ) from exc
+
     equipment.sensitivity = new_sensitivity
     record_event(
         db,
         equipment=equipment,
         actor=actor,
         event_type=EventType.RECLASSIFY,
+    )
+
+
+# The events that are somebody laying eyes on the item. Everything else in
+# EventType is paperwork, and paperwork must not advance the clock.
+VERIFYING_EVENTS = frozenset({EventType.VERIFICATION, EventType.CONDITION_REPORT})
+
+
+def set_last_verified_at(
+    db: Session,
+    *,
+    equipment: models.Equipment,
+    actor: models.User,
+    event_type: EventType,
+) -> None:
+    """Advance the verification clock to now and log the inspection that did it.
+
+    DATA-H5. assign_owner and transfer_equipment both reset this column, and
+    the model defaulted it to the moment of creation, so a bulk transfer made
+    the fleet compliant and a new item read GOOD without ever being checked.
+    Only a physical verification may advance it, and the event type is how
+    this function knows whether one happened.
+
+    Takes no value: the clock is always set to now, so no caller can backdate
+    or forward-date an inspection. Adds; never commits.
+    """
+    if event_type not in VERIFYING_EVENTS:
+        raise ValueError(
+            f"set_last_verified_at requires a verifying event, got {event_type!r}; "
+            "only a physical verification may advance the compliance clock"
+        )
+
+    equipment.last_verified_at = clock.utcnow()
+    record_event(
+        db,
+        equipment=equipment,
+        actor=actor,
+        event_type=event_type,
     )

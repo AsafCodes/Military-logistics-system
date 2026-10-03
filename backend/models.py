@@ -1,9 +1,8 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float
-from sqlalchemy.orm import relationship
+import enum
 from datetime import timedelta
-from .database import Base # Use shared Base from backend package
-from .enums import EquipmentStatus, Sensitivity
-from . import clock
+
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
 
 # Imported for its side effect: it registers the group algebra tables on
 # Base.metadata, which is how alembic/env.py and the test suite's create_all()
@@ -11,7 +10,66 @@ from . import clock
 # declared by table-name string -- so the import direction is free. The
 # 'groups.id' target below is resolved lazily, when DDL is emitted or a join is
 # built, not at mapper configuration.
-from . import authz  # noqa: F401
+from . import (
+    authz,  # noqa: F401
+    clock,
+)
+from .database import Base  # Use shared Base from backend package
+from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+
+
+def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
+    """A CHECK that admits exactly this enum's values, and NULL.
+
+    DATA-H12. Generated from the enum rather than repeated beside it, so
+    create_all always emits today's vocabulary and adding a member cannot leave
+    the constraint describing the old one. The Alembic revision that ships this
+    deliberately does NOT call this function -- a revision is a snapshot of what
+    was true when it was written, not a view of the current models, so it
+    inlines its literals. The two are therefore free to drift, which is the
+    whole point: test_group_schema.py compares a migrated schema against a
+    create_all one and goes red when they do.
+
+    NULL PASSES, in SQL and by intent. A CHECK is satisfied by NULL, so this
+    constrains WHICH string a column may hold and says nothing about whether it
+    must hold one. equipment.status and equipment.sensitivity are both still
+    nullable; DATA-M12 owns non-null constraints and the backfill decision they
+    need. Pinned by a test rather than left to be rediscovered.
+
+    Interpolates rather than binds, because DDL cannot take bind parameters --
+    which makes the values' own spelling load-bearing. Quoted by doubling any
+    apostrophe, which is SQL's own escape and what the revision does; repr()
+    reads more naturally here and is wrong, because Python switches to DOUBLE
+    quotes for a string containing an apostrophe and Postgres reads a
+    double-quoted token as an identifier. A test asserts no value needs the
+    escape at all, so this is the second of two guards rather than the only
+    one; it lives here because a value that needs it should still emit valid
+    SQL rather than depending on the test having been run.
+    """
+    allowed = ", ".join("'" + member.value.replace("'", "''") + "'" for member in values)
+    return CheckConstraint(f"{column} IN ({allowed})", name=name)
+
+
+def _restrict(table: str, column: str, referred: str) -> ForeignKey:
+    """A foreign key to `referred`.id that refuses the delete of a referenced row.
+
+    DATA-H13-2. Every foreign key in this module goes through here, so the rule
+    is one decision in one place: these tables are equipment and the record of
+    what happened to it, and deleting a user or an item must neither take that
+    record with it nor leave it pointing at nobody. The group tables in
+    authz.py cascade instead -- an edge, a membership or a grant means nothing
+    once its group or user is gone -- and
+    tests/test_group_schema.py::test_nothing_outside_the_group_tables_cascades
+    holds the line between the two.
+
+    The constraint is named fk_<table>_<column> rather than left to the
+    database, which is what lets a migration address it: Postgres would call
+    it <table>_<column>_fkey and SQLite would not name it at all. The table and
+    column are passed in rather than discovered because a Column does not know
+    either until the class body has finished.
+    """
+    return ForeignKey(f'{referred}.id', name=f'fk_{table}_{column}', ondelete='RESTRICT')
+
 
 # --- Users & Authentication ---
 class User(Base):
@@ -79,11 +137,24 @@ class Location(Base):
 
 class Equipment(Base):
     __tablename__ = 'equipment'
-    
+
+    # DATA-H12. The two columns this table carries that are a vocabulary rather
+    # than free text. Until this landed, analytics.unit_readiness counted one
+    # exact literal against a column that would accept any typo of it.
+    __table_args__ = (
+        _one_of('status', EquipmentStatus, 'ck_equipment_status'),
+        _one_of('sensitivity', Sensitivity, 'ck_equipment_sensitivity'),
+    )
+
     id = Column(Integer, primary_key=True, index=True) 
     serial_number = Column(String, unique=True, nullable=True) 
     
-    catalog_item_id = Column(Integer, ForeignKey('catalog_items.id'), nullable=False)
+    catalog_item_id = Column(
+        Integer,
+        _restrict('equipment', 'catalog_item_id', 'catalog_items'),
+        nullable=False,
+        index=True,
+    )
     status = Column(String, default=EquipmentStatus.FUNCTIONAL.value)
     
     # Matrix Security Fields
@@ -104,32 +175,47 @@ class Equipment(Base):
     # kind of gap this phase exists to close. An item in no group is visible
     # to no commander, so there is no benign NULL to preserve.
     #
-    # Deliberately no ondelete rule: deleting a group that still holds equipment
-    # must fail rather than take the equipment with it. See the note in authz.py
-    # on why that only actually holds on Postgres.
+    # RESTRICT, like every foreign key in this module (DATA-H13-2): deleting a
+    # group that still holds equipment must fail rather than take the equipment
+    # with it. This column carried no rule at all until then, on purpose and
+    # for the same end -- a missing rule refuses the delete too. Saying it is
+    # what lets one test hold every foreign key to "declares a rule" with no
+    # list of exceptions.
     #
-    # The constraint is named explicitly so the model and the migration agree:
-    # downgrade() drops it by name, which Postgres requires, and leaving it
-    # unnamed here would have create_all() and Alembic build different schemas.
+    # Named fk_equipment_group_id since the revision that added it, which is
+    # the pattern _restrict now gives every foreign key in this module -- see
+    # there for why a name is not optional.
     group_id = Column(
         Integer,
-        ForeignKey('groups.id', name='fk_equipment_group_id'),
+        _restrict('equipment', 'group_id', 'groups'),
         nullable=False,
         index=True,
     )
     
     # --- Ownership vs Possession ---
-    owner_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    owner_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True) 
-    holder_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    owner_user_id = Column(Integer, _restrict('equipment', 'owner_user_id', 'users'), nullable=True, index=True)
+    owner_location_id = Column(
+        Integer,
+        _restrict('equipment', 'owner_location_id', 'locations'),
+        nullable=True,
+        index=True,
+    )
+    holder_user_id = Column(Integer, _restrict('equipment', 'holder_user_id', 'users'), nullable=True, index=True)
     
     # Custom Location String (e.g. "Armory", "Warehouse 1")
     custom_location = Column(String, nullable=True) 
 
-    actual_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
+    actual_location_id = Column(
+        Integer,
+        _restrict('equipment', 'actual_location_id', 'locations'),
+        nullable=True,
+        index=True,
+    )
 
-    # Verification
-    last_verified_at = Column(clock.UtcDateTime, default=clock.utcnow)
+    # Verification. No default (DATA-H5): a new item has never been checked, so
+    # it starts NULL -- "never reported" -- until audit_trail.set_last_verified_at
+    # records a real inspection.
+    last_verified_at = Column(clock.UtcDateTime)
 
     # Relationships
     catalog_item = relationship("CatalogItem")
@@ -206,10 +292,20 @@ class Equipment(Base):
 class TransactionLog(Base):
     __tablename__ = 'transaction_logs'
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'))
-    involved_user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    involved_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True)
-    timestamp = Column(clock.UtcDateTime, default=clock.utcnow)
+    equipment_id = Column(Integer, _restrict('transaction_logs', 'equipment_id', 'equipment'), index=True)
+    involved_user_id = Column(
+        Integer,
+        _restrict('transaction_logs', 'involved_user_id', 'users'),
+        nullable=True,
+        index=True,
+    )
+    involved_location_id = Column(
+        Integer,
+        _restrict('transaction_logs', 'involved_location_id', 'locations'),
+        nullable=True,
+        index=True,
+    )
+    timestamp = Column(clock.UtcDateTime, default=clock.utcnow, index=True)
     user_status_at_time = Column(Boolean, nullable=True)
     event_type = Column(String) 
     
@@ -231,19 +327,24 @@ class FaultType(Base):
     
     # Manager Approval
     is_pending = Column(Boolean, default=False)
-    requested_by_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    requested_by_id = Column(Integer, _restrict('fault_types', 'requested_by_id', 'users'), nullable=True, index=True)
 
 class MaintenanceLog(Base):
     __tablename__ = 'maintenance_logs'
+
+    __table_args__ = (
+        _one_of('status', TicketStatus, 'ck_maintenance_logs_status'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'))
-    fault_type_id = Column(Integer, ForeignKey('fault_types.id'))
+    equipment_id = Column(Integer, _restrict('maintenance_logs', 'equipment_id', 'equipment'), index=True)
+    fault_type_id = Column(Integer, _restrict('maintenance_logs', 'fault_type_id', 'fault_types'), index=True)
     description = Column(String)
-    status = Column(String, default="Open") 
+    status = Column(String, default=TicketStatus.OPEN.value)
     opened_at = Column(clock.UtcDateTime, default=clock.utcnow)
     closed_at = Column(clock.UtcDateTime, nullable=True)
     
-    technician_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    technician_id = Column(Integer, _restrict('maintenance_logs', 'technician_id', 'users'), nullable=True, index=True)
     
     equipment = relationship("Equipment")
     fault_type = relationship("FaultType")
@@ -268,15 +369,19 @@ class DailyStats(Base):
 class Verification(Base):
     """Records equipment verification events."""
     __tablename__ = 'verifications'
-    
+
+    __table_args__ = (
+        _one_of('reported_status', EquipmentStatus, 'ck_verifications_reported_status'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False)
+    equipment_id = Column(Integer, _restrict('verifications', 'equipment_id', 'equipment'), nullable=False, index=True)
     verification_type = Column(String, nullable=False)
     reported_status = Column(String, nullable=False)
     findings = Column(String, nullable=True)
     action_required = Column(Boolean, default=False)
     created_date = Column(clock.UtcDateTime, default=clock.utcnow)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_by = Column(Integer, _restrict('verifications', 'created_by', 'users'), nullable=False, index=True)
 
     equipment = relationship("Equipment", backref="verifications")
     reporter = relationship("User", foreign_keys=[created_by])
@@ -285,26 +390,49 @@ class Verification(Base):
 class EquipmentStatusHistory(Base):
     """Audit trail for equipment status changes."""
     __tablename__ = 'equipment_status_history'
-    
+
+    # Both ends of the transition, because a history row asserting a move out
+    # of a status that never existed is as corrupt as one asserting a move into
+    # it -- and the reason beside them, which is the column that says WHY the
+    # row exists and was the last free-text field left in this table.
+    #
+    # change_reason was left out of DATA-H12's own list and added right after,
+    # deliberately rather than by widening the ticket: it is not a status, so
+    # the ticket's title does not reach it, but it is the same defect and it
+    # has an enum already. Two test fixtures were writing values outside that
+    # enum when the constraint went on -- 'probe', and 'VERIFICATION' in the
+    # wrong case -- which is the evidence that nothing was enforcing it.
+    __table_args__ = (
+        _one_of('old_status', EquipmentStatus, 'ck_equipment_status_history_old_status'),
+        _one_of('new_status', EquipmentStatus, 'ck_equipment_status_history_new_status'),
+        _one_of('change_reason', ChangeReason, 'ck_equipment_status_history_change_reason'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False)
+    equipment_id = Column(
+        Integer,
+        _restrict('equipment_status_history', 'equipment_id', 'equipment'),
+        nullable=False,
+        index=True,
+    )
     old_status = Column(String, nullable=False)
     new_status = Column(String, nullable=False)
     change_reason = Column(String, nullable=False)
-    verification_id = Column(Integer, ForeignKey('verifications.id'), nullable=True)
+    verification_id = Column(
+        Integer,
+        _restrict('equipment_status_history', 'verification_id', 'verifications'),
+        nullable=True,
+        index=True,
+    )
     notes = Column(String, nullable=True)
     created_date = Column(clock.UtcDateTime, default=clock.utcnow)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_by = Column(
+        Integer,
+        _restrict('equipment_status_history', 'created_by', 'users'),
+        nullable=False,
+        index=True,
+    )
     
     equipment = relationship("Equipment", backref="status_history")
     verification = relationship("Verification", backref="status_changes")
     user = relationship("User", foreign_keys=[created_by])
-
-
-# --- Ticket Status Enum ---
-import enum
-class TicketStatus(str, enum.Enum):
-    OPEN = "Open"
-    IN_PROGRESS = "In Progress"
-    WAITING_PARTS = "Waiting for Parts"
-    CLOSED = "Closed"

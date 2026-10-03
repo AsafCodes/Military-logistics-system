@@ -10,7 +10,7 @@ from ..dependencies import (
     scope_equipment_derived_query,
     require_status_authority,
 )
-from ..enums import Capability, ChangeReason, EquipmentStatus, EventType
+from ..enums import Capability, ChangeReason, EquipmentStatus, EventType, TicketStatus
 from .. import audit_trail
 from .. import authz
 from .. import clock
@@ -21,7 +21,19 @@ router = APIRouter(tags=["maintenance"])
 
 @router.get("/tickets/", response_model=List[schemas.TicketResponse])
 def get_tickets(
-    status_filter: Optional[str] = Query(None, description="Filter by ticket status"),
+    # DATA-H12-2, the sibling of reports.get_inventory_report's `status` and a
+    # deliberate behaviour change for the same reason: an unrecognised filter
+    # answered 200 with an empty list, which reads as "no tickets" rather than
+    # "no such status". 422 now, naming the four members.
+    #
+    # Admits IN_PROGRESS and WAITING_PARTS, which no route assigns, so the
+    # filter accepts a value that always answers empty. That is correct: the
+    # emptiness is then a true statement about the queue rather than a lie
+    # about the query, and it is DATA-M22 that gives the first of the two a
+    # writer. The frontend already asks for it -- MaintenancePage.tsx renders
+    # an "In Progress" tab -- though it filters client-side and only
+    # StatsGrid.tsx sends this parameter, always as Open.
+    status_filter: Optional[TicketStatus] = Query(None, description="Filter by ticket status"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
@@ -42,8 +54,15 @@ def get_tickets(
         models.MaintenanceLog,
         current_user,
     )
-    if status_filter:
-        query = query.filter(models.MaintenanceLog.status == status_filter)
+    if status_filter is not None:
+        # `.value`, not the member. A str-mixin enum binds as its own string
+        # data so both spellings work today; `str()` of a member is
+        # "TicketStatus.OPEN", so the day this moves into an f-string or a
+        # driver that stringifies its parameters, the bare member would compare
+        # against a value no row holds and silently match nothing.
+        # reports.get_inventory_report states the same reason over the same
+        # shape of line.
+        query = query.filter(models.MaintenanceLog.status == status_filter.value)
     
     tickets = query.order_by(models.MaintenanceLog.opened_at.desc()).all()
     
@@ -112,7 +131,12 @@ def report_fault(
         equipment_id=item.id,
         fault_type_id=fault_type.id,
         description=report.description,
-        status="Open"
+        # DATA-H12-2. The column's own default is this same member
+        # (models.MaintenanceLog), so passing it explicitly is redundant and
+        # kept rather than deleted: it is the one line that says a reported
+        # fault opens a ticket, and reading that off a column default two files
+        # away is worse than saying it here.
+        status=TicketStatus.OPEN.value
     )
     db.add(log)
 
@@ -150,7 +174,7 @@ def report_fault(
         db,
         equipment=item,
         actor=current_user,
-        new_status=EquipmentStatus.MALFUNCTIONING.value,
+        new_status=EquipmentStatus.MALFUNCTIONING,
         reason=ChangeReason.FAULT_REPORT,
         notes=report.description or None,
     )
@@ -195,7 +219,7 @@ def fix_equipment(
         db,
         equipment=item,
         actor=current_user,
-        new_status=EquipmentStatus.FUNCTIONAL.value,
+        new_status=EquipmentStatus.FUNCTIONAL,
         reason=ChangeReason.REPAIR,
         notes=notes or None,
     )
@@ -209,8 +233,19 @@ def fix_equipment(
     # in the backend: DATA-H4-2 deleted the two that were waiting for it.
     db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
         models.MaintenanceLog.equipment_id == item.id,
-        models.MaintenanceLog.status != "Closed"
-    ).update({"status": "Closed", "closed_at": clock.utcnow()}, synchronize_session=False)
+        models.MaintenanceLog.status != TicketStatus.CLOSED.value
+    ).update(
+        # DATA-H12-2. `.value` rather than the member, and here it is load-
+        # bearing rather than defensive: this is a Core UPDATE that bypasses
+        # the ORM, so the value goes to the driver as written.
+        #
+        # The dict key stays the bare string "status" because it is a COLUMN
+        # name, not a status value -- and test_audit_trail.py's _names_column
+        # guard matches exactly that key, which is why the bypass pragma above
+        # has to stay with it.
+        {"status": TicketStatus.CLOSED.value, "closed_at": clock.utcnow()},
+        synchronize_session=False,
+    )
 
     # This site is why record_event normalises user_status_at_time: the other
     # three transaction-log writes recorded it and this one silently did not,

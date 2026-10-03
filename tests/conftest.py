@@ -1,21 +1,38 @@
 import os
-import tempfile
 
-# --- DATA-H10 containment -------------------------------------------------
-# backend/main.py calls wait_for_db() and run_migrations() at MODULE SCOPE, so
-# merely importing the app connects to a database and runs Alembic against it.
-# backend/database.py defaults DATABASE_URL to sqlite:///./sql_app.db, which
-# would make every test run migrate a real file in the repo root.
-#
-# Point that import-time work at a throwaway file before importing the app.
-# The tests themselves do NOT use this database -- they use the in-memory
-# engine below, wired in via the get_db dependency override.
-#
-# Delete this block when DATA-H10 moves both calls into a lifespan handler.
-os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
-    tempfile.gettempdir(), "vector_test_import_sink.db"
-)
 os.environ.setdefault("SECRET_KEY", "test_secret_key")
+
+# --- DATA-H11 ---------------------------------------------------------------
+# backend/database.py refuses to import without DATABASE_URL, and the imports
+# below reach it during COLLECTION -- so where nothing supplies one, removing
+# this line means `pytest` collects nothing at all: not one failing test, an
+# error.
+#
+# What counts as "supplied" is narrower than it looks, and was measured rather
+# than reasoned. This runs before that import, and load_dotenv() does not
+# override variables that are already set, so the pin BEATS a DATABASE_URL in
+# .env and yields only to one already exported. That is the useful split: .env
+# is where a developer names the database they actually work against and the
+# suite has no business addressing it, while an export is how CI names its
+# Postgres. test_app_startup.py pins both halves.
+#
+# sqlite:// -- in memory -- rather than an unopenable path, because
+# refuse_connections_to_the_ambient_database below reports through a `connect`
+# listener, and a driver that raises first means that listener never fires. An
+# unopenable URL would trade the fixture's message for an opaque
+# OperationalError. Nothing may connect here either way; the difference is only
+# what a test sees when something does.
+#
+# Not a revert of DATA-H10-2, which deleted an ASSIGNMENT to a writable temp
+# file that absorbed the migrations importing the app used to run. Nothing
+# writes to this one, and nothing can.
+#
+# Compensation, not a fix: the pin is only needed because this file imports
+# backend.main at module scope, so configuration is required at collection
+# time. Deferring those imports into fixtures would remove the need for it
+# entirely -- a suite-wide refactor, deliberately not attempted here.
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+# --------------------------------------------------------------------------
 
 # --- SEC-H9 -----------------------------------------------------------------
 # The session cookie defaults to Secure (see security._cookie_secure_from_env),
@@ -32,19 +49,20 @@ os.environ.setdefault("SECRET_KEY", "test_secret_key")
 # ASSIGNED, not setdefault: the suite's correctness depends on this value, so it
 # must not yield to whatever the developer happens to have exported. With
 # setdefault, a shell carrying COOKIE_SECURE=true made three cookie tests fail
-# with a bare 401 and no indication why. Same reasoning as DATABASE_URL above;
-# SECRET_KEY differs precisely because any value works there.
+# with a bare 401 and no indication why. SECRET_KEY above is setdefault instead
+# precisely because any value works there.
 os.environ["COOKIE_SECURE"] = "false"
 # --------------------------------------------------------------------------
 
 import pytest
+from contextlib import contextmanager
 from functools import lru_cache
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.database import Base, get_db, _enforce_sqlite_foreign_keys
-from backend import authz, clock, models
+from backend import authz, clock, database, migrations, models
 from backend.enums import Capability, Sensitivity
 import backend.security as security
 from datetime import timedelta
@@ -67,6 +85,45 @@ engine = create_engine(
 # because Alembic's batch mode cannot run under enforcement.
 event.listen(engine, "connect", _enforce_sqlite_foreign_keys)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def refuse_connections_to_the_ambient_database():
+    """Fail loudly if any test opens database.engine or migrations.engine.
+
+    Until DATA-H10 those two were harmless: this file pinned DATABASE_URL at a
+    throwaway file, so a test that reached them found a sink. That pin is gone.
+    DATA-H11 added a different one at the top of this file, but it only applies
+    where the environment is silent -- so these engines still address whatever
+    the environment names, and in CI that is a live Postgres service.
+
+    A test that connects there reads and writes real data while looking exactly
+    like a passing test. That is the failure the old pin used to absorb, so
+    containment is replaced by detection rather than by nothing. Nothing in the
+    suite connects to either engine today; this is what keeps that true.
+
+    Tests that need a real engine build one over tmp_path, or monkeypatch the
+    module attribute before calling in -- which is what every run_migrations
+    test does, in test_group_schema.py and test_verification_backfill.py alike.
+    They are unaffected: monkeypatching the attribute never touches the Engine
+    object this listener is attached to.
+    """
+    def refuse(dbapi_connection, connection_record):
+        raise RuntimeError(
+            "a test opened a connection to the ambient DATABASE_URL "
+            f"({database.DATABASE_URL!r}) -- whatever database this environment "
+            "names, which in CI is a live one. Build an engine over tmp_path "
+            "instead, or monkeypatch the module's engine attribute before "
+            "calling into it."
+        )
+
+    ambient = (database.engine, migrations.engine)
+    for target in ambient:
+        event.listen(target, "connect", refuse)
+    yield
+    for target in ambient:
+        event.remove(target, "connect", refuse)
+
 
 @pytest.fixture(scope="function")
 def db_session():
@@ -91,6 +148,95 @@ def client(db_session):
     app.dependency_overrides[get_db] = override_get_db
     yield TestClient(app)
     del app.dependency_overrides[get_db]
+
+@contextmanager
+def recorded(engine):
+    """Collect every SQL statement the block actually sends to the database.
+
+    Moved here from test_query_surface.py, which wrote it first and still uses
+    it; count_queries below is the second caller and the reason it is shared
+    rather than written twice.
+    """
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+class QueryLog:
+    """Every statement the engine executed inside one measured block."""
+
+    def __init__(self, statements):
+        self.statements = statements
+
+    @property
+    def count(self):
+        return len(self.statements)
+
+    def against(self, table):
+        """The subset touching one table, for pinning WHICH query multiplied."""
+        return [s for s in self.statements if table in s]
+
+    def __repr__(self):  # shows up in the assertion diff, so make it useful
+        return f"<QueryLog {self.count} statements>"
+
+
+@pytest.fixture
+def count_queries(db_session):
+    """Count SQL statements issued while the block runs. DATA-H8.
+
+    A query fan-out is invisible from outside: the response bytes are identical
+    whether the route eager-loads or issues one SELECT per row. The only way to
+    assert the fix is to count statements, so this listens on the engine the
+    whole suite shares and hands back the log.
+
+    THE expire_all() IS LOAD-BEARING AND THIS FIXTURE EXISTS TO NOT FORGET IT.
+    The client fixture overrides get_db with the *same* session the test seeded
+    through, and SQLAlchemy serves an identity-map hit without going to the
+    database -- so a warm map hides a lazy load completely.
+
+    What warms it is the subtle part, and the obvious answer is wrong. Seeding
+    alone does NOT: sessionmaker leaves expire_on_commit at its default, so the
+    setup's own commit expires everything it just wrote. What warms it is a test
+    READING ITS OWN SETUP BACK afterwards -- an assertion about a fixture row, a
+    list comprehension over the items, anything that touches an attribute. That
+    is an ordinary thing for a test to do and it silently destroys the
+    measurement.
+
+    Measured on the accessible listing at 10 rows, loads stripped out:
+
+        stripped, expired          29 statements   (19 on users, 9 on catalog)
+        stripped, map left warm     2 statements   <- identical to fixed code
+        fixed                       2 statements
+
+    So a fan-out test written without this line passes against the defect it
+    exists to catch, and goes on passing forever. Expiring here rather than in
+    each test means no test can be vacuous by omission. It costs nothing a test
+    wants: the route issues its own query regardless, and a joinedload
+    un-expires what it loads in the same round trip.
+
+    Bound to db_session.get_bind() rather than the module-level `engine`, and
+    that is not paranoia: pytest imports this file TWICE, once as `conftest` and
+    once as `tests.conftest`, so there are two module objects each holding their
+    own engine. A listener attached to the wrong one records nothing at all and
+    reports a flat, perfect query count. Ask the session which engine it is
+    actually on.
+    """
+
+    @contextmanager
+    def _count():
+        db_session.expire_all()
+        with recorded(db_session.get_bind()) as statements:
+            yield QueryLog(statements)
+
+    return _count
+
 
 FIXTURE_GROUP_TREE = {
     "188": None,

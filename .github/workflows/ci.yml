@@ -36,11 +36,13 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
       SECRET_KEY: ci_test_secret
-      # DATA-H1-2. tests/conftest.py *assigns* DATABASE_URL to SQLite at import,
-      # so every other test runs on SQLite even here -- this second variable is
-      # the only way a test can reach the Postgres service above. It is what
-      # un-skips tests/test_utc_migration_postgres.py, which is the only check
-      # anywhere that the TIMESTAMPTZ migration preserves the instants it moves.
+      # DATA-H1-2. tests/conftest.py builds its own in-memory SQLite engine and
+      # overrides the get_db dependency with it, so every other test runs on
+      # SQLite even here, whatever DATABASE_URL above names -- this second
+      # variable is the only way a test can reach the Postgres service. It is
+      # what un-skips tests/test_utc_migration_postgres.py, which is the only
+      # check anywhere that the TIMESTAMPTZ migration preserves the instants it
+      # moves.
       TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/vector_ci
 
     steps:
@@ -85,6 +87,21 @@ jobs:
           exit 0
         fi
         exit $code
+
+    # Hard gate (API-H1). The specification is no longer tracked, so this is
+    # where it comes from: generated from the code under test, never stale.
+    # A gate because every green run must publish one. Written to a path
+    # frontend/.gitignore ignores, so running this line locally cannot leave a
+    # file for `git add -A` to track.
+    - name: Export OpenAPI specification
+      run: python -m backend.export_openapi frontend/openapi.json
+
+    - name: Upload OpenAPI specification
+      uses: actions/upload-artifact@v4
+      with:
+        name: openapi
+        path: frontend/openapi.json
+        if-no-files-found: error
 
   frontend:
     runs-on: ubuntu-latest

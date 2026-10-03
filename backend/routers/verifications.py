@@ -2,12 +2,12 @@
 Equipment Verification & Status History Router
 """
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List
 
 from ..database import get_db
-from .. import audit_trail, clock, models, schemas
-from ..enums import ChangeReason, EventType
+from .. import audit_trail, authz, models, schemas
+from ..enums import Capability, ChangeReason, EquipmentStatus, EventType
 from ..dependencies import (
     get_current_active_user,
     get_scoped_equipment_or_404,
@@ -28,6 +28,53 @@ async def create_verification(
     require_status_authority(db, current_user, equipment)
 
     reported_status = data.reported_status.value
+
+    # Declaring a broken item serviceable is closing a fault, whichever route
+    # says it, so it asks the verb that closes faults.
+    #
+    # require_status_authority is possession-OR-REPORT_STATUS, and its own
+    # docstring states the invariant this route was breaking: "a soldier
+    # holding a broken item can report it and cannot declare it fixed. That
+    # asymmetry is the whole reason the two verbs exist." It was enforced only
+    # by which routes call which helper -- and this route wrote the caller's
+    # reported_status straight onto equipment.status through set_status, so
+    # POST /verifications/ with "Functional" did exactly what
+    # maintenance.fix_equipment refuses to do without RESOLVE_FAULT. Verified
+    # against the fixtures before fixing: grant-less soldier_a, holding SA100,
+    # got 403 from POST /maintenance/fix/{id} and 200 from this route.
+    #
+    # WHAT THIS DOES NOT FIX, stated plainly because the gate invites the
+    # opposite assumption: fix_equipment also closes the item's open
+    # MaintenanceLog rows and this route still does not, so a verification that
+    # declares an item Functional leaves its ticket Open -- readiness
+    # (analytics counts status == "Functional") then disagrees with the fault
+    # list. This change decides WHO may reach that state, not whether it
+    # exists, and a RESOLVE_FAULT holder still reaches it here. The mirror gap
+    # is open too: this is the only route that writes Malfunctioning, and it
+    # opens no ticket, where maintenance.report_fault always does. Both want
+    # one shared status-transition helper owning the ticket side-effect, which
+    # is a larger change than this ticket and is not smuggled into it.
+    #
+    # ON THE TRANSITION, not on the value. An item already Functional that is
+    # verified as Functional closes no fault; that is the ordinary condition
+    # report this route exists for, and set_status no-ops on it anyway.
+    # Gating the value rather than the move would demand RESOLVE_FAULT for
+    # every routine check of a working item, which is the possession arm's
+    # entire purpose.
+    #
+    # Refuses the whole request rather than writing the verification and
+    # silently declining the status change: a stored report whose reported
+    # status the system did not act on is a record that lies about what
+    # happened. Raised BEFORE any write, so a refused report leaves nothing
+    # behind -- no verification row, no clock advance.
+    declares_serviceable = (
+        reported_status == EquipmentStatus.FUNCTIONAL.value
+        and equipment.status != EquipmentStatus.FUNCTIONAL.value
+    )
+    if declares_serviceable:
+        authz.require(
+            db, current_user.id, Capability.RESOLVE_FAULT, equipment.group_id
+        )
 
     # equipment.id, not data.equipment_id, at both writes below. They are the
     # same value today and only because the resolver filtered on it -- taking
@@ -58,7 +105,10 @@ async def create_verification(
     # equipment.verify_equipment_daily -- the daily presence confirmation, gated
     # on possession alone -- and this route is a condition report gated on
     # require_status_authority. Two acts, two gates, two values.
-    audit_trail.record_event(
+    #
+    # DATA-H5. The same call advances last_verified_at, so the clock and the
+    # row proving an inspection happened cannot be written apart.
+    audit_trail.set_last_verified_at(
         db,
         equipment=equipment,
         actor=current_user,
@@ -69,17 +119,22 @@ async def create_verification(
     # the reason it cannot move. audit_trail.set_status owns both halves of the
     # change now -- the assignment and the row -- so the "did the status
     # actually move" question is asked once, there, rather than at each caller.
+    #
+    # DATA-H12-2. The MEMBER here, not the `reported_status` string built at
+    # the top of this route: set_status is annotated EquipmentStatus and
+    # enforces it, and the local is the spelling the Verification COLUMN wants.
+    # They are the same vocabulary in two shapes, and passing each where it
+    # belongs is what keeps the annotation honest.
     audit_trail.set_status(
         db,
         equipment=equipment,
         actor=current_user,
-        new_status=reported_status,
+        new_status=data.reported_status,
         reason=ChangeReason.VERIFICATION,
         notes=data.findings,
         verification_id=verification.id,
     )
 
-    equipment.last_verified_at = clock.utcnow()
     db.commit()
     db.refresh(verification)
     
@@ -114,7 +169,19 @@ async def get_equipment_verifications(
     # already see, list, and hold.
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
 
-    verifications = db.query(models.Verification).filter(
+    # DATA-H8. reporter_name below reads v.reporter.full_name, so an item with a
+    # long inspection history cost one SELECT per verification -- and the rows
+    # are worst-case for the identity map, since a different person files each
+    # one, so nothing is cached between iterations.
+    #
+    # Inline rather than through dependencies.EQUIPMENT_RESPONSE_LOADS: that
+    # tuple is about Equipment's response properties and this is a single
+    # relationship on a different model. A shared name covering both would have
+    # to mean "whatever the loop happens to touch", which is not a thing that
+    # can be kept honest.
+    verifications = db.query(models.Verification).options(
+        joinedload(models.Verification.reporter)
+    ).filter(
         models.Verification.equipment_id == item.id
     ).order_by(models.Verification.created_date.desc()).all()
     
@@ -148,7 +215,12 @@ async def get_equipment_status_history(
     # user who made each one named.
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
 
-    history = db.query(models.EquipmentStatusHistory).filter(
+    # DATA-H8, the sibling of the load above and for the same reason: user_name
+    # below reads h.user.full_name once per row, and a status history is exactly
+    # the table that grows without bound on a well-used item.
+    history = db.query(models.EquipmentStatusHistory).options(
+        joinedload(models.EquipmentStatusHistory.user)
+    ).filter(
         models.EquipmentStatusHistory.equipment_id == item.id
     ).order_by(models.EquipmentStatusHistory.created_date.desc()).all()
     

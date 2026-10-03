@@ -51,19 +51,9 @@ class RawCapability:
         self.value = value
 
 
-@contextlib.contextmanager
-def recorded(engine):
-    """Collect every SQL statement the block actually sends to the database."""
-    statements = []
-
-    def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", record)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", record)
+# recorded() moved to conftest when DATA-H8's count_queries became its second
+# caller. Imported rather than reimplemented so both measure the same way.
+from tests.conftest import recorded  # noqa: E402
 
 
 @pytest.fixture

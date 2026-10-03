@@ -4,9 +4,6 @@ import './index.css'
 import App from './App.tsx'
 import ErrorBoundary from './components/shared/ErrorBoundary.tsx'
 import { removeLocal } from './lib/safeStorage'
-import { OpenAPI } from './client';
-
-OpenAPI.BASE = 'http://127.0.0.1:8000';
 
 // SEC-H9 one-time scrub. Every browser that used this application before the
 // session moved into an httpOnly cookie still has a bearer token sitting in

@@ -10,8 +10,29 @@ from sqlalchemy.orm import sessionmaker
 # the alembic CLI reaches this module without importing the app.
 load_dotenv()
 
-# Get DB URL from Env (Docker) or fallback to SQLite (Local)
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
+# DATA-H11. No fallback, deliberately. This used to default to
+# sqlite:///./sql_app.db, so a deployment that forgot the variable came up
+# looking healthy on an ephemeral file -- and under docker-compose.yml's
+# ./:/app bind mount that file materialises inside the source tree.
+#
+# Raised HERE rather than inside create_database_engine() so that every reader
+# of this constant may assume a non-empty str: create_database_engine below
+# calls .startswith on it, alembic/env.py calls .replace, seed_data.py calls
+# make_url. The last two never call create_database_engine at all, so deferring
+# the check would leave `alembic upgrade head` dying with "'NoneType' object
+# has no attribute 'replace'", which names nothing an operator can act on.
+#
+# Requiring configuration at import does not undo DATA-H10. That ticket moved
+# the work that needed a LIVE database; a URL string is not a connection, and
+# security.py already refuses to import without SECRET_KEY.
+#
+# `if not` rather than `is None`: a bare `DATABASE_URL=` in .env, or a compose
+# entry whose interpolation resolved to nothing, yields "". SQLAlchemy rejects
+# that with "Could not parse SQLAlchemy URL from given URL string" -- naming
+# neither the variable nor where to set it.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("No DATABASE_URL set for FastAPI application -- see .env.example")
 
 
 def _enforce_sqlite_foreign_keys(dbapi_connection, connection_record):

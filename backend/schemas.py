@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-from .enums import EquipmentStatus, Sensitivity
+from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -125,8 +125,20 @@ class EquipmentResponse(BaseModel):
     id: int
     type: str # Computed from catalog
     serial_number: Optional[str]
-    status: str
-    
+
+    # DATA-H12-2. Bare `str` until this ticket, which is the "and the
+    # corresponding request schemas type them as bare strings" half of
+    # DATA-H12's evidence -- H12-1 closed the column half.
+    #
+    # REQUIRED, unlike `sensitivity` below, and the asymmetry is inherited
+    # rather than chosen: this field was already a required `str`, so a NULL
+    # status already failed validation and already took the whole list response
+    # with it. Typing it to the enum changes which values are accepted, not
+    # whether absence is. Making it Optional would be a real improvement and a
+    # different ticket's -- DATA-M12 owns the nullability of this column and the
+    # backfill decision that goes with it.
+    status: EquipmentStatus
+
     holder_user_id: Optional[int]
     custom_location: Optional[str]
     actual_location_id: Optional[int]
@@ -147,16 +159,19 @@ class EquipmentResponse(BaseModel):
     # the wire format is unchanged for in-vocabulary rows (verified, not
     # assumed -- model_dump_json emits the bare string "CLASSIFIED").
     #
-    # This is the FIRST response field in this file typed as an enum, and that
-    # is worth saying plainly rather than dressing it up as precedent. The only
-    # other enum-typed field is VerificationCreate.reported_status below, which
-    # is a REQUEST; VerificationResponse.reported_status beside it is a plain
-    # str. So the established pattern here is enums on the way in and strings on
-    # the way out, and this field departs from it deliberately.
+    # This was the FIRST response field in this file typed as an enum, at a
+    # time when the pattern here was enums on the way in and strings on the way
+    # out -- the only other enum-typed field was VerificationCreate.
+    # reported_status, a REQUEST. DATA-H12-2 typed the other five response
+    # fields carrying a vocabulary, so the departure this comment used to
+    # describe is now the rule and this field is no longer the exception.
     #
-    # The cost of departing: a hand-written out-of-vocabulary value (reachable
-    # until DATA-H12 constrains the column) now raises ValidationError and
-    # fails the whole list request, where the old constant silently replaced it.
+    # The cost of typing it: a hand-written out-of-vocabulary value raises
+    # ValidationError and fails the whole list request, where the old constant
+    # silently replaced it. That value was reachable by hand-written SQL until
+    # DATA-H12-1 added ck_equipment_sensitivity, so this layer is now a second
+    # line rather than the only one -- kept, not made redundant, because it is
+    # what fails CLOSED if a row ever does hold junk (see enums.Sensitivity).
     #
     # Note the asymmetry with the NULL case above, which is deliberate and not
     # an oversight to be tidied away: NULL is a legitimate absence, so it
@@ -231,7 +246,13 @@ class TicketResponse(BaseModel):
     equipment_name: str
     fault_type: str
 
-    status: str
+    # DATA-H12-2, and the one of the six that admits a value no backend path
+    # writes: TicketStatus carries IN_PROGRESS and WAITING_PARTS, which
+    # report_fault and fix_equipment between them never assign. That is
+    # deliberate on both sides -- ck_maintenance_logs_status admits all four so
+    # DATA-M22 stays a route change rather than a migration, and this field
+    # admits all four so it will not have to be widened on the same day.
+    status: TicketStatus
     description: str
 
     # DATA-H2. `opened_at` is the column's real name on MaintenanceLog. It was
@@ -291,7 +312,11 @@ class VerificationResponse(BaseModel):
     id: int
     equipment_id: int
     verification_type: str
-    reported_status: str
+    # DATA-H12-2. VerificationCreate.reported_status above has been the enum
+    # since DATA-H3-1 and this was still `str`, so one route validated a
+    # vocabulary on the way in and reported whatever the column held on the way
+    # out. Backed by ck_verifications_reported_status since DATA-H12-1.
+    reported_status: EquipmentStatus
     findings: Optional[str]
     action_required: bool
     created_date: datetime
@@ -305,9 +330,20 @@ class VerificationResponse(BaseModel):
 class StatusHistoryResponse(BaseModel):
     id: int
     equipment_id: int
-    old_status: str
-    new_status: str
-    change_reason: str
+    # DATA-H12-2. All three are NOT NULL columns backed by a CHECK since
+    # DATA-H12-1, so the enum here can be required without DATA-M12's
+    # one-NULL-row-blanks-the-list risk that EquipmentResponse.sensitivity
+    # carries.
+    #
+    # change_reason is typed here although the H12 plan listed it as out of
+    # scope. That exclusion was written on the premise that the column had no
+    # constraint; DATA-H12-1 gave it ck_equipment_status_history_change_reason
+    # in the same batch as the other six, so the premise is spent and leaving
+    # this field a bare str would be the only vocabulary column in the file
+    # typed as one.
+    old_status: EquipmentStatus
+    new_status: EquipmentStatus
+    change_reason: ChangeReason
     verification_id: Optional[int]
     notes: Optional[str]
     created_date: datetime

@@ -261,7 +261,7 @@ def test_compliance_level_classifies_across_the_boundaries(db_session, hours_ago
     [(1, "דיווח תקין"), (30, "חריגת דיווח")],
 )
 def test_report_status_classifies_across_the_boundary(db_session, hours_ago, expected):
-    """models.py:194 (report_status) is the SECOND arithmetic property named
+    """Equipment.report_status is the SECOND arithmetic property named
     in the plan, alongside compliance_level -- distinct code, same
     clock.utcnow() subtraction, and previously untested here on its own.
     Checked by prefix rather than exact match: the overdue branch appends a
