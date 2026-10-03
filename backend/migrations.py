@@ -90,7 +90,15 @@ BASELINE_STAMP = "e5f1b8d24a07"
 # DATA-H13-1's index revision is here for the same structural reason and a
 # plainer consequence: a second CREATE INDEX of the same name fails on both
 # dialects, so its skip is what lets a create_all database start at all.
-IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540", "f4d81b2c6a93"})
+#
+# DATA-H13-2's deletion rules are a third shape, and the quietest. A second run
+# with no skip raises on NEITHER dialect: SQLite rebuilds the table again, and
+# Postgres drops each constraint and adds it back, which is valid SQL. What it
+# would do instead is put RESTRICT back over any rule chosen since. On a
+# database whose rules are all still RESTRICT, that leaves nothing in the
+# result to tell the two apart, so a re-run is asserted to emit no DDL, on both
+# dialects.
+IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47"})
 
 
 def alembic_config() -> Config:

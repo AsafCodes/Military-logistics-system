@@ -598,11 +598,13 @@ def test_the_constraint_revision_can_be_re_run_on_postgres(pg_schema):
 
     ASSERTS LESS THAN ITS SQLITE TWIN, deliberately. That one asserts the second
     run emits no DDL; this one only asserts the constraints are unchanged, which
-    is enough here because a duplicate ADD CONSTRAINT raises DuplicateObject on
-    Postgres rather than being absorbed -- the raise IS the assertion. It would
-    not be enough for a future allowlisted revision whose repeated DDL is
-    idempotent in SQL itself, such as CREATE INDEX IF NOT EXISTS; such a
-    revision needs the no-DDL form here too.
+    is enough for THIS revision because a duplicate ADD CONSTRAINT raises
+    DuplicateObject on Postgres rather than being absorbed -- the raise IS the
+    assertion. It is not enough for an allowlisted revision whose repeated DDL
+    is idempotent in SQL itself, and DATA-H13-2's is one: re-applying a rule
+    drops the constraint and adds it back, which Postgres accepts. The loop
+    below re-runs that revision too, but the no-DDL assertion it needs lives in
+    test_the_deletion_rules_build_re_run_and_reverse_on_postgres.
     """
     from tests.test_group_schema import _rerun_upgrade, allowlisted_in_chain_order
 
@@ -685,3 +687,59 @@ def test_the_index_revision_builds_re_runs_and_reverses_on_postgres(pg_schema):
 
     _migrate(pg_schema, "head")
     assert _indexes(pg_schema) == at_head
+
+
+def test_the_deletion_rules_build_re_run_and_reverse_on_postgres(pg_schema):
+    """DATA-H13-2, on the dialect where it is two statements rather than a rebuild.
+
+    tests/test_deletion_rules.py covers this revision on SQLite, where every
+    foreign key it replaces but equipment.group_id is anonymous, and batch mode
+    rebuilds the table. None of that is what happens here. Postgres named every
+    anonymous one <table>_<column>_fkey, the revision has to drop it under THAT
+    name -- read from the catalog, since the revision hard-codes none of them --
+    and the replacement is an ALTER TABLE that validates every existing row.
+
+    So: that all of them end up named fk_<table>_<column> and RESTRICT after a
+    migration from nothing; that a second run EMITS NO DDL; and that the
+    downgrade leaves the names and takes the rules, exactly as on SQLite, with
+    the upgrade able to start again from there.
+
+    The second of those is asserted on the statements and not on the result,
+    because here the result cannot tell. Dropping a constraint and adding it
+    back under the same name is valid on Postgres, so a revision with no skip
+    at all raises nothing and leaves the same eighteen constraints behind. It
+    is the case test_the_constraint_revision_can_be_re_run_on_postgres warns
+    about in its own docstring: repeated DDL that is idempotent in SQL itself.
+    """
+    from tests.conftest import recorded
+    from tests.test_deletion_rules import (
+        PARENT_REVISION,
+        RULES_REVISION,
+        _expected_foreign_keys,
+        _foreign_keys,
+    )
+    from tests.test_group_schema import _rerun_upgrade
+
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    expected = _expected_foreign_keys()
+    ruled = {
+        (table, column): (f"fk_{table}_{column}", referred, "RESTRICT")
+        for (table, column), referred in expected.items()
+    }
+
+    _migrate(pg_schema, "head")
+    assert _foreign_keys(pg_schema) == ruled
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, RULES_REVISION)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision changed constraints that were already right: {ddl}"
+    assert _foreign_keys(pg_schema) == ruled
+
+    _migrate(pg_schema, PARENT_REVISION, backwards=True)
+    assert _foreign_keys(pg_schema) == {
+        key: (name, referred, None) for key, (name, referred, _rule) in ruled.items()
+    }
+
+    _migrate(pg_schema, "head")
+    assert _foreign_keys(pg_schema) == ruled

@@ -20,15 +20,16 @@ Two halves are asserted throughout and neither is sufficient alone:
 The refusal is raised from TWO places and they are tested separately: the
 pre-check, and a backstop around the commit. The pre-check is check-then-act
 and cannot be atomic, so a ticket filed inside that window would otherwise meet
-the constraint raw -- the same defect through a narrower door. DATA-H13 does
-not close that window either, since an ON DELETE rule changes which error the
-database raises rather than whether it raises one.
+the constraint raw -- the same defect through a narrower door. DATA-H13 did
+not close that window either: it declared the constraint ON DELETE RESTRICT,
+which raises exactly what the old default did.
 
 WHAT THIS DOES NOT CLOSE, and it is worth a reader knowing where the edge is:
-the constraint itself still has no ON DELETE rule, so a direct SQL delete
-violates it exactly as before. DATA-H13 owns that for every foreign key in the
-schema. This route is the only path DATA-H7 closes, which is why every test
-here goes through the API rather than the session.
+a direct SQL delete of a fault type still in use meets the constraint raw, as
+it always did. DATA-H13-2 declared that constraint ON DELETE RESTRICT, which
+names the refusal and does not soften it. This route is the only path DATA-H7
+closes, which is why every test here goes through the API rather than the
+session.
 
 Tickets are created through POST /maintenance/report rather than by inserting
 rows, so the association under test is the one the application actually makes

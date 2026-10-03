@@ -44,6 +44,12 @@ INDEX_REVISION = "f4d81b2c6a93"
 # constraint of today, and none of these indexes.
 PARENT_REVISION = "d3a9c17be540"
 
+# The migration tests below that downgrade, or compare a schema, stop at
+# INDEX_REVISION rather than at head. The revision after this one (DATA-H13-2)
+# has a downgrade that deliberately does not restore everything it changed, so
+# a round trip through head would be measuring that revision, not this one.
+# The pre-Alembic test goes to head on purpose: run_migrations() always does.
+
 
 def _script():
     return ScriptDirectory.from_config(migrations.alembic_config())
@@ -266,7 +272,7 @@ def test_a_database_missing_one_index_gets_that_one_and_no_other(tmp_path):
     unless every index is present" fails on the first duplicate.
     """
     engine = create_engine(f"sqlite:///{tmp_path / 'partial.db'}")
-    _upgrade(engine, "head")
+    _upgrade(engine, INDEX_REVISION)
     complete = _schema_snapshot(engine)
     with engine.begin() as conn:
         conn.exec_driver_sql("DROP INDEX ix_verifications_created_by")
@@ -334,7 +340,7 @@ def test_an_index_of_another_shape_under_the_same_name_is_refused(tmp_path, impo
     before = _schema_snapshot(engine)
 
     with pytest.raises(RuntimeError) as excinfo:
-        _upgrade(engine, "head")
+        _upgrade(engine, INDEX_REVISION)
     message = str(excinfo.value)
     after = _schema_snapshot(engine)
     engine.dispose()
@@ -361,7 +367,7 @@ def test_every_conflict_is_reported_and_a_correct_index_is_not(tmp_path):
         )
 
     with pytest.raises(RuntimeError) as excinfo:
-        _upgrade(engine, "head")
+        _upgrade(engine, INDEX_REVISION)
     message = str(excinfo.value)
     engine.dispose()
 
@@ -382,7 +388,7 @@ def _parent_snapshot(tmp_path):
 
 
 def test_the_downgrade_removes_what_the_upgrade_added_and_nothing_else(tmp_path):
-    """A round trip lands on the parent's schema, and comes back to head's.
+    """A round trip lands on the parent's schema, and comes back to this one's.
 
     Compared against a database that was only ever upgraded to the parent, so
     "nothing else" includes the indexes that were already there: ix_equipment_id
@@ -392,18 +398,18 @@ def test_the_downgrade_removes_what_the_upgrade_added_and_nothing_else(tmp_path)
     at_parent = _parent_snapshot(tmp_path)
 
     engine = create_engine(f"sqlite:///{tmp_path / 'roundtrip.db'}")
-    _upgrade(engine, "head")
-    at_head = _schema_snapshot(engine)
+    _upgrade(engine, INDEX_REVISION)
+    at_revision = _schema_snapshot(engine)
 
     _downgrade(engine, PARENT_REVISION)
     downgraded = _schema_snapshot(engine)
-    _upgrade(engine, "head")
+    _upgrade(engine, INDEX_REVISION)
     upgraded_again = _schema_snapshot(engine)
     engine.dispose()
 
-    assert at_head != at_parent, "the revision changes nothing, so this proves nothing"
+    assert at_revision != at_parent, "the revision changes nothing, so this proves nothing"
     assert downgraded == at_parent
-    assert upgraded_again == at_head
+    assert upgraded_again == at_revision
 
 
 def test_the_downgrade_tolerates_an_index_that_is_already_gone(tmp_path):
@@ -416,7 +422,7 @@ def test_the_downgrade_tolerates_an_index_that_is_already_gone(tmp_path):
     at_parent = _parent_snapshot(tmp_path)
 
     engine = create_engine(f"sqlite:///{tmp_path / 'partial.db'}")
-    _upgrade(engine, "head")
+    _upgrade(engine, INDEX_REVISION)
     with engine.begin() as conn:
         conn.exec_driver_sql("DROP INDEX ix_equipment_holder_user_id")
 
@@ -432,7 +438,7 @@ def test_a_pre_alembic_database_without_the_indexes_is_migrated_not_refused(
 ):
     """The database this ticket was most likely to lock out of its own fix.
 
-    Real tables, real rows, no version table, and a schema one revision behind
+    Real tables, real rows, no version table, and a schema from before this
     today's models: exactly what create_all built the day before this landed.
     describe_drift used to count each missing index, so run_migrations refused
     to baseline it -- and the revision that creates those indexes only runs

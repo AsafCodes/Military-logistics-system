@@ -183,24 +183,53 @@ def test_composite_primary_keys_reject_duplicate_pairs(db_session, table, column
 
 # --- H1-1's stated deliverable, asserted against the metadata -------------
 
-def test_every_new_foreign_key_declares_an_ondelete_rule():
-    """DATA-H13: no pre-existing FK declares one. The new tables must."""
-    missing = [
-        f"{table}.{next(iter(fk.columns)).name}"
-        for table in NEW_TABLES
-        for fk in Base.metadata.tables[table].foreign_key_constraints
-        if fk.ondelete is None
+def test_every_foreign_key_declares_an_ondelete_rule_and_a_name():
+    """Every table the models declare, as of DATA-H13-2. No exception list.
+
+    This walked NEW_TABLES alone until then, because no legacy foreign key
+    declared a rule and the promise could only be asserted where it held.
+
+    The NAME is asserted beside the rule because the one depends on the other:
+    replacing a rule means dropping the constraint, and an unnamed constraint
+    is named <table>_<column>_fkey by Postgres and not at all by SQLite -- so
+    a migration cannot address it the same way twice. The group tables are
+    exempt from the name, and only from the name: their rules were right from
+    the revision that created them and have never needed replacing.
+    """
+    unruled = []
+    unnamed = []
+    for table_name, table in sorted(Base.metadata.tables.items()):
+        for fk in table.foreign_key_constraints:
+            column = next(iter(fk.columns)).name
+            if fk.ondelete is None:
+                unruled.append(f"{table_name}.{column}")
+            if table_name not in NEW_TABLES and fk.name != f"fk_{table_name}_{column}":
+                unnamed.append(f"{table_name}.{column} is named {fk.name!r}")
+    assert unruled == [], f"foreign keys without an ondelete rule: {unruled}"
+    assert unnamed == [], f"foreign keys not named fk_<table>_<column>: {unnamed}"
+
+
+def test_nothing_outside_the_group_tables_cascades():
+    """RESTRICT everywhere a record of what happened is at stake. DATA-H13-2.
+
+    The group tables cascade, and should: an edge, a closure row, a membership
+    and a grant mean nothing once the group or the user they describe is gone.
+    Everything else here is equipment or a record about equipment -- who held
+    it, what was wrong with it, who checked it -- and one DELETE must not be
+    able to take that with it, or keep it while forgetting whom it was about.
+
+    Deleting a group that still holds equipment is the case this used to be
+    written for on its own: equipment.group_id carried no rule at all, so that
+    such a delete would fail rather than cascade. It now says so.
+    """
+    softer = [
+        f"{table_name}.{next(iter(fk.columns)).name} is {fk.ondelete}"
+        for table_name, table in sorted(Base.metadata.tables.items())
+        if table_name not in NEW_TABLES
+        for fk in table.foreign_key_constraints
+        if fk.ondelete != "RESTRICT"
     ]
-    assert missing == [], f"foreign keys without an ondelete rule: {missing}"
-
-
-def test_equipment_group_id_deliberately_has_no_ondelete_rule():
-    """Deleting a group that still holds equipment must fail, not cascade."""
-    fk = next(
-        fk for fk in Base.metadata.tables["equipment"].foreign_key_constraints
-        if fk.referred_table.name == "groups"
-    )
-    assert fk.ondelete is None
+    assert softer == [], f"foreign keys that do not refuse the delete: {softer}"
 
 
 def test_every_foreign_key_column_is_covered_by_an_index():
@@ -762,14 +791,38 @@ def schema_work_in_upgrade(source):
     pass on a schema one -- so it is left blunt.
     """
     tree = ast.parse(source)
-    upgrade = next(
-        node for node in tree.body
+    functions = {
+        node.name: node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "upgrade"
-    )
+    }
+
+    # upgrade() AND every module-level function it reaches, by name. Reading
+    # upgrade() alone was this guard's blind spot until DATA-H13-2, whose
+    # revision keeps its batch_alter_table in a helper shared with downgrade():
+    # the body of upgrade() then contains no op.* call but get_bind, and the
+    # guard passed a revision that rebuilds six tables. Found by removing that
+    # revision from the allowlist and watching nothing go red.
+    #
+    # Followed by NAME at a call site, so a helper reached through an alias or
+    # an attribute, or handed over as a callback -- map(_rebuild, tables) --
+    # is not seen: the same kind of limit as the `op` one above. downgrade()
+    # is not walked unless upgrade() calls it: what a downgrade does is not
+    # what a stamped database is told it already has.
+    reached = []
+    pending = ["upgrade"]
+    while pending:
+        name = pending.pop()
+        if name in reached or name not in functions:
+            continue
+        reached.append(name)
+        pending += [
+            node.func.id for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ]
+    assert "upgrade" in reached, "the revision defines no upgrade()"
 
     found = []
-    for node in ast.walk(upgrade):
+    for node in (n for name in reached for n in ast.walk(functions[name])):
         if not isinstance(node, ast.Call):
             continue
 
@@ -871,8 +924,10 @@ def test_every_allowlisted_revision_actually_survives_a_second_run(tmp_path):
     raises nothing AND leaves the schema identical. This test asserted exactly
     those two things first, and a revision stripped of its skip sailed through
     it. What separates the two cases is whether the work is DONE again, not
-    whether the result differs -- and on Postgres that same re-run is a
-    DuplicateObject at startup, which no test in this suite would reach.
+    whether the result differs. On Postgres the same re-run is a
+    DuplicateObject at startup for a revision that ADDS a constraint, and no
+    error at all for one that drops and re-adds it (DATA-H13-2) -- which is
+    the other reason the work, not the outcome, is what gets asserted.
 
     Deliberately not parametrized over the set: the whole set has to run in
     CHAIN order against one database, so a later revision meets the state an
@@ -913,8 +968,9 @@ def test_every_allowlisted_revision_actually_survives_a_second_run(tmp_path):
     ]
     assert ddl == [], (
         "re-running an allowlisted revision emitted DDL against a database that "
-        "already has its changes. SQLite absorbs that; Postgres raises at "
-        f"startup. The revision needs to detect its own work and skip it: {ddl}"
+        "already has its changes. SQLite absorbs that; Postgres either raises at "
+        "startup or silently redoes the work. The revision needs to detect its own "
+        f"work and skip it: {ddl}"
     )
     assert after == before, (
         "re-running an allowlisted revision changed the schema, so it is not "
@@ -1075,6 +1131,47 @@ def test_the_schema_marker_guard_sees_every_spelling(spelling):
     assert schema_work_in_upgrade(source), (
         f"a {spelling} schema change in upgrade() was not seen by the guard"
     )
+
+
+def test_the_schema_marker_guard_follows_upgrade_into_its_helpers():
+    """Schema work one call away from upgrade() is still upgrade()'s work.
+
+    The shape DATA-H13-2's revision has, and the one the guard could not see:
+    upgrade() and downgrade() share a helper, so the only op.* call upgrade()
+    makes directly is get_bind. Two levels of indirection here, because
+    following one call and stopping would pass a revision that simply added
+    another.
+
+    And the other half: a helper only downgrade() calls must NOT be flagged.
+    A data-only revision is free to undo itself with schema work; what the
+    guard protects is what a stamp claims has already run.
+    """
+    source = (
+        "def _rebuild(table):\n"
+        "    with op.batch_alter_table(table) as b:\n"
+        "        b.drop_column('x')\n"
+        "\n"
+        "def _each(tables):\n"
+        "    for table in tables:\n"
+        "        _rebuild(table)\n"
+        "\n"
+        "def upgrade():\n"
+        "    inspector = inspect(op.get_bind())\n"
+        "    _each(['equipment'])\n"
+    )
+    assert schema_work_in_upgrade(source) == ["op.batch_alter_table()"]
+
+    only_downgrade = (
+        "def _undo():\n"
+        "    op.drop_column('equipment', 'x')\n"
+        "\n"
+        "def upgrade():\n"
+        "    conn = op.get_bind()\n"
+        "\n"
+        "def downgrade():\n"
+        "    _undo()\n"
+    )
+    assert schema_work_in_upgrade(only_downgrade) == []
 
 
 def test_the_schema_marker_guard_ignores_a_data_only_revision():

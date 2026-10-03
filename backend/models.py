@@ -50,6 +50,27 @@ def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
     return CheckConstraint(f"{column} IN ({allowed})", name=name)
 
 
+def _restrict(table: str, column: str, referred: str) -> ForeignKey:
+    """A foreign key to `referred`.id that refuses the delete of a referenced row.
+
+    DATA-H13-2. Every foreign key in this module goes through here, so the rule
+    is one decision in one place: these tables are equipment and the record of
+    what happened to it, and deleting a user or an item must neither take that
+    record with it nor leave it pointing at nobody. The group tables in
+    authz.py cascade instead -- an edge, a membership or a grant means nothing
+    once its group or user is gone -- and
+    tests/test_group_schema.py::test_nothing_outside_the_group_tables_cascades
+    holds the line between the two.
+
+    The constraint is named fk_<table>_<column> rather than left to the
+    database, which is what lets a migration address it: Postgres would call
+    it <table>_<column>_fkey and SQLite would not name it at all. The table and
+    column are passed in rather than discovered because a Column does not know
+    either until the class body has finished.
+    """
+    return ForeignKey(f'{referred}.id', name=f'fk_{table}_{column}', ondelete='RESTRICT')
+
+
 # --- Users & Authentication ---
 class User(Base):
     __tablename__ = 'users'
@@ -128,7 +149,12 @@ class Equipment(Base):
     id = Column(Integer, primary_key=True, index=True) 
     serial_number = Column(String, unique=True, nullable=True) 
     
-    catalog_item_id = Column(Integer, ForeignKey('catalog_items.id'), nullable=False, index=True)
+    catalog_item_id = Column(
+        Integer,
+        _restrict('equipment', 'catalog_item_id', 'catalog_items'),
+        nullable=False,
+        index=True,
+    )
     status = Column(String, default=EquipmentStatus.FUNCTIONAL.value)
     
     # Matrix Security Fields
@@ -149,29 +175,42 @@ class Equipment(Base):
     # kind of gap this phase exists to close. An item in no group is visible
     # to no commander, so there is no benign NULL to preserve.
     #
-    # Deliberately no ondelete rule: deleting a group that still holds equipment
-    # must fail rather than take the equipment with it. See the note in authz.py
-    # on why that only actually holds on Postgres.
+    # RESTRICT, like every foreign key in this module (DATA-H13-2): deleting a
+    # group that still holds equipment must fail rather than take the equipment
+    # with it. This column carried no rule at all until then, on purpose and
+    # for the same end -- a missing rule refuses the delete too. Saying it is
+    # what lets one test hold every foreign key to "declares a rule" with no
+    # list of exceptions.
     #
-    # The constraint is named explicitly so the model and the migration agree:
-    # downgrade() drops it by name, which Postgres requires, and leaving it
-    # unnamed here would have create_all() and Alembic build different schemas.
+    # Named fk_equipment_group_id since the revision that added it, which is
+    # the pattern _restrict now gives every foreign key in this module -- see
+    # there for why a name is not optional.
     group_id = Column(
         Integer,
-        ForeignKey('groups.id', name='fk_equipment_group_id'),
+        _restrict('equipment', 'group_id', 'groups'),
         nullable=False,
         index=True,
     )
     
     # --- Ownership vs Possession ---
-    owner_user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
-    owner_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True, index=True) 
-    holder_user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    owner_user_id = Column(Integer, _restrict('equipment', 'owner_user_id', 'users'), nullable=True, index=True)
+    owner_location_id = Column(
+        Integer,
+        _restrict('equipment', 'owner_location_id', 'locations'),
+        nullable=True,
+        index=True,
+    )
+    holder_user_id = Column(Integer, _restrict('equipment', 'holder_user_id', 'users'), nullable=True, index=True)
     
     # Custom Location String (e.g. "Armory", "Warehouse 1")
     custom_location = Column(String, nullable=True) 
 
-    actual_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True, index=True)
+    actual_location_id = Column(
+        Integer,
+        _restrict('equipment', 'actual_location_id', 'locations'),
+        nullable=True,
+        index=True,
+    )
 
     # Verification. No default (DATA-H5): a new item has never been checked, so
     # it starts NULL -- "never reported" -- until audit_trail.set_last_verified_at
@@ -253,9 +292,19 @@ class Equipment(Base):
 class TransactionLog(Base):
     __tablename__ = 'transaction_logs'
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), index=True)
-    involved_user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
-    involved_location_id = Column(Integer, ForeignKey('locations.id'), nullable=True, index=True)
+    equipment_id = Column(Integer, _restrict('transaction_logs', 'equipment_id', 'equipment'), index=True)
+    involved_user_id = Column(
+        Integer,
+        _restrict('transaction_logs', 'involved_user_id', 'users'),
+        nullable=True,
+        index=True,
+    )
+    involved_location_id = Column(
+        Integer,
+        _restrict('transaction_logs', 'involved_location_id', 'locations'),
+        nullable=True,
+        index=True,
+    )
     timestamp = Column(clock.UtcDateTime, default=clock.utcnow, index=True)
     user_status_at_time = Column(Boolean, nullable=True)
     event_type = Column(String) 
@@ -278,7 +327,7 @@ class FaultType(Base):
     
     # Manager Approval
     is_pending = Column(Boolean, default=False)
-    requested_by_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    requested_by_id = Column(Integer, _restrict('fault_types', 'requested_by_id', 'users'), nullable=True, index=True)
 
 class MaintenanceLog(Base):
     __tablename__ = 'maintenance_logs'
@@ -288,14 +337,14 @@ class MaintenanceLog(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), index=True)
-    fault_type_id = Column(Integer, ForeignKey('fault_types.id'), index=True)
+    equipment_id = Column(Integer, _restrict('maintenance_logs', 'equipment_id', 'equipment'), index=True)
+    fault_type_id = Column(Integer, _restrict('maintenance_logs', 'fault_type_id', 'fault_types'), index=True)
     description = Column(String)
     status = Column(String, default=TicketStatus.OPEN.value)
     opened_at = Column(clock.UtcDateTime, default=clock.utcnow)
     closed_at = Column(clock.UtcDateTime, nullable=True)
     
-    technician_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    technician_id = Column(Integer, _restrict('maintenance_logs', 'technician_id', 'users'), nullable=True, index=True)
     
     equipment = relationship("Equipment")
     fault_type = relationship("FaultType")
@@ -326,13 +375,13 @@ class Verification(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False, index=True)
+    equipment_id = Column(Integer, _restrict('verifications', 'equipment_id', 'equipment'), nullable=False, index=True)
     verification_type = Column(String, nullable=False)
     reported_status = Column(String, nullable=False)
     findings = Column(String, nullable=True)
     action_required = Column(Boolean, default=False)
     created_date = Column(clock.UtcDateTime, default=clock.utcnow)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    created_by = Column(Integer, _restrict('verifications', 'created_by', 'users'), nullable=False, index=True)
 
     equipment = relationship("Equipment", backref="verifications")
     reporter = relationship("User", foreign_keys=[created_by])
@@ -360,14 +409,29 @@ class EquipmentStatusHistory(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    equipment_id = Column(Integer, ForeignKey('equipment.id'), nullable=False, index=True)
+    equipment_id = Column(
+        Integer,
+        _restrict('equipment_status_history', 'equipment_id', 'equipment'),
+        nullable=False,
+        index=True,
+    )
     old_status = Column(String, nullable=False)
     new_status = Column(String, nullable=False)
     change_reason = Column(String, nullable=False)
-    verification_id = Column(Integer, ForeignKey('verifications.id'), nullable=True, index=True)
+    verification_id = Column(
+        Integer,
+        _restrict('equipment_status_history', 'verification_id', 'verifications'),
+        nullable=True,
+        index=True,
+    )
     notes = Column(String, nullable=True)
     created_date = Column(clock.UtcDateTime, default=clock.utcnow)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    created_by = Column(
+        Integer,
+        _restrict('equipment_status_history', 'created_by', 'users'),
+        nullable=False,
+        index=True,
+    )
     
     equipment = relationship("Equipment", backref="status_history")
     verification = relationship("Verification", backref="status_changes")

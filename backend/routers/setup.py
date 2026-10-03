@@ -171,9 +171,9 @@ def delete_fault_type(
         # so the refusal is issued from both places rather than only the one
         # that is easy to reach from a test.
         #
-        # DATA-H13 does NOT close this. An ON DELETE rule turns the violation
-        # into a different error rather than into no error, so a route that
-        # relied on the pre-check alone would keep this 500 after H13 lands.
+        # DATA-H13 did NOT close this. It declared the constraint ON DELETE
+        # RESTRICT, which names the refusal rather than removing it, so a
+        # route relying on the pre-check alone would still answer 500 here.
         #
         # Catching IntegrityError whole is safe only because exactly one
         # foreign key points at fault_types. tests/test_fault_type_deletion.py
