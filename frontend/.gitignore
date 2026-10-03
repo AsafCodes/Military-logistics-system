@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# API-H1. Generated from the live app by `python -m backend.export_openapi
+# frontend/openapi.json`; tracking it is how it went stale.
+/openapi.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

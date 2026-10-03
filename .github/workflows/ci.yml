@@ -88,6 +88,21 @@ jobs:
         fi
         exit $code
 
+    # Hard gate (API-H1). The specification is no longer tracked, so this is
+    # where it comes from: generated from the code under test, never stale.
+    # A gate because every green run must publish one. Written to the path
+    # `npm run generate-client` reads, which frontend/.gitignore ignores, so
+    # running this line locally cannot leave a file for `git add -A` to track.
+    - name: Export OpenAPI specification
+      run: python -m backend.export_openapi frontend/openapi.json
+
+    - name: Upload OpenAPI specification
+      uses: actions/upload-artifact@v4
+      with:
+        name: openapi
+        path: frontend/openapi.json
+        if-no-files-found: error
+
   frontend:
     runs-on: ubuntu-latest
 
