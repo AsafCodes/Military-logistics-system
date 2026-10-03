@@ -2,22 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import api from '@/api';
 import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
+import type { InventoryReportItem } from '@/types';
 
 // ==========================================
 // Interfaces
 // ==========================================
-interface GeneralReportItem {
-    id?: number;
-    item_type: string;
-    unit_association: string;
-    designated_owner: string;
-    actual_location: string;
-    serial_number: string;
-    reporting_status: string; // "Reported" | "Late" | "Missing"
-    last_reporter: string;
-    last_verified_at?: string; // ISO Date String
-}
-
 interface FilterState {
     types: string[]; // Multi-select
     unit: string;
@@ -33,7 +22,7 @@ interface FilterState {
 // ==========================================
 
 export default function GeneralReportPage() {
-    const [items, setItems] = useState<GeneralReportItem[]>([]);
+    const [items, setItems] = useState<InventoryReportItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [lastUpdated, setLastUpdated] = useState<string>("");
 
@@ -96,7 +85,7 @@ export default function GeneralReportPage() {
     }, [items, filters]);
 
     // Helpers
-    const calculateDelay = (lastVerified?: string) => {
+    const calculateDelay = (lastVerified: string | null) => {
         if (!lastVerified) return "אין רשומה";
         const diffMs = new Date().getTime() - new Date(lastVerified).getTime();
         const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));

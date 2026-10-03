@@ -29,10 +29,9 @@ def get_inventory_report(
     # FastAPI now answers 422 naming the four accepted values.
     #
     # The empty spelling changes too: `?status=` used to be falsy and skip the
-    # filter, and is now a 422 like any other non-member. Nothing sends it --
-    # the only in-repo caller of this route passes no params at all
-    # (GeneralReportPage.tsx), and services/reports.service.ts omits the key
-    # when the filter is unset rather than sending it blank.
+    # filter, and is now a 422 like any other non-member. The app never sends it --
+    # the only frontend caller of this route passes no params at all
+    # (GeneralReportPage.tsx).
     #
     # The two neighbours stay Optional[str] on purpose: both are ilike
     # substring searches over open vocabularies, so there is nothing to
@@ -76,7 +75,8 @@ def get_inventory_report(
 
     items = q.order_by(models.Equipment.id.asc()).all()
 
-    # Build response matching frontend GeneralReportItem interface
+    # Each row is InventoryReportItem in frontend/src/types/index.ts, key for
+    # key; tests/test_report_item_contract.py holds the two together.
     result = []
     for item in items:
         compliance = get_daily_status(item.last_verified_at)

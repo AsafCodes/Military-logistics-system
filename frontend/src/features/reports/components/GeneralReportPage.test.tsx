@@ -38,7 +38,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import GeneralReportPage from './GeneralReportPage';
 import api from '@/api';
+import type { InventoryReportItem } from '@/types';
 
+// Every fixture `satisfies` the shared row type (API-H4), so `tsc -b` --
+// which compiles test files too -- refuses a fixture with a missing, extra
+// or wrongly-typed key. It checks SHAPE only: reporting_status is a plain
+// string, so 'Late' below type-checks although the route never sends it
+// (that vocabulary is DATA-M7's).
 const LATE_ITEM = {
     id: 1,
     item_type: 'Rifle',
@@ -46,12 +52,12 @@ const LATE_ITEM = {
     designated_owner: 'Test Soldier',
     actual_location: 'Armory',
     serial_number: 'H1-3-PROBE',
-    // Anything but 'Reported' -- GeneralReportPage.tsx:296 only renders
-    // calculateDelay's output on the non-Reported branch.
+    // Anything but 'Reported' -- the status cell's `isReported ?` branch
+    // renders calculateDelay's output only when the row is not Reported.
     reporting_status: 'Late',
     last_reporter: 'Test Soldier',
     last_verified_at: '2026-06-10T04:00:00Z',
-};
+} satisfies InventoryReportItem;
 
 // calculateDelay has two Z-dependent branches -- diffDays>0 (LATE_ITEM,
 // above) and diffHours>0, reached only when the elapsed time is under a day.
@@ -68,7 +74,23 @@ const RECENT_ITEM = {
     id: 2,
     serial_number: 'H1-3-PROBE-HOURS',
     last_verified_at: '2026-06-14T21:00:00Z',
-};
+} satisfies InventoryReportItem;
+
+// The shape the route sends for an item with no serial, holder, owner or
+// location that was never verified: those four string fields at their
+// fallbacks, reporting_status computed as 'SEVERE', and last_verified_at the
+// one null.
+const NEVER_VERIFIED_ITEM = {
+    id: 3,
+    item_type: 'Rifle',
+    unit_association: '188/53/A',
+    designated_owner: 'Unassigned',
+    actual_location: '',
+    serial_number: '',
+    reporting_status: 'SEVERE',
+    last_reporter: '',
+    last_verified_at: null,
+} satisfies InventoryReportItem;
 
 afterEach(() => {
     vi.unstubAllEnvs();
@@ -104,5 +126,21 @@ describe('GeneralReportPage: calculateDelay reads the Z-suffixed timestamp as UT
 
         expect(await screen.findByText('לפני 3 שעות')).toBeInTheDocument();
         expect(screen.queryByText('לפני 8 שעות')).toBeNull();
+    });
+});
+
+describe('GeneralReportPage: a never-verified row (API-H4)', () => {
+    it('renders "no record" for a null last_verified_at instead of a computed delay', async () => {
+        vi.spyOn(api, 'get').mockImplementation((url: string) => {
+            if (url === '/reports/query') return Promise.resolve({ data: [NEVER_VERIFIED_ITEM] });
+            throw new Error(`unexpected URL in test: ${url}`);
+        });
+
+        render(<GeneralReportPage />);
+
+        expect(await screen.findByText('אין רשומה')).toBeInTheDocument();
+        // new Date(null) is the epoch, so a null that slipped past the guard
+        // would print a delay of some twenty thousand days instead.
+        expect(screen.queryByText(/^לפני \d+ ימים$/)).toBeNull();
     });
 });

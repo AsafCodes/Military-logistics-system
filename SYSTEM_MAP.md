@@ -88,8 +88,7 @@ Marker_System/
 │       │           └── GeneralReportPage.tsx # Inventory reports + CSV export
 │       ├── services/
 │       │   ├── auth.service.ts              # Login/logout/getMe
-│       │   ├── equipment.service.ts         # Equipment API calls
-│       │   └── reports.service.ts           # Report API calls
+│       │   └── equipment.service.ts         # Equipment API calls
 │       └── types/
 │           └── index.ts                     # TypeScript interfaces
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
@@ -404,7 +403,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 16. **Frontend expects `GET /setup/fault_types/pending`** — this endpoint must exist in `setup.py`. Without it, `DashboardPage.tsx` gets a 405 and fails to set `isManager`, breaking the manager UI.
 
-17. **The `reports.py` endpoint returns a plain dict** matching the frontend `GeneralReportItem` interface (`item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
+17. **The `reports.py` endpoint returns a plain dict** matching the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
