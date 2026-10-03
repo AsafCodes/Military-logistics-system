@@ -96,8 +96,8 @@ def create_fault_type(
     # anyone may PROPOSE vocabulary, and holding the verb is what lets it skip
     # review. may_global, so a no narrows the write instead of refusing it.
     # Note this route stays open to every authenticated user by design -- it
-    # is the front door of the approval workflow, which API-H6 separately
-    # records as having no way to drain.
+    # is a front door of the approval workflow, whose other end the frontend's
+    # /catalog page drives (API-H6). This route itself has no frontend caller.
     is_manager = authz.may_global(db, current_user.id, Capability.MANAGE_CATALOG)
     fault = models.FaultType(
         name=name,

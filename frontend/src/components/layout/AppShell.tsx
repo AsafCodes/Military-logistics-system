@@ -6,6 +6,7 @@ import {
     Wrench,
     FileBarChart,
     Shield,
+    ListChecks,
     ChevronRight,
     ChevronLeft,
     LogOut,
@@ -46,6 +47,7 @@ const NAV_ITEMS: NavItem[] = [
     { path: '/maintenance', label: 'תחזוקה', icon: <Wrench size={20} /> },
     { path: '/reports', label: 'דוחות', icon: <FileBarChart size={20} /> },
     { path: '/admin', label: 'ניהול מערכת', icon: <Shield size={20} />, capability: CAPABILITY.MANAGE_PERSONNEL },
+    { path: '/catalog', label: 'אישור סוגי תקלות', icon: <ListChecks size={20} />, capability: CAPABILITY.MANAGE_CATALOG },
 ];
 
 // ============================================================

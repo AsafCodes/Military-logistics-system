@@ -14,6 +14,7 @@ import AdminPanel from './features/dashboard/components/AdminPanel';
 import GeneralReportPage from './features/reports/components/GeneralReportPage';
 import EquipmentPage from './features/equipment/components/EquipmentPage';
 import MaintenancePage from './features/maintenance/components/MaintenancePage';
+import FaultTypeQueuePage from './features/catalog/components/FaultTypeQueuePage';
 
 const queryClient = new QueryClient();
 
@@ -39,6 +40,11 @@ function AuthenticatedLayout({
   // registered -- this is what makes the guard structural rather than
   // cosmetic.
   const isAdmin = hasSystem(session.capabilities, CAPABILITY.MANAGE_PERSONNEL);
+  // API-H6. The same structure for the fault-type approval queue, on its own
+  // verb. It is not a tab inside /admin because the two verbs have different
+  // holders: Brigade Tech Commander (u_brig_cmdr) holds MANAGE_CATALOG and not
+  // MANAGE_PERSONNEL, so inside /admin they could never reach it.
+  const canManageCatalog = hasSystem(session.capabilities, CAPABILITY.MANAGE_CATALOG);
 
   return (
     <CapabilitiesContext.Provider value={session.capabilities}>
@@ -51,8 +57,12 @@ function AuthenticatedLayout({
           {isAdmin && (
             <Route path="/admin" element={<AdminPanel onClose={() => { }} />} />
           )}
-          {/* Default redirect. Also where /admin lands for anyone the Route
-              above wasn't registered for -- same as any other unknown path. */}
+          {canManageCatalog && (
+            <Route path="/catalog" element={<FaultTypeQueuePage />} />
+          )}
+          {/* Default redirect. Also where /admin and /catalog land for anyone
+              the Routes above weren't registered for -- same as any other
+              unknown path. */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AppShell>

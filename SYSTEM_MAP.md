@@ -75,6 +75,9 @@ Marker_System/
 │       │   │   │   ├── DailyActivityTable.tsx # Recent event feed
 │       │   │   │   └── AdminPanel.tsx       # User search, group assignment
 │       │   │   └── hooks/                   # Dashboard-specific hooks
+│       │   ├── catalog/
+│       │   │   └── components/
+│       │   │       └── FaultTypeQueuePage.tsx # Pending fault-type approval queue
 │       │   ├── equipment/
 │       │   │   └── components/
 │       │   │       ├── EquipmentPage.tsx     # Full table + modals (41KB)
@@ -128,7 +131,7 @@ Marker_System/
 - **Responsibility:** `report_fault` → creates `FaultType` (if new) → creates `MaintenanceLog` ticket → marks equipment "Malfunctioning". `fix_equipment` → sets "Functional" → closes all open tickets → logs the fix.
 - **Audit (DATA-H4-2):** neither route writes a status or an audit row itself — both go through `audit_trail.set_status` / `record_event`, which own the `equipment.status` assignment. `report_fault` emits `FAULT` + a `fault_report` history row; `fix_equipment` emits `FIX` + a `repair` one. Both writes sit **below** the find-or-create `db.commit()` and inside the ticket's flush, so an audit row cannot outlive the ticket it explains. A **repeat** report on an already-broken item logs the event and adds no history row — that table records transitions, not assertions.
 - **Authority (H1-9):** both writes resolve through `get_scoped_equipment_or_404` and then gate. `report_fault` uses `require_status_authority` (**holder or `REPORT_STATUS`**); `fix_equipment` uses `require(RESOLVE_FAULT)` and deliberately has **no possession arm** — a soldier holding a broken item may report it and may not declare it fixed, and a company commander may report on their company and may not close the ticket.
-- **⚠️ Non-Obvious Detail:** whoever creates a new fault type without holding `REPORT_STATUS` over the item's group gets `is_pending=True` — approval is needed before it shows up in the general list. That is now a grant question rather than a profile boolean, and it is the one place `may()` is called instead of `require()`, because a "no" here narrows the write rather than refusing it. Note the approval workflow itself has no caller (API-H6), so pending fault types currently have no way out of the queue.
+- **⚠️ Non-Obvious Detail:** whoever creates a new fault type without holding `REPORT_STATUS` over the item's group gets `is_pending=True` — approval is needed before it shows up in the general list. That is now a grant question rather than a profile boolean, and it is the one place `may()` is called instead of `require()`, because a "no" here narrows the write rather than refusing it. "The general list" means the Report Fault dropdown: `GET /setup/fault_types` returns pending types too, and `EquipmentPage` is what filters them out. A report naming a pending type by name reuses it. The queue is drained from `/catalog` (`FaultTypeQueuePage`, API-H6), which offers Approve only, because a report-minted type in practice has a ticket and `DELETE` refuses those (DATA-H7). Not always: `report_fault` commits the type before the ticket, so a report that fails in between leaves a ticketless pending type.
 - **Scoping (H1-10.5):** `GET /tickets/` runs through `dependencies.scope_equipment_derived_query` — a ticket is exactly as visible as the item it is about. The join is **inner**, so a ticket whose `equipment_id` is NULL or dangling disappears rather than rendering as "Unknown"; that is a behaviour change for such rows, not merely a narrowing.
 
 ### Module E: Verification & Audit Trail
@@ -173,8 +176,8 @@ Marker_System/
 ### Module H: Orbital Dashboard Shell & Page Architecture
 - **Files:** `App.tsx`, `components/layout/AppShell.tsx`, `index.css` (design tokens)
 - **Responsibility:** Provides the authenticated layout (sidebar + top bar + content area) and React Router page routing for all features.
-- **How it works:** After login, `App.tsx` renders `<AppShell>` wrapping `<Routes>`. `AppShell.tsx` provides a collapsible sidebar (Dashboard, Equipment, Maintenance, Reports, Admin), top bar with user name + role badge + theme toggle + sign out, and a content area that renders the active route's page component. All pages use shared design tokens defined in `index.css` — CSS variables (`--foreground`, `--background`, `--card`, `--primary`, `--border`, `--accent`, etc.) with separate `:root` (light) and `.dark` (dark) values. The `.glass-card` utility class uses `backdrop-blur` + themed borders for glassmorphism.
-- **⚠️ Non-Obvious Detail:** The sidebar's Admin link is **not gated at all** (H1-12) — the frontend has no per-user capability signal to filter on (SEC-H10, deferred), so every nav item renders for every authenticated user and the backend's `MANAGE_PERSONNEL` check on the routes `/admin` calls is the real boundary; an unauthorized visitor gets a 403, not a hole. The current route is synced via React Router's `useLocation()` + `useNavigate()`, not component state.
+- **How it works:** After login, `App.tsx` renders `<AppShell>` wrapping `<Routes>`. `AppShell.tsx` provides a collapsible sidebar (Dashboard, Equipment, Maintenance, Reports, Admin, Fault-type approval), top bar with user name + role badge + theme toggle + sign out, and a content area that renders the active route's page component. All pages use shared design tokens defined in `index.css` — CSS variables (`--foreground`, `--background`, `--card`, `--primary`, `--border`, `--accent`, etc.) with separate `:root` (light) and `.dark` (dark) values. The `.glass-card` utility class uses `backdrop-blur` + themed borders for glassmorphism.
+- **⚠️ Non-Obvious Detail:** Two nav items are gated, each on one GLOBAL capability from `GET /users/me/capabilities` (SEC-H10): Admin on `MANAGE_PERSONNEL`, Fault-type approval on `MANAGE_CATALOG` (API-H6). `App.tsx` registers `/admin` and `/catalog` only for holders, so typing the URL without the verb falls through to the `*` redirect. That is a convenience; the real boundary is each route those pages call. Most use `require_global`, but AdminPanel's user search (`GET /users?q=`) is scoped to what the caller can see, not gated. The two verbs have different holders: `u_brig_cmdr` holds `MANAGE_CATALOG` without `MANAGE_PERSONNEL`, which is why the queue is its own page and not a tab inside `/admin`. The current route is synced via React Router's `useLocation()` + `useNavigate()`, not component state.
 
 **Frontend Route → Page Component Map:**
 
@@ -185,6 +188,7 @@ Marker_System/
 | `/maintenance` | `MaintenancePage` | `features/maintenance/components/MaintenancePage.tsx` |
 | `/reports` | `GeneralReportPage` | `features/reports/components/GeneralReportPage.tsx` |
 | `/admin` | `AdminPanel` | `features/dashboard/components/AdminPanel.tsx` |
+| `/catalog` | `FaultTypeQueuePage` | `features/catalog/components/FaultTypeQueuePage.tsx` |
 
 ---
 
@@ -233,11 +237,11 @@ Marker_System/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/groups` | List all groups (`MANAGE_PERSONNEL`) |
-| `GET` | `/setup/fault_types` | List all fault types |
-| `GET` | `/setup/fault_types/pending` | List pending fault types (manager only) |
-| `POST` | `/setup/fault_types` | Create fault type |
-| `PUT` | `/setup/fault_types/{id}/approve` | Approve pending fault type |
-| `DELETE` | `/setup/fault_types/{id}` | Delete fault type |
+| `GET` | `/setup/fault_types` | List all fault types, pending included |
+| `GET` | `/setup/fault_types/pending` | List pending fault types (`MANAGE_CATALOG`) |
+| `POST` | `/setup/fault_types` | Create fault type (any user; pending without `MANAGE_CATALOG`) |
+| `PUT` | `/setup/fault_types/{id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
+| `DELETE` | `/setup/fault_types/{id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
 
 ### Reports (`routers/reports.py`)
 | Method | Path | Description |
@@ -333,6 +337,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 - **Maintenance** (`/maintenance`) → Ticket management: 4 summary stat cards, filter tabs (All/Open/In Progress/Closed), ticket cards with equipment name + fault type + dates, manager "close & fix" action
 - **Reports** (`/reports`) → `GET /reports/query` with dynamic filters → table display, CSV export, print support
 - **Admin** (`/admin`) → User search, group assignment
+- **Fault-type approval** (`/catalog`) → Pending fault types with an Approve button; approving one adds it to the Report Fault dropdown
 - **API Docs** → FastAPI auto-generated at `/docs`
 - **All pages** → Full dark/light theme support via CSS variables (`.glass-card`, `text-foreground`, `bg-background`, etc.), Hebrew-first labels, RTL layout
 
@@ -401,7 +406,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 15. **The `analytics.py` endpoint returns a plain dict**, not a Pydantic `response_model`. This was done intentionally to avoid `__pycache__` staleness issues with the `UnitReadinessResponse` schema.
 
-16. **Frontend expects `GET /setup/fault_types/pending`** — this endpoint must exist in `setup.py`. Without it, `DashboardPage.tsx` gets a 405 and fails to set `isManager`, breaking the manager UI.
+16. **`FaultTypeQueuePage.tsx` (`/catalog`) is the only frontend caller of `GET /setup/fault_types/pending` and `PUT /setup/fault_types/{id}/approve`** (API-H6). `DashboardPage.tsx` does not call either route, whatever older notes say. `DELETE /setup/fault_types/{id}` still has no frontend caller.
 
 17. **The `reports.py` endpoint returns a plain dict** matching the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
 

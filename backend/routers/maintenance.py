@@ -113,7 +113,8 @@ def report_fault(
         # is now pending, which is what an approval queue is for.
         #
         # Deliberately not RESOLVE_FAULT. That would newly send a company
-        # commander's fault types to a queue API-H6 says nothing can drain.
+        # commander's fault types to review -- the approval queue (/catalog,
+        # API-H6) -- when the column this replaced let them skip it.
         # FaultType has no group of its own -- see Capability's note on
         # MANAGE_CATALOG -- so the item's group is the only scope available.
         is_manager = authz.may(db, current_user.id, Capability.REPORT_STATUS, item.group_id)

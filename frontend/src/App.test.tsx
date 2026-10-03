@@ -171,6 +171,66 @@ describe('SEC-H10: the /admin route guard', () => {
     });
 });
 
+describe('API-H6: the /catalog route guard', () => {
+    // Each session holds exactly ONE of the two global verbs. SESSION holds
+    // both, so it cannot tell a guard keyed on MANAGE_CATALOG from one keyed
+    // on MANAGE_PERSONNEL -- or from one keyed on "holds any system verb".
+    // Brigade Tech Commander is the real account shaped like the first one.
+    const SESSION_CATALOG_ONLY = {
+        ...SESSION,
+        capabilities: { system: ['MANAGE_CATALOG'], anywhere: [] },
+    };
+    const SESSION_PERSONNEL_ONLY = {
+        ...SESSION,
+        capabilities: { system: ['MANAGE_PERSONNEL'], anywhere: [] },
+    };
+    const CATALOG_NAV = 'אישור סוגי תקלות';
+    // Text only the queue page renders -- its subtitle.
+    const QUEUE_PAGE = /אישור מוסיף את הסוג לרשימת הבחירה/;
+
+    beforeEach(() => {
+        window.history.pushState({}, '', '/');
+    });
+
+    it('offers the queue to a MANAGE_CATALOG holder who is not an admin', async () => {
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_CATALOG_ONLY);
+
+        render(<App />);
+
+        expect(await screen.findByText(CATALOG_NAV)).toBeInTheDocument();
+        expect(screen.queryByText('ניהול מערכת')).toBeNull();
+        fireEvent.click(screen.getByText(CATALOG_NAV));
+
+        expect(await screen.findByText(QUEUE_PAGE)).toBeInTheDocument();
+    });
+
+    it('refuses the queue to an admin without MANAGE_CATALOG, even by URL', async () => {
+        window.history.pushState({}, '', '/catalog');
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_PERSONNEL_ONLY);
+
+        const { container } = render(<App />);
+
+        await waitFor(() => expect(spinner(container)).toBeNull());
+        // The admin's own item is still there, so the shell did render ...
+        expect(await screen.findByText('ניהול מערכת')).toBeInTheDocument();
+        // ... and the queue never mounted, from the nav or from the URL.
+        expect(screen.queryByText(CATALOG_NAV)).toBeNull();
+        expect(screen.queryByText(QUEUE_PAGE)).toBeNull();
+    });
+
+    it('refuses the queue to an ungranted user by URL, landing in the shell', async () => {
+        window.history.pushState({}, '', '/catalog');
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_NO_ADMIN);
+
+        const { container } = render(<App />);
+
+        await waitFor(() => expect(spinner(container)).toBeNull());
+        expect(await screen.findByText(/Master Admin/i)).toBeInTheDocument();
+        expect(screen.queryByText(CATALOG_NAV)).toBeNull();
+        expect(screen.queryByText(QUEUE_PAGE)).toBeNull();
+    });
+});
+
 describe('login', () => {
     // Queried as raw inputs rather than by role: `<input type="password">` has
     // no implicit ARIA role, so getAllByRole('textbox') returns only the

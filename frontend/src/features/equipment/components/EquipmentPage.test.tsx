@@ -14,9 +14,10 @@
  * genuinely reaches the row rather than assuming it does.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import EquipmentPage from './EquipmentPage';
 import type { Capabilities } from '@/lib/capabilities';
+import type { FaultType } from '@/types';
 import { TEST_USER, TEST_CAPABILITIES, TEST_CAPABILITIES_NONE, withCapabilities } from '@/test/setup';
 import api from '@/api';
 
@@ -42,11 +43,11 @@ const FUNCTIONAL_ITEM_HELD_BY_OTHER = {
     ...FUNCTIONAL_ITEM_HELD_BY_USER, id: 21, holder_user_id: 999, serial_number: 'F2',
 };
 
-function mockEquipmentApi(items: unknown[]) {
+function mockEquipmentApi(items: unknown[], faultTypes: FaultType[] = []) {
     vi.spyOn(api, 'get').mockImplementation((url: string) => {
         if (url === '/users/me') return Promise.resolve({ data: USER });
         if (url === '/equipment/accessible') return Promise.resolve({ data: items });
-        if (url === '/setup/fault_types') return Promise.resolve({ data: [] });
+        if (url === '/setup/fault_types') return Promise.resolve({ data: faultTypes });
         throw new Error(`unexpected URL in test: ${url}`);
     });
 }
@@ -113,5 +114,29 @@ describe('EquipmentPage row actions: cosmetic capability gating (SEC-H10-3)', ()
         expect(screen.queryByText('דווח תקלה')).toBeNull();
         expect(screen.queryByText('העבר')).toBeNull();
         expect(screen.queryByText('שייך')).toBeNull();
+    });
+});
+
+describe('EquipmentPage Report Fault dropdown: the pending filter (API-H6)', () => {
+    // The other half of the approval queue. FaultTypeQueuePage tells its user
+    // that approving a type adds it to this dropdown; that is true only while
+    // the dropdown leaves pending types out and shows approved ones. Nothing
+    // pinned the filter before, so deleting it -- or inverting it -- passed.
+    const APPROVED = { id: 1, name: 'Cracked Housing', is_pending: false } satisfies FaultType;
+    const PENDING = { id: 2, name: 'Frayed Strap', is_pending: true } satisfies FaultType;
+
+    it('offers approved fault types and holds back pending ones', async () => {
+        mockEquipmentApi([FUNCTIONAL_ITEM_HELD_BY_USER], [APPROVED, PENDING]);
+        render(withCapabilities(<EquipmentPage />, UNGRANTED));
+
+        fireEvent.click(await screen.findByText('דווח תקלה'));
+
+        // The page has two filter selects too; the modal's is the one carrying
+        // the free-text escape, which is also how pending types get minted.
+        const select = screen.getByText('אחר (חדש)').closest('select');
+        if (!select) throw new Error('the Report Fault select did not render');
+        const offered = Array.from(select.querySelectorAll('option')).map(o => o.textContent);
+        expect(offered).toContain(APPROVED.name);
+        expect(offered).not.toContain(PENDING.name);
     });
 });
