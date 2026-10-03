@@ -216,4 +216,4 @@ Explicitly **not** in scope: **SEC-H5** — four endpoints apply no scoping at a
 - `create_equipment` has no authorization gate whatsoever — any authenticated user can create equipment. H1-7's `require` makes the fix one line, but it is not itemized anywhere.
 - `assign_owner` and `transfer_equipment` perform no scope check on the *target*, so a cross-unit transfer permanently gives an item away with no undo path.
 - [migrations.py:77](backend/migrations.py#L77) stamps pre-Alembic databases to `"head"` instead of the baseline revision, silently skipping every data migration.
-- The generated frontend client under `frontend/src/client/` is stale and has no callers; API-H2 already covers it.
+- The generated frontend client under `frontend/src/client/` was stale and had no callers; API-H2 has since deleted it, with its generator.
