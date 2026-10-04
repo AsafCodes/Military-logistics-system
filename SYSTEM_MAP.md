@@ -61,7 +61,7 @@ Marker_System/
 │       │   │   ├── AutocompleteInput.tsx    # Searchable input
 │       │   │   └── SearchableMultiSelect.tsx
 │       │   └── shared/
-│       │       └── ConnectionTest.tsx       # Backend health check widget
+│       │       └── ErrorBoundary.tsx        # Top-level render-error fallback
 │       ├── features/
 │       │   ├── auth/
 │       │   │   └── components/

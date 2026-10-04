@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import ConnectionTest from './components/shared/ConnectionTest';
 import { LoginPage, type LoginFormValues } from './features/auth';
 import AppShell from './components/layout/AppShell';
 import { authService } from './services';
@@ -187,17 +186,7 @@ function App() {
         <Routes>
           {session === null ? (
             <>
-              <Route
-                path="/login"
-                element={
-                  <>
-                    <LoginPage onLogin={handleLogin} />
-                    <div className="fixed bottom-4 right-4 opacity-50 hover:opacity-100 transition-opacity">
-                      <ConnectionTest />
-                    </div>
-                  </>
-                }
-              />
+              <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
               <Route path="*" element={<Navigate to="/login" replace />} />
             </>
           ) : (

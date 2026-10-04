@@ -11,7 +11,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 
 vi.mock('@/components/ui/NetworkGlobe', () => ({ default: () => null }));
-vi.mock('./components/shared/ConnectionTest', () => ({ default: () => null }));
 // Plain functions, deliberately not vi.fn(): `restoreMocks` in vite.config.ts
 // resets implementations between tests, which would strip the mockResolvedValue
 // off a spy declared in a module factory -- from the FIRST test onward, not

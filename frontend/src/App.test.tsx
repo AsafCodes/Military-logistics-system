@@ -31,13 +31,6 @@ vi.mock('@/components/ui/NetworkGlobe', () => ({
     default: () => null,
 }));
 
-// ConnectionTest fires a real XHR at a hardcoded 127.0.0.1:8000 on mount and
-// dumps the resulting network error to stderr. Stubbed so a passing run reads
-// as one. Deleting the component for real is SEC-M13, a separate entry.
-vi.mock('./components/shared/ConnectionTest', () => ({
-    default: () => null,
-}));
-
 // The dashboard loads its own data on mount through the other axios client.
 // These tests are about the session bootstrap, not that data, and letting the
 // requests fly produces real network errors in the output.
@@ -77,6 +70,33 @@ describe('App bootstrap', () => {
         // is not in this tree at all, so it can never render. main.test.tsx
         // makes that assertion where it means something.
         expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+    });
+
+    it('fires no XHR or fetch from the public login page', async () => {
+        // SEC-M13 / FE-H1-1. A connection widget used to sit on this page and,
+        // on mount, fire a bare request at a hardcoded backend address, then
+        // display that address to anyone who could reach the login screen
+        // whenever the request failed, and log the raw error. Deleting it left no test able to notice it coming
+        // back -- without a mock it just fires the request and logs an error,
+        // so this watches the transports themselves.
+        //
+        // One blind spot: a request made through `@/api` never reaches a
+        // transport here, because this file mocks that client wholesale.
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(null);
+        const open = vi.spyOn(XMLHttpRequest.prototype, 'open');
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        render(<App />);
+        expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+        // A bare axios or fetch call reaches the transport synchronously inside
+        // the effect, so findByRole's await already catches it (the restored
+        // widget is caught without this line). A request issued after an
+        // `await` inside the effect lands a few microtasks later; one more
+        // macrotask covers that case too.
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(open).not.toHaveBeenCalled();
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('renders the authenticated shell when the cookie is recognised', async () => {
