@@ -2,42 +2,7 @@ import { useState, useEffect } from 'react';
 import { Package, CheckCircle2, AlertTriangle } from 'lucide-react';
 import api from '@/lib/axios';
 import type { UnitReadiness } from '@/types';
-
-// ============================================================
-// Animated Counter Hook
-// ============================================================
-
-function useAnimatedCounter(target: number, duration = 1200) {
-    const [count, setCount] = useState(0);
-
-    useEffect(() => {
-        if (target === 0) { setCount(0); return; }
-
-        let start = 0;
-        const startTime = performance.now();
-
-        const tick = (now: number) => {
-            const elapsed = now - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-            // Ease-out cubic
-            const eased = 1 - Math.pow(1 - progress, 3);
-            const current = Math.round(eased * target);
-
-            if (current !== start) {
-                start = current;
-                setCount(current);
-            }
-
-            if (progress < 1) {
-                requestAnimationFrame(tick);
-            }
-        };
-
-        requestAnimationFrame(tick);
-    }, [target, duration]);
-
-    return count;
-}
+import { useAnimatedCounter } from '../hooks/useAnimatedCounter';
 
 // ============================================================
 // Types

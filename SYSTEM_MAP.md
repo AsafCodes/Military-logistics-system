@@ -69,11 +69,13 @@ Marker_System/
 │       │   ├── dashboard/
 │       │   │   ├── components/
 │       │   │   │   ├── DashboardPage.tsx    # Welcome + stats + equipment preview
-│       │   │   │   ├── StatsGrid.tsx        # 4 animated ring stat cards
+│       │   │   │   ├── StatsGrid.tsx        # 4 stat cards with animated counters (readiness inside a ring)
 │       │   │   │   ├── EquipmentTable.tsx   # Top-5 equipment preview table
 │       │   │   │   ├── DailyActivityTable.tsx # Recent event feed
 │       │   │   │   └── AdminPanel.tsx       # User search, group assignment
 │       │   │   └── hooks/                   # Dashboard-specific hooks
+│       │   │       ├── useDashboardData.ts  # Readiness + accessible-equipment fetch
+│       │   │       └── useAnimatedCounter.ts # StatsGrid's eased counter, cancels its frame
 │       │   ├── catalog/
 │       │   │   └── components/
 │       │   │       └── FaultTypeQueuePage.tsx # Pending fault-type approval queue
@@ -333,7 +335,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 ### Output (Where data goes)
 - **Login Page** → Orbital-style landing with 3D globe, theme toggle, inline login form
-- **Dashboard** (`/dashboard`) → Welcome card, stats grid (4 stat cards with animated rings), equipment preview (top 5), activity feed (last 8 events)
+- **Dashboard** (`/dashboard`) → Welcome card, stats grid (4 stat cards with animated counters, readiness inside a ring), equipment preview (top 5), activity feed (last 8 events)
 - **Equipment** (`/equipment`) → Full equipment table with search/filter (by serial, type, status), expandable inline history rows, action modals (Report Fault with fault type picker + "other", Transfer with person/location toggle, Assign Owner with user search), Verification Form, full History modal
 - **Maintenance** (`/maintenance`) → Ticket management: 4 summary stat cards, filter tabs (All/Open/In Progress/Closed), ticket cards with equipment name + fault type + dates, manager "close & fix" action
 - **Reports** (`/reports`) → `GET /reports/query` with dynamic filters → table display, CSV export, print support
