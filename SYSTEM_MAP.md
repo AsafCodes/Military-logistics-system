@@ -394,7 +394,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 10. **`compliance_level` and `current_state_description` are computed properties,** not database columns. Don't try to query/filter by them directly in SQL.
 
-11. **The `erasableSyntaxOnly` tsconfig option was removed** because the TypeScript version doesn't support it. Don't add it back.
+11. **The `erasableSyntaxOnly` tsconfig option is not set.** It was removed while the project ran TypeScript 5.6, which predates the option (5.8 added it). FE-H3-2 moved the project to 5.9, so that reason is gone; setting it is now an open choice, not a constraint.
 
 12. **DO NOT define duplicate Pydantic classes in `schemas.py`.** Python uses the **last** definition. A duplicate `UnitReadinessResponse` with `readiness_score` silently overrode the correct one with `readiness_percentage`, causing a 500 crash. Always search for existing classes before adding new ones.
 
