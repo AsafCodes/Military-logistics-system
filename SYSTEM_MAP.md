@@ -48,7 +48,6 @@ Marker_System/
 ├── frontend/                   # React + TypeScript + Vite
 │   └── src/
 │       ├── App.tsx                          # Root: auth state, routing
-│       ├── api.ts                           # Axios instance
 │       ├── index.css                        # CSS design tokens (dark/light)
 │       ├── r3f.d.ts                         # React Three Fiber type declarations
 │       ├── components/
@@ -89,6 +88,8 @@ Marker_System/
 │       │   └── reports/
 │       │       └── components/
 │       │           └── GeneralReportPage.tsx # Inventory reports + CSV export
+│       ├── lib/
+│       │   └── axios.ts                     # The only HTTP client: base URL, timeout, 401 → /login
 │       ├── services/
 │       │   ├── auth.service.ts              # Login/logout/getMe
 │       │   └── equipment.service.ts         # Equipment API calls
@@ -261,7 +262,7 @@ Marker_System/
 ### Input (Where data starts)
 - **Frontend Forms** → React components → Axios → FastAPI endpoints
 - **Seed Script** → `seed_data.py` builds the group graph, then bulk-inserts Users, Catalogs, Equipment. Requires `SEED_ENABLED=1` and a local `DATABASE_URL`; only destroys data with `--reset`
-- **JWT Login** → `POST /login` → token set as an **httpOnly, SameSite=Lax cookie** (SEC-H9). Nothing auth-related is **stored** in `localStorage`; the browser attaches the cookie itself, so both axios clients send `withCredentials` and neither sets an `Authorization` header. Identity comes from `GET /users/me` on every load. `Secure` is on by default and downgraded only for the local http stack via `COOKIE_SECURE=false`.
+- **JWT Login** → `POST /login` → token set as an **httpOnly, SameSite=Lax cookie** (SEC-H9). Nothing auth-related is **stored** in `localStorage`; the browser attaches the cookie itself, so the axios client (`lib/axios.ts`) sends `withCredentials` and sets no `Authorization` header. Identity comes from `GET /users/me` on every load. `Secure` is on by default and downgraded only for the local http stack via `COOKIE_SECURE=false`.
   - The login *response body* still contains the JWT, and page JavaScript can read it — `auth.service.ts` simply never touches it. What the fix guarantees is that the token is never **persisted**, so an XSS has no stored credential to steal and nothing survives a reload.
   - The `Authorization: Bearer` path still works and takes precedence when it carries a usable token — that is how the pytest suite, Swagger, and any non-browser client authenticate. A malformed or non-Bearer header falls through to the cookie rather than shadowing it.
   - CSRF rests on `SameSite=Lax`, which is sufficient **only while every `GET` route stays read-only**; `tests/test_cookie_auth.py` pins that with an allowlist. `POST /logout` is forgeable cross-site by design (availability only) — see its docstring.

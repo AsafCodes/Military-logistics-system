@@ -31,18 +31,26 @@ vi.mock('@/components/ui/NetworkGlobe', () => ({
     default: () => null,
 }));
 
-// The dashboard loads its own data on mount through the other axios client.
-// These tests are about the session bootstrap, not that data, and letting the
+// The dashboard loads its own data on mount through the shared client. These
+// tests are about the session bootstrap, not that data, and letting the
 // requests fly produces real network errors in the output.
+//
+// authService goes through this same client, so the mock answers the session
+// probe's signature (`skipAuthRedirect`) the way an anonymous visit is
+// answered: refused. Every test here stubs resolveSession, so the probe never
+// actually arrives. If a future test forgets to, it gets "nobody is signed
+// in" rather than a session built from the `[]` the data calls receive.
 //
 // Plain functions, NOT vi.fn().mockResolvedValue(): `restoreMocks` in
 // vite.config.ts strips implementations off spies created in a module factory,
 // from the very first test. Written as spies these returned `undefined`, the
 // dashboard did `.then()` on it, and the resulting render errors were invisible
 // because nothing here asserts on dashboard data.
-vi.mock('@/api', () => ({
+vi.mock('@/lib/axios', () => ({
     default: {
-        get: () => Promise.resolve({ data: [] }),
+        get: (_url: string, config?: { skipAuthRedirect?: boolean }) => config?.skipAuthRedirect
+            ? Promise.reject(Object.assign(new Error('401 (mocked)'), { response: { status: 401 } }))
+            : Promise.resolve({ data: [] }),
         post: () => Promise.resolve({ data: {} }),
         interceptors: { request: { use: () => { } }, response: { use: () => { } } },
     },
@@ -80,7 +88,7 @@ describe('App bootstrap', () => {
         // back -- without a mock it just fires the request and logs an error,
         // so this watches the transports themselves.
         //
-        // One blind spot: a request made through `@/api` never reaches a
+        // One blind spot: a request made through `@/lib/axios` never reaches a
         // transport here, because this file mocks that client wholesale.
         vi.spyOn(authService, 'resolveSession').mockResolvedValue(null);
         const open = vi.spyOn(XMLHttpRequest.prototype, 'open');

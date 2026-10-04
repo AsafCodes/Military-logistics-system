@@ -21,7 +21,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import DailyActivityTable from './DailyActivityTable';
-import api from '@/api';
+import api from '@/lib/axios';
 
 const ACTIVITY_ITEM = {
     id: 1,

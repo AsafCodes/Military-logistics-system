@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import api from '@/api';
+import api from '@/lib/axios';
 import type { User, UnitReadiness, Equipment } from '@/types';
 
 export function useDashboardData() {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle, ShieldAlert, PackagePlus, ClipboardCheck } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 
 // ============================================================
 // Types — matches the actual API response from /reports/daily_movement

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Package, CheckCircle2, AlertTriangle } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 import type { UnitReadiness } from '@/types';
 
 // ============================================================

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Package, Search, Filter, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
 import type { Equipment, User, FaultType } from '@/types';
 import EquipmentHistory from './EquipmentHistory';

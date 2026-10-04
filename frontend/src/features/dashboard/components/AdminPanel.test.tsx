@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import AdminPanel from './AdminPanel';
-import api from '@/api';
+import api from '@/lib/axios';
 
 const GROUPS = [{ id: 1, name: 'Company A' }];
 const USER = { id: 1, full_name: 'Test User', personal_number: 'u_test' };

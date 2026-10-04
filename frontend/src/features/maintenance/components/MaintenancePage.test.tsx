@@ -10,7 +10,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import MaintenancePage from './MaintenancePage';
 import type { Capabilities } from '@/lib/capabilities';
 import { TEST_CAPABILITIES, TEST_CAPABILITIES_NONE, withCapabilities } from '@/test/setup';
-import api from '@/api';
+import api from '@/lib/axios';
 
 const OPEN_TICKET = {
     id: 1, equipment_id: 10, equipment_name: 'Rifle', fault_type: 'Jammed',

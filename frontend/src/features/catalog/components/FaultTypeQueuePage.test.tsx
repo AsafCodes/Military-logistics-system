@@ -8,11 +8,12 @@
  * the page's own behaviour: what it asks for, what it shows, and that a failed
  * approval never looks like a successful one.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import FaultTypeQueuePage from './FaultTypeQueuePage';
-import api from '@/api';
+import api from '@/lib/axios';
+import { withAdapter, failingWith, stubLocation, restoreLocation } from '@/test/httpStubs';
 import type { FaultType } from '@/types';
 
 const PENDING = [
@@ -176,6 +177,34 @@ describe('FaultTypeQueuePage', () => {
         // A 403 is not transient -- retrying it tells the operator nothing new.
         expect(screen.queryByText('נסה שוב')).toBeNull();
         expect(screen.queryByText(/אין סוגי תקלות הממתינים לאישור/)).toBeNull();
+    });
+
+    describe('an expired session (401), through the real client', () => {
+        // Every other test here spies on api.get, which skips the interceptors
+        // entirely. This one stubs the transport instead, so the request runs
+        // the shared client's real 401 policy -- the one FE-H1 gave every
+        // feature page in place of api.ts's window.location.reload().
+        let adapter: ReturnType<typeof withAdapter>;
+
+        beforeEach(() => { adapter = withAdapter(api); });
+        afterEach(() => {
+            adapter.restore();
+            restoreLocation();
+        });
+
+        it('navigates to /login without reloading, and still shows the failure', async () => {
+            vi.spyOn(console, 'error').mockImplementation(() => { });
+            const { reload } = stubLocation('/catalog');
+            adapter.install(failingWith(401));
+
+            render(<FaultTypeQueuePage />);
+
+            // The interceptor still rejects, so the page leaves its spinner
+            // instead of waiting forever for an answer that is not coming.
+            expect(await screen.findByText(/טעינת התור נכשלה/)).toBeInTheDocument();
+            expect(window.location.href).toBe('/login');
+            expect(reload).not.toHaveBeenCalled();
+        });
     });
 
     it('offers a retry on a network failure, worded apart from a 403, and recovers', async () => {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Wrench, RefreshCw, AlertTriangle, CheckCircle, Clock, Inbox } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
 
 // ============================================================

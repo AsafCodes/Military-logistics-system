@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import api from '@/api';
+import api from '@/lib/axios';
 import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
 import type { InventoryReportItem } from '@/types';

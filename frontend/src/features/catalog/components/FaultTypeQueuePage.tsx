@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import api from '@/api';
+import api from '@/lib/axios';
 import type { FaultType } from '@/types';
 
 // API-H6. The other end of report_fault's is_pending: a reporter without

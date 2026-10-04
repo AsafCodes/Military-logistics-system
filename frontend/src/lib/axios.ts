@@ -1,6 +1,9 @@
 /**
- * Axios Instance with Interceptors
- * Centralized HTTP client configuration
+ * The application's only axios instance (FE-H1). Every request goes through
+ * it, so the base address, the timeout, the cookie and the 401 policy are
+ * each decided here once. singleHttpClient.test.ts pins that no second
+ * client, bare axios call or fetch() appears in application code outside this
+ * file (tests and src/test/ are exempt).
  */
 import axios from 'axios';
 
@@ -13,10 +16,9 @@ declare module 'axios' {
          * probe. Without it, every anonymous visit 401s and triggers a full
          * page navigation to a page the visitor is already on.
          *
-         * Honoured by THIS client only. `declare module` widens
-         * AxiosRequestConfig globally, so api.ts advertises the option in its
-         * types too and ignores it -- that client reloads on any 401. The two
-         * clients having different 401 policies at all is FE-H1.
+         * Honoured by this client's response interceptor. `declare module`
+         * widens AxiosRequestConfig globally, so the option type-checks on any
+         * axios call; it means something only here.
          */
         skipAuthRedirect?: boolean;
     }

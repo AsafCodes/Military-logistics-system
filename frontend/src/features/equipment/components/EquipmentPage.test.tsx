@@ -19,7 +19,7 @@ import EquipmentPage from './EquipmentPage';
 import type { Capabilities } from '@/lib/capabilities';
 import type { FaultType } from '@/types';
 import { TEST_USER, TEST_CAPABILITIES, TEST_CAPABILITIES_NONE, withCapabilities } from '@/test/setup';
-import api from '@/api';
+import api from '@/lib/axios';
 
 // TEST_USER's shape, not its identity content -- 'Master Admin' reads oddly
 // as the persona for a deliberately ungranted-soldier scenario, so the

@@ -37,7 +37,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import GeneralReportPage from './GeneralReportPage';
-import api from '@/api';
+import api from '@/lib/axios';
 import type { InventoryReportItem } from '@/types';
 
 // Every fixture `satisfies` the shared row type (API-H4), so `tsc -b` --

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, Package, ArrowLeftCircle } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 
 // Components
 import StatsGrid from './StatsGrid';
