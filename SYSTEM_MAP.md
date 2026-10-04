@@ -49,13 +49,13 @@ Marker_System/
 │   └── src/
 │       ├── App.tsx                          # Root: auth state, routing
 │       ├── index.css                        # CSS design tokens (dark/light)
-│       ├── r3f.d.ts                         # React Three Fiber type declarations
 │       ├── components/
 │       │   ├── layout/
 │       │   │   └── AppShell.tsx             # Sidebar + top bar + content area
 │       │   ├── ui/                          # Shadcn/UI + custom components
 │       │   │   ├── button.tsx, card.tsx, form.tsx, input.tsx, label.tsx
 │       │   │   ├── NetworkGlobe.tsx         # 3D particle globe (R3F)
+│       │   │   ├── r3fJsxTypes.typecheck.tsx # tsc-only guard: R3F JSX stays strictly typed
 │       │   │   ├── ThemeToggle.tsx          # Dark/light toggle
 │       │   │   ├── AutocompleteInput.tsx    # Searchable input
 │       │   │   └── SearchableMultiSelect.tsx
@@ -169,10 +169,10 @@ Marker_System/
 - **⚠️ Non-Obvious Detail:** every gated route runs **404 before 403** — resolve the item inside the caller's own VIEW extent (`get_scoped_equipment_or_404`), *then* `authz.require(...)`. Run the other way round, a 403 confirms an id the caller was never allowed to know existed. Calling `require()` on an id straight from a request body reinstates that oracle.
 
 ### Module G: Login Page & 3D Globe ("Orbital" Design)
-- **Files:** `features/auth/components/LoginPage.tsx`, `components/ui/NetworkGlobe.tsx`, `components/ui/ThemeToggle.tsx`, `r3f.d.ts`
+- **Files:** `features/auth/components/LoginPage.tsx`, `components/ui/NetworkGlobe.tsx`, `components/ui/ThemeToggle.tsx`, `components/ui/r3fJsxTypes.typecheck.tsx`
 - **Responsibility:** Full-screen login page with an Orbital-style layout: hero text + inline login form (left 45%), animated 3D particle globe (right 55%), stats bar (bottom), navbar with dark/light theme toggle.
-- **How it works:** `NetworkGlobe.tsx` uses React Three Fiber (`@react-three/fiber`) + drei helpers (`Points`, `PointMaterial`) to render 3,000 uniformly-distributed particles on a sphere. A `<torus>` ring orbits the sphere. Colors, particle size, ring opacity, and glow opacity are all **theme-aware**. `ThemeToggle.tsx` toggles `.dark` class on `<html>`, persists to `localStorage`, and `LoginPage.tsx` watches for class changes via `MutationObserver` to pass `isDark` to the globe.
-- **⚠️ Non-Obvious Detail:** The `r3f.d.ts` file must declare every Three.js JSX element used (e.g., `mesh`, `torusGeometry`, `ambientLight`) — missing declarations cause TypeScript build failures.
+- **How it works:** `NetworkGlobe.tsx` uses React Three Fiber (`@react-three/fiber`) + drei helpers (`Points`, `PointMaterial`) to render 3,000 uniformly-distributed particles on a sphere. A ring (a `<mesh>` holding a `<torusGeometry>`) orbits the sphere. Colors, particle size, ring opacity, and glow opacity are all **theme-aware**. `ThemeToggle.tsx` toggles `.dark` class on `<html>`, persists to `localStorage`, and `LoginPage.tsx` watches for class changes via `MutationObserver` to pass `isDark` to the globe.
+- **⚠️ Non-Obvious Detail:** `@react-three/fiber` v9 types every Three.js JSX element itself (`mesh`, `torusGeometry`, `ambientLight`, ...) through its `ThreeElements` interface. Do not re-declare them locally: a re-declaration replaces fiber's type, and when the new type is `any` (or narrower than fiber's) the compiler reports nothing. The deleted `r3f.d.ts` did exactly that. Its import no longer resolved, so it turned eight elements into `any` and the typecheck accepted any prop on them. `r3fJsxTypes.typecheck.tsx` is the guard: `tsc -b` compiles it but nothing imports it, and each probe line in it must fail to typecheck. If one of those eight elements is loosened in the way its probe checks, the build fails. Other elements, and other kinds of loosening, are not covered.
 
 ### Module H: Orbital Dashboard Shell & Page Architecture
 - **Files:** `App.tsx`, `components/layout/AppShell.tsx`, `index.css` (design tokens)
@@ -415,7 +415,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
 
-20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. The file `src/r3f.d.ts` provides TypeScript JSX intrinsic element declarations (`mesh`, `group`, `torusGeometry`, etc.) for React Three Fiber — if you add a new Three.js element to the globe, you must also declare it in `r3f.d.ts`. Don't remove these packages or the declaration file.
+20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. Fiber's own types declare its JSX elements (`mesh`, `group`, `torusGeometry`, etc.), so a new Three.js element in the globe needs no local declaration — see Module G. Don't remove these packages.
 
 ---
 
