@@ -14,11 +14,13 @@
  * genuinely reaches the row rather than assuming it does.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { CanceledError } from 'axios';
 import EquipmentPage from './EquipmentPage';
 import type { Capabilities } from '@/lib/capabilities';
 import type { FaultType } from '@/types';
 import { TEST_USER, TEST_CAPABILITIES, TEST_CAPABILITIES_NONE, withCapabilities } from '@/test/setup';
+import { holdGets } from '@/test/httpStubs';
 import api from '@/lib/axios';
 
 // TEST_USER's shape, not its identity content -- 'Master Admin' reads oddly
@@ -138,5 +140,101 @@ describe('EquipmentPage Report Fault dropdown: the pending filter (API-H6)', () 
         const offered = Array.from(select.querySelectorAll('option')).map(o => o.textContent);
         expect(offered).toContain(APPROVED.name);
         expect(offered).not.toContain(PENDING.name);
+    });
+});
+
+// The page's own three loads, answered at once; only the searches are held.
+const PAGE_LOADS = {
+    '/users/me': USER,
+    '/equipment/accessible': [MALFUNCTIONING_ITEM],
+    '/setup/fault_types': [],
+};
+
+/**
+ * FE-H5. Both modals' user searches are separate copies of the same debounced
+ * effect, so each is tested. In the last test three terms go out, ab → abc →
+ * abcd. The newest is settled first; then the oldest RESOLVES late (the
+ * modal's post-await check must drop it), and the middle one REJECTS as axios
+ * rejects an aborted request (the modal's catch must not report it). Real
+ * timers: each term waits out the 300 ms debounce inside waitFor's 1 s.
+ */
+describe.each([
+    { opens: 'העבר', placeholder: 'חפש משתמש...' },
+    { opens: 'שייך', placeholder: 'חפש משתמש לשיוך...' },
+])('EquipmentPage $opens modal search: a newer term cancels the older request (FE-H5)', ({ opens, placeholder }) => {
+    // Opens the modal and types one term; resolves once its request is out.
+    async function openAndSearch(term: string) {
+        const stub = holdGets(api, PAGE_LOADS);
+        render(withCapabilities(<EquipmentPage />, GRANTED));
+        fireEvent.click(await screen.findByText(opens));
+        fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: term } });
+        await waitFor(() => expect(stub.held).toHaveLength(1));
+        return stub.held;
+    }
+
+    it('aborts the search when the modal is closed mid-request', async () => {
+        const held = await openAndSearch('ab');
+        fireEvent.click(screen.getByText('✕'));
+        expect(screen.queryByPlaceholderText(placeholder)).toBeNull();
+        expect(held[0].config?.signal?.aborted).toBe(true);
+    });
+
+    it('still logs a real failure', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const held = await openAndSearch('ab');
+        const failure = new Error('timeout of 10000ms exceeded');
+        held[0].reject(failure);
+        await waitFor(() => expect(error).toHaveBeenCalledWith(failure));
+    });
+
+    it("shows only the newest term's results, sent as a parameter, with no error logged", async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, PAGE_LOADS);
+        render(withCapabilities(<EquipmentPage />, GRANTED));
+        fireEvent.click(await screen.findByText(opens));
+
+        const terms = ['ab', 'abc', 'abcd'];
+        for (const [i, term] of terms.entries()) {
+            fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: term } });
+            await waitFor(() => expect(held).toHaveLength(i + 1));
+        }
+        const [ab, abc, abcd] = held;
+
+        expect(held.map(h => h.url)).toEqual(['/users', '/users', '/users']);
+        expect(held.map(h => h.config?.params)).toEqual(terms.map(q => ({ q })));
+        expect(held.map(h => h.config?.signal?.aborted)).toEqual([true, true, false]);
+
+        abcd.resolve([{ id: 4, full_name: 'Abcd Newest', personal_number: 'u_abcd' }]);
+        expect(await screen.findByText('Abcd Newest')).toBeInTheDocument();
+
+        ab.resolve([{ id: 2, full_name: 'Ab Oldest', personal_number: 'u_ab' }]);
+        abc.reject(new CanceledError());
+        await act(async () => { });
+
+        expect(screen.queryByText('Ab Oldest')).toBeNull();
+        expect(screen.getByText('Abcd Newest')).toBeInTheDocument();
+        expect(error).not.toHaveBeenCalled();
+    });
+});
+
+describe('EquipmentPage transfer modal: switching to a location mid-search (FE-H5)', () => {
+    it('aborts the person search, and switching back searches the kept term again', async () => {
+        const { held } = holdGets(api, PAGE_LOADS);
+        render(withCapabilities(<EquipmentPage />, GRANTED));
+        fireEvent.click(await screen.findByText('העבר'));
+        fireEvent.change(screen.getByPlaceholderText('חפש משתמש...'), { target: { value: 'ab' } });
+        await waitFor(() => expect(held).toHaveLength(1));
+
+        fireEvent.click(screen.getByText('📍 העבר למיקום'));
+        expect(held[0].config?.signal?.aborted).toBe(true);
+        // A response that still lands must not fill the person list, which
+        // would show again, with stale entries, on switching back.
+        held[0].resolve([{ id: 2, full_name: 'Stale Person', personal_number: 'u_stale' }]);
+        await act(async () => { });
+
+        fireEvent.click(screen.getByText('👤 העבר לאדם'));
+        await waitFor(() => expect(held).toHaveLength(2));
+        expect(held[1].config?.params).toEqual({ q: 'ab' });
+        expect(screen.queryByText('Stale Person')).toBeNull();
     });
 });

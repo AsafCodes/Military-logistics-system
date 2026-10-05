@@ -57,21 +57,39 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
     }, []);
 
     // Search Users Effect
+    //
+    // FE-H5: each run of this effect sends at most one request. Its cleanup
+    // runs whenever searchTerm changes, and on unmount: it cancels the timer
+    // if it has not fired and aborts the request if one was sent, so an
+    // earlier term's response can't land over a later term's results. An
+    // aborted run leaves isSearching alone; the latest run sets it when its
+    // timer fires, on either branch.
     useEffect(() => {
+        const controller = new AbortController();
+        const { signal } = controller;
         const delayDebounceFn = setTimeout(async () => {
             if (searchTerm.length > 1) {
                 setIsSearching(true);
                 try {
-                    const res = await api.get(`/users?q=${searchTerm}`);
+                    // FE-L6: a param, not interpolation, so axios encodes the term.
+                    const res = await api.get('/users', { params: { q: searchTerm }, signal });
+                    if (signal.aborted) return;
                     setSearchResults(res.data);
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    if (signal.aborted) return;
+                    console.error(e);
+                }
                 setIsSearching(false);
             } else {
                 setSearchResults([]);
+                setIsSearching(false);
             }
         }, 300);
 
-        return () => clearTimeout(delayDebounceFn);
+        return () => {
+            clearTimeout(delayDebounceFn);
+            controller.abort();
+        };
     }, [searchTerm]);
 
     const fetchGroups = async () => {

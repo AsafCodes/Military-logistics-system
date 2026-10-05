@@ -125,15 +125,28 @@ function TransferModal({
     const [locationName, setLocationName] = useState('');
     const [loading, setLoading] = useState(false);
 
+    // FE-H5: the cleanup cancels the timer and aborts a request already sent,
+    // so a response for an earlier term can't land after a later term's, or
+    // after the else-branch has cleared the list. FE-L6: the term goes as a
+    // param, so axios encodes it.
     useEffect(() => {
         if (mode === 'person' && searchTerm.length > 1) {
+            const controller = new AbortController();
+            const { signal } = controller;
             const timer = setTimeout(async () => {
                 try {
-                    const res = await api.get(`/users?q=${searchTerm}`);
+                    const res = await api.get('/users', { params: { q: searchTerm }, signal });
+                    if (signal.aborted) return;
                     setSearchResults(res.data);
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    if (signal.aborted) return;
+                    console.error(e);
+                }
             }, 300);
-            return () => clearTimeout(timer);
+            return () => {
+                clearTimeout(timer);
+                controller.abort();
+            };
         } else {
             setSearchResults([]);
         }
@@ -248,15 +261,26 @@ function AssignOwnerModal({
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [loading, setLoading] = useState(false);
 
+    // FE-H5 / FE-L6: the same abort-on-cleanup and encoded term as
+    // TransferModal's search above.
     useEffect(() => {
         if (searchTerm.length > 1) {
+            const controller = new AbortController();
+            const { signal } = controller;
             const timer = setTimeout(async () => {
                 try {
-                    const res = await api.get(`/users?q=${searchTerm}`);
+                    const res = await api.get('/users', { params: { q: searchTerm }, signal });
+                    if (signal.aborted) return;
                     setSearchResults(res.data);
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    if (signal.aborted) return;
+                    console.error(e);
+                }
             }, 300);
-            return () => clearTimeout(timer);
+            return () => {
+                clearTimeout(timer);
+                controller.abort();
+            };
         } else {
             setSearchResults([]);
         }
