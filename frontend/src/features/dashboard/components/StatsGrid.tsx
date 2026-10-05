@@ -19,11 +19,14 @@ interface StatsGridProps {
 export default function StatsGrid({ stats }: StatsGridProps) {
     const [openTickets, setOpenTickets] = useState(0);
 
-    // Fetch open tickets count
+    // Fetch open tickets count. FE-H5: unmounting aborts the request.
     useEffect(() => {
-        api.get('/tickets/?status_filter=Open')
-            .then(res => setOpenTickets(Array.isArray(res.data) ? res.data.length : 0))
-            .catch(() => setOpenTickets(0));
+        const controller = new AbortController();
+        const { signal } = controller;
+        api.get('/tickets/?status_filter=Open', { signal })
+            .then(res => { if (!signal.aborted) setOpenTickets(Array.isArray(res.data) ? res.data.length : 0); })
+            .catch(() => { if (!signal.aborted) setOpenTickets(0); });
+        return () => controller.abort();
     }, []);
 
     // Animated values

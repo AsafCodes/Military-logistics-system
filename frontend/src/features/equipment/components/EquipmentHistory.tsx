@@ -25,21 +25,28 @@ export default function EquipmentHistory({ equipmentId, isOpen, onClose }: Equip
     const [history, setHistory] = useState<StatusHistoryItem[]>([]);
     const [loading, setLoading] = useState(false);
 
+    // FE-H5: closing the modal, switching to another item, or unmounting
+    // aborts the request in flight. When another item's load replaces it,
+    // that load owns `loading`.
     useEffect(() => {
         if (isOpen && equipmentId) {
-            fetchHistory();
+            const controller = new AbortController();
+            fetchHistory(controller.signal);
+            return () => controller.abort();
         }
     }, [isOpen, equipmentId]);
 
-    const fetchHistory = async () => {
+    const fetchHistory = async (signal: AbortSignal) => {
         setLoading(true);
         try {
-            const response = await api.get(`/equipment/${equipmentId}/history`);
+            const response = await api.get(`/equipment/${equipmentId}/history`, { signal });
+            if (signal.aborted) return;
             setHistory(response.data);
         } catch (error) {
+            if (signal.aborted) return;
             console.error('Failed to fetch history:', error);
         } finally {
-            setLoading(false);
+            if (!signal.aborted) setLoading(false);
         }
     };
 

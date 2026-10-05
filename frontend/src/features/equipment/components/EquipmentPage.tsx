@@ -797,11 +797,15 @@ function InlineHistory({ equipmentId }: { equipmentId: number }) {
     }>>([]);
     const [loading, setLoading] = useState(true);
 
+    // FE-H5: collapsing the row unmounts this and aborts the request.
     useEffect(() => {
-        api.get(`/equipment/${equipmentId}/history`)
-            .then(res => setHistory(res.data))
-            .catch(err => console.error(err))
-            .finally(() => setLoading(false));
+        const controller = new AbortController();
+        const { signal } = controller;
+        api.get(`/equipment/${equipmentId}/history`, { signal })
+            .then(res => { if (!signal.aborted) setHistory(res.data); })
+            .catch(err => { if (!signal.aborted) console.error(err); })
+            .finally(() => { if (!signal.aborted) setLoading(false); });
+        return () => controller.abort();
     }, [equipmentId]);
 
     // DATA-H4-2. This was a fused copy of EquipmentHistory.tsx's two switches,

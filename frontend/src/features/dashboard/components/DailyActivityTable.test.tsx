@@ -128,3 +128,21 @@ describe('DailyActivityTable: labels the event types the backend really writes (
         expect(screen.queryByText(eventType)).not.toBeInTheDocument();
     });
 });
+
+/**
+ * FE-H5. The read is aborted on unmount and an aborted read reports nothing
+ * (src/abortOnUnmount.test.tsx). This is the other half: a read that fails
+ * for real still logs and shows the error.
+ */
+describe('DailyActivityTable: a real failure is still reported (FE-H5)', () => {
+    it('logs the failure and shows the error message', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const failure = new Error('timeout of 10000ms exceeded');
+        vi.spyOn(api, 'get').mockRejectedValue(failure);
+
+        render(<DailyActivityTable />);
+
+        expect(await screen.findByText('טעינת יומן הפעילות נכשלה')).toBeInTheDocument();
+        expect(error).toHaveBeenCalledWith('Failed to fetch daily activity', failure);
+    });
+});

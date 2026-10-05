@@ -91,15 +91,19 @@ function App() {
   // one helper so that fault surfaces identically on both paths: told, not
   // silently mis-rendered as a stripped or absent session.
   //
-  // Resolves rather than setting state itself -- the mount effect below still
-  // needs its own `cancelled` guard around the resulting setState, which a
-  // shared helper cannot own on the caller's behalf. alert() matches the
-  // convention handleLogout already uses below, and the eight pre-existing
-  // calls across the feature pages.
-  const establishSession = async (): Promise<Session | null> => {
+  // Resolves rather than setting state itself, because its two callers apply
+  // the answer differently: the mount effect also clears isLoading, and
+  // handleLogin only sets the session. alert() matches the convention
+  // handleLogout already uses below, and the feature pages' own alert() calls.
+  //
+  // FE-H5. An aborted probe is not a fault, so it returns null without the
+  // alert. Only the mount effect passes a signal; handleLogin's probe follows
+  // a write and is never cancelled.
+  const establishSession = async (signal?: AbortSignal): Promise<Session | null> => {
     try {
-      return await authService.resolveSession();
+      return await authService.resolveSession(signal);
     } catch {
+      if (signal?.aborted) return null;
       window.alert('טעינת ההרשאות נכשלה. נסה לרענן את הדף.');
       return null;
     }
@@ -110,21 +114,27 @@ function App() {
   // so a single malformed character in that value threw before the spinner
   // could clear, and the application blanked permanently with no error boundary
   // to catch it. There is no cache and no synchronous parse left: the server is
-  // asked who we are, and isLoading clears in `finally` on every outcome,
-  // including a rejection.
+  // asked who we are, and isLoading clears once a probe that was not cancelled
+  // settles, including one that rejected (establishSession turns that into
+  // null).
   useEffect(() => {
-    let cancelled = false;
+    // FE-H5. Cleanup aborts the probe's requests; it used to only drop their
+    // result. Under StrictMode's mount-unmount-mount, the first probe is
+    // cancelled and the second one is the one that lands.
+    const controller = new AbortController();
+    const { signal } = controller;
 
     (async () => {
       // establishSession's own try/catch means it never rejects, so no
-      // try/finally is needed here to guarantee this runs -- only the
-      // `cancelled` guard is load-bearing, against a setState after unmount.
-      const result = await establishSession();
-      if (!cancelled) setSession(result);
-      if (!cancelled) setIsLoading(false);
+      // try/finally is needed here to guarantee this runs. The check below
+      // drops the result of a probe that was aborted while in flight.
+      const result = await establishSession(signal);
+      if (signal.aborted) return;
+      setSession(result);
+      setIsLoading(false);
     })();
 
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, []);
 
   const handleLogin = async (values: LoginFormValues) => {

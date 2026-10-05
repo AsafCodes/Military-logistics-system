@@ -100,22 +100,29 @@ export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTa
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // FE-H5: unmounting aborts the request, and an aborted request is not
+    // reported as a failure.
     useEffect(() => {
+        const controller = new AbortController();
+        const { signal } = controller;
         const fetchActivity = async () => {
             try {
-                const res = await api.get('/reports/daily_movement');
+                const res = await api.get('/reports/daily_movement', { signal });
+                if (signal.aborted) return;
                 // API returns a flat array, not { items: [...] }
                 const data = Array.isArray(res.data) ? res.data : (res.data?.items || []);
                 setActivities(data);
             } catch (err) {
+                if (signal.aborted) return;
                 console.error("Failed to fetch daily activity", err);
                 setError("טעינת יומן הפעילות נכשלה");
             } finally {
-                setLoading(false);
+                if (!signal.aborted) setLoading(false);
             }
         };
 
         fetchActivity();
+        return () => controller.abort();
     }, []);
 
     if (loading) return (

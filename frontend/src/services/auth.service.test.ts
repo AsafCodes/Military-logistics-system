@@ -8,6 +8,7 @@
  * Any future change that reintroduces a cache here fails these tests.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { CanceledError, type AxiosRequestConfig } from 'axios';
 import apiClient from '@/lib/axios';
 import { authService } from './auth.service';
 import { TEST_USER as USER, TEST_CAPABILITIES as CAPS } from '@/test/setup';
@@ -149,6 +150,54 @@ describe('authService', () => {
             for (const call of get.mock.calls) {
                 expect(call[1]).toMatchObject({ skipAuthRedirect: true });
             }
+        });
+
+        it("FE-H5: passes the caller's signal to both calls", async () => {
+            mockBothEndpoints('resolve', 'resolve');
+            const get = vi.spyOn(apiClient, 'get');
+            const controller = new AbortController();
+
+            await authService.resolveSession(controller.signal);
+
+            expect(get.mock.calls.map(call => call[0])).toEqual(['/users/me', '/users/me/capabilities']);
+            for (const call of get.mock.calls) {
+                expect(call[1]?.signal).toBe(controller.signal);
+            }
+        });
+
+        it('FE-H5: an abort between the two answers rejects with the abort, not the SEC-H10 error', async () => {
+            // /users/me answers; the capabilities call is still in flight when
+            // the caller aborts, and rejects as axios rejects an aborted
+            // request. Read naively, that pair is "recognised cookie,
+            // permissions failed" -- the SEC-H10 fault -- and a caller that
+            // doesn't check its own signal would report it as one.
+            vi.spyOn(apiClient, 'get').mockImplementation((url: string, config?: AxiosRequestConfig) => {
+                if (url === '/users/me') return Promise.resolve({ data: USER });
+                return new Promise((_, reject) => {
+                    config?.signal?.addEventListener?.('abort', () => reject(new CanceledError()));
+                });
+            });
+            const controller = new AbortController();
+
+            const session = authService.resolveSession(controller.signal);
+            controller.abort();
+
+            await expect(session).rejects.toBe(controller.signal.reason);
+        });
+
+        it('FE-H5: an abort before either answer rejects with the abort, not "signed out"', async () => {
+            // Both calls reject as cancelled. Read naively, a rejected
+            // /users/me is the anonymous visitor, and the result is null.
+            vi.spyOn(apiClient, 'get').mockImplementation((_url: string, config?: AxiosRequestConfig) =>
+                new Promise((_, reject) => {
+                    config?.signal?.addEventListener?.('abort', () => reject(new CanceledError()));
+                }));
+            const controller = new AbortController();
+
+            const session = authService.resolveSession(controller.signal);
+            controller.abort();
+
+            await expect(session).rejects.toBe(controller.signal.reason);
         });
     });
 

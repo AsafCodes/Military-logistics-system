@@ -192,3 +192,79 @@ describe('lib/axios 401 handling', () => {
         expect(axios.isAxiosError(error)).toBe(true);
     });
 });
+
+/**
+ * FE-H5. The pages cancel reads with an AbortSignal. The adapter here answers
+ * only after the test aborts, and axios turns that answer, success or 401,
+ * into a CanceledError, so a page's catch guard sees it and its post-await
+ * check is never reached. The browser's own transport rejects on abort by
+ * itself.
+ */
+describe('lib/axios cancellation (FE-H5)', () => {
+    let adapter: ReturnType<typeof withAdapter>;
+
+    beforeEach(() => { adapter = withAdapter(apiClient); });
+
+    afterEach(() => {
+        adapter.restore();
+        restoreLocation();
+    });
+
+    // An adapter whose single request is settled by the test.
+    function deferredAdapter() {
+        let settle: { resolve: (status: number) => void } | undefined;
+        adapter.install(config => new Promise((resolve, reject) => {
+            settle = {
+                resolve: status => {
+                    const response = { data: {}, status, statusText: '', headers: {}, config };
+                    if (status < 400) resolve(response);
+                    else reject(new AxiosError('failed', AxiosError.ERR_BAD_REQUEST, config, {}, response));
+                },
+            };
+        }));
+        return (status: number) => {
+            if (!settle) throw new Error('the request never reached the adapter');
+            settle.resolve(status);
+        };
+    }
+
+    it('turns a response that lands after the abort into a CanceledError', async () => {
+        const answer = deferredAdapter();
+        const controller = new AbortController();
+
+        const request = apiClient.get('/reports/daily_movement', { signal: controller.signal });
+        controller.abort();
+        answer(200);
+
+        await expect(request).rejects.toSatisfy(axios.isCancel);
+    });
+
+    it('does not navigate to /login for a 401 that lands after the abort', async () => {
+        // The interceptor acts only on an error carrying a 401 response. A
+        // CanceledError carries none, so a request whose signal aborted
+        // before its 401 landed does not redirect.
+        const { reload } = stubLocation('/dashboard');
+        const answer = deferredAdapter();
+        const controller = new AbortController();
+
+        const request = apiClient.get('/equipment/accessible', { signal: controller.signal });
+        controller.abort();
+        answer(401);
+
+        await expect(request).rejects.toSatisfy(axios.isCancel);
+        expect(window.location.href).toBe('http://localhost:3000/dashboard');
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('still navigates for a 401 when nothing aborted (control)', async () => {
+        stubLocation('/dashboard');
+        const answer = deferredAdapter();
+
+        const request = apiClient.get('/equipment/accessible', { signal: new AbortController().signal });
+        answer(401);
+
+        // A CanceledError is an AxiosError too; the response tells them apart.
+        await expect(request).rejects.toMatchObject({ response: { status: 401 } });
+        expect(window.location.href).toBe('/login');
+    });
+});

@@ -9,10 +9,12 @@
  * permanently blank page. Not a transient error -- a dead application, until
  * someone thought to clear their browser storage.
  */
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from './App';
 import { authService } from './services';
+import type { Session } from './types';
 import {
     TEST_SESSION as SESSION,
     TEST_CAPABILITIES_NONE as NO_CAPS,
@@ -161,6 +163,56 @@ describe('App bootstrap', () => {
         await waitFor(() => expect(spinner(container)).toBeNull());
         expect(alerted).toHaveBeenCalled();
         expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+    });
+
+    it('FE-H5: unmounting aborts the session probe, and the cancelled probe raises no alert', async () => {
+        // The stub rejects on abort with the signal's reason, as the real
+        // resolveSession does. That rejection reaches establishSession's
+        // catch, which must recognise it as a cancel and not a fault.
+        const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
+        let probeSignal: AbortSignal | undefined;
+        const probe = vi.spyOn(authService, 'resolveSession').mockImplementation(signal => {
+            probeSignal = signal;
+            return new Promise((_, reject) => {
+                signal?.addEventListener('abort', () => reject(signal.reason));
+            });
+        });
+
+        const { unmount } = render(<App />);
+        await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+        expect(probeSignal?.aborted).toBe(false);
+
+        unmount();
+        expect(probeSignal?.aborted).toBe(true);
+        await act(async () => { });
+        expect(alerted).not.toHaveBeenCalled();
+    });
+
+    it('FE-H5: under StrictMode the cancelled first probe neither alerts nor ends the loading state', async () => {
+        // main.tsx renders <StrictMode>, so in development the mount effect
+        // runs, is cleaned up, and runs again: the first probe is cancelled at
+        // once and the second is the real one. The cancelled probe rejects
+        // first. If its null were taken as the answer, the login page would
+        // flash until the second probe lands.
+        const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
+        const probes: Array<{ signal?: AbortSignal; resolve: (session: Session | null) => void }> = [];
+        vi.spyOn(authService, 'resolveSession').mockImplementation(signal =>
+            new Promise((resolve, reject) => {
+                probes.push({ signal, resolve });
+                signal?.addEventListener('abort', () => reject(signal.reason));
+            }));
+
+        const { container } = render(<StrictMode><App /></StrictMode>);
+        await waitFor(() => expect(probes).toHaveLength(2));
+        expect(probes.map(p => p.signal?.aborted)).toEqual([true, false]);
+        await act(async () => { });
+
+        expect(spinner(container)).not.toBeNull();
+        expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
+        expect(alerted).not.toHaveBeenCalled();
+
+        probes[1].resolve(SESSION);
+        expect(await screen.findByText(/Master Admin/i)).toBeInTheDocument();
     });
 });
 

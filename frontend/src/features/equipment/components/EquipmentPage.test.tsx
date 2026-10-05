@@ -238,3 +238,63 @@ describe('EquipmentPage transfer modal: switching to a location mid-search (FE-H
         expect(screen.queryByText('Stale Person')).toBeNull();
     });
 });
+
+// The expand toggle is an icon-only button; its chevron is the handle.
+function expandToggle(container: HTMLElement) {
+    const button = container.querySelector('.lucide-chevron-down, .lucide-chevron-up')?.closest('button');
+    if (!button) throw new Error('the expand toggle did not render');
+    return button;
+}
+
+describe('EquipmentPage inline history: collapsing the row aborts its read (FE-H5)', () => {
+    it('aborts the history request and logs nothing when it is cancelled', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, PAGE_LOADS);
+        const { container } = render(withCapabilities(<EquipmentPage />, GRANTED));
+        await screen.findByText('העבר');
+
+        fireEvent.click(expandToggle(container));
+        await waitFor(() => expect(held.map(h => h.url)).toEqual([`/equipment/${MALFUNCTIONING_ITEM.id}/history`]));
+        expect(screen.getByText('טוען היסטוריה...')).toBeInTheDocument();
+        expect(held[0].config?.signal?.aborted).toBe(false);
+
+        fireEvent.click(expandToggle(container));
+        expect(screen.queryByText('טוען היסטוריה...')).toBeNull();
+        expect(held[0].config?.signal?.aborted).toBe(true);
+
+        held[0].reject(new CanceledError());
+        await act(async () => { });
+        expect(error).not.toHaveBeenCalled();
+    });
+
+    it('shows the history once it arrives', async () => {
+        const { held } = holdGets(api, PAGE_LOADS);
+        const { container } = render(withCapabilities(<EquipmentPage />, GRANTED));
+        await screen.findByText('העבר');
+
+        fireEvent.click(expandToggle(container));
+        await waitFor(() => expect(held).toHaveLength(1));
+        held[0].resolve([{
+            id: 1, old_status: 'Old-Probe', new_status: 'New-Probe',
+            change_reason: 'fault', created_date: '2026-06-15T09:30:00Z', user_name: null,
+        }]);
+
+        expect(await screen.findByText('New-Probe')).toBeInTheDocument();
+        expect(screen.queryByText('טוען היסטוריה...')).toBeNull();
+    });
+
+    it('still logs a real failure and stops loading', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, PAGE_LOADS);
+        const { container } = render(withCapabilities(<EquipmentPage />, GRANTED));
+        await screen.findByText('העבר');
+
+        fireEvent.click(expandToggle(container));
+        await waitFor(() => expect(held).toHaveLength(1));
+        const failure = new Error('timeout of 10000ms exceeded');
+        held[0].reject(failure);
+
+        expect(await screen.findByText('אין רשומות היסטוריה.')).toBeInTheDocument();
+        expect(error).toHaveBeenCalledWith(failure);
+    });
+});

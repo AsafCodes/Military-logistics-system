@@ -81,14 +81,22 @@ class AuthService {
      * Both requests opt out of the 401 redirect: they EXPECT to be refused
      * when nobody is signed in, and letting the interceptor act on that turns
      * every anonymous visit into a full page navigation.
+     *
+     * FE-H5. `signal` cancels both requests. If it aborts before both have
+     * settled, this rejects with `signal.reason`, whichever of them settled
+     * first. Without that check, an abort after /users/me answered but
+     * before capabilities did would read as the server fault above, and one
+     * before /users/me answered would read as signed out.
      */
-    async resolveSession(): Promise<Session | null> {
+    async resolveSession(signal?: AbortSignal): Promise<Session | null> {
         const [userResult, capsResult] = await Promise.allSettled([
-            apiClient.get<Session['user']>('/users/me', { skipAuthRedirect: true }),
+            apiClient.get<Session['user']>('/users/me', { skipAuthRedirect: true, signal }),
             apiClient.get<Session['capabilities']>('/users/me/capabilities', {
                 skipAuthRedirect: true,
+                signal,
             }),
         ]);
+        signal?.throwIfAborted();
 
         if (userResult.status === 'rejected') {
             return null;

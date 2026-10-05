@@ -34,21 +34,27 @@ export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
     const { stats, equipment, error: dataError, fetchData, refreshData } = useDashboardData();
 
     // ── Init ──
+    // FE-H5: unmounting aborts the /users/me read, and an aborted read is
+    // not reported as a failure. fetchData's own reads are not covered here.
     useEffect(() => {
-        initDashboard();
+        const controller = new AbortController();
+        initDashboard(controller.signal);
+        return () => controller.abort();
     }, []);
 
-    const initDashboard = async () => {
+    const initDashboard = async (signal: AbortSignal) => {
         try {
-            const userRes = await api.get('/users/me');
+            const userRes = await api.get('/users/me', { signal });
+            if (signal.aborted) return;
             const currentUser = userRes.data;
             setUser(currentUser);
             await fetchData();
         } catch (err) {
+            if (signal.aborted) return;
             console.error("Failed to init", err);
             setError("טעינת לוח הבקרה נכשלה. נסה לרענן.");
         } finally {
-            setInitLoading(false);
+            if (!signal.aborted) setInitLoading(false);
         }
     };
 
