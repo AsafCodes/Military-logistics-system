@@ -62,6 +62,13 @@ vi.mock('@/lib/axios', () => ({
 // isLoading is true and nothing else at all.
 const spinner = (container: HTMLElement) => container.querySelector('.animate-spin');
 
+// A test that starts at `/` and then clicks a nav item must wait for this
+// first. The catch-all route redirects `/` to /dashboard from an effect, and
+// the shell's nav is already on screen before that effect runs. A click in
+// that gap navigates, and the redirect then lands on top of it, so the app
+// stays on /dashboard and the clicked page never shows.
+const landedOnDashboard = () => waitFor(() => expect(window.location.pathname).toBe('/dashboard'));
+
 // Spy restoration and localStorage clearing are owned centrally --
 // `restoreMocks` in vite.config.ts and the afterEach in src/test/setup.ts.
 describe('App bootstrap', () => {
@@ -227,6 +234,7 @@ describe('SEC-H10: the /admin route guard', () => {
         render(<App />);
 
         expect(await screen.findByText('ניהול מערכת')).toBeInTheDocument();
+        await landedOnDashboard();
         fireEvent.click(screen.getByText('ניהול מערכת'));
 
         expect(await screen.findByText(/שיוך משתמשים לקבוצות/)).toBeInTheDocument();
@@ -279,6 +287,7 @@ describe('API-H6: the /catalog route guard', () => {
 
         expect(await screen.findByText(CATALOG_NAV)).toBeInTheDocument();
         expect(screen.queryByText('ניהול מערכת')).toBeNull();
+        await landedOnDashboard();
         fireEvent.click(screen.getByText(CATALOG_NAV));
 
         expect(await screen.findByText(QUEUE_PAGE)).toBeInTheDocument();
