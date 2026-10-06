@@ -35,7 +35,8 @@ export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
 
     // ── Init ──
     // FE-H5: unmounting aborts the /users/me read, and an aborted read is
-    // not reported as a failure. fetchData's own reads are not covered here.
+    // not reported as a failure. fetchData cancels its own reads, through
+    // useDashboardData's useLatestRequest.
     useEffect(() => {
         const controller = new AbortController();
         initDashboard(controller.signal);

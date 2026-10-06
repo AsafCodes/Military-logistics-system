@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Package, Search, Filter, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '@/lib/axios';
 import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 import type { Equipment, User, FaultType } from '@/types';
 import EquipmentHistory from './EquipmentHistory';
 import VerificationForm from './VerificationForm';
@@ -403,25 +404,33 @@ export default function EquipmentPage() {
     const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
 
     // ── Data Fetching ──
+    // FE-H5: a reload after a write aborts the load still out, and leaving
+    // the page aborts the last one. Refresh can't race a load: the page is
+    // only a spinner while one is out.
+    const next = useLatestRequest();
+
     const fetchData = useCallback(async () => {
+        const signal = next();
         setLoading(true);
         setError(null);
         try {
             const [userRes, equipRes, faultRes] = await Promise.all([
-                api.get('/users/me'),
-                api.get('/equipment/accessible'),
-                api.get('/setup/fault_types'),
+                api.get('/users/me', { signal }),
+                api.get('/equipment/accessible', { signal }),
+                api.get('/setup/fault_types', { signal }),
             ]);
+            if (signal.aborted) return;
             setUser(userRes.data);
             setEquipment(equipRes.data);
             setFaultTypes(faultRes.data);
         } catch (err) {
+            if (signal.aborted) return;
             console.error(err);
             setError('טעינת נתוני ציוד נכשלה');
         } finally {
-            setLoading(false);
+            if (!signal.aborted) setLoading(false);
         }
-    }, []);
+    }, [next]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 

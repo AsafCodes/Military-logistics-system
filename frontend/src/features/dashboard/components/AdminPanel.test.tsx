@@ -80,7 +80,8 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
 
         render(<AdminPanel onClose={() => { }} />);
 
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/groups'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith(
+            '/groups', expect.objectContaining({ signal: expect.any(AbortSignal) })));
         expect(screen.queryByText(/טעינת רשימת הקבוצות נכשלה/)).toBeNull();
         expect(screen.queryByText(/אין לך הרשאה/)).toBeNull();
     });
@@ -95,6 +96,30 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
  */
 const type = (value: string) =>
     fireEvent.change(screen.getByPlaceholderText('התחל להקליד...'), { target: { value } });
+
+// The group selector shows only once a user is selected, so the sweep in
+// abortOnUnmount.test.tsx, which selects nobody, can't see its loading state.
+describe('AdminPanel groups: an aborted first load under StrictMode (FE-H5)', () => {
+    const LOADING = 'טוען קבוצות...';
+
+    it('keeps the groups loading, then lists them from the second load', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, { '/users': [USER] });
+        render(<AdminPanel onClose={() => { }} />, { reactStrictMode: true });
+        await waitFor(() => expect(held.map(h => h.url)).toEqual(['/groups', '/groups']));
+        expect(held.map(h => h.config?.signal?.aborted)).toEqual([true, false]);
+        await selectAUser();
+        expect(screen.getByText(LOADING)).toBeInTheDocument();
+
+        await act(async () => { held[0].reject(new CanceledError()); });
+        expect(screen.getByText(LOADING)).toBeInTheDocument();
+        expect(error).not.toHaveBeenCalled();
+
+        await act(async () => { held[1].resolve(GROUPS); });
+        expect(screen.queryByText(LOADING)).toBeNull();
+        expect(screen.getByRole('option', { name: 'Company A' })).toBeInTheDocument();
+    });
+});
 
 describe('AdminPanel user search: a newer term cancels the older request (FE-H5)', () => {
     const OLDER = { id: 2, full_name: 'Ab Older', personal_number: 'u_ab' };

@@ -65,6 +65,9 @@ function renderWithCapabilities(caps: Capabilities | null, items: unknown[]) {
 const GRANTED = TEST_CAPABILITIES;
 const UNGRANTED = TEST_CAPABILITIES_NONE;
 
+// FE-H5: the page's load passes a signal with every read.
+const WITH_SIGNAL = expect.objectContaining({ signal: expect.any(AbortSignal) });
+
 describe('EquipmentPage row actions: cosmetic capability gating (SEC-H10-3)', () => {
     it('offers תקן only with RESOLVE_FAULT', async () => {
         renderWithCapabilities(GRANTED, [MALFUNCTIONING_ITEM]);
@@ -73,7 +76,7 @@ describe('EquipmentPage row actions: cosmetic capability gating (SEC-H10-3)', ()
 
     it('hides תקן without RESOLVE_FAULT', async () => {
         renderWithCapabilities(UNGRANTED, [MALFUNCTIONING_ITEM]);
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible', WITH_SIGNAL));
         expect(screen.queryByText('תקן')).toBeNull();
     });
 
@@ -89,7 +92,7 @@ describe('EquipmentPage row actions: cosmetic capability gating (SEC-H10-3)', ()
 
     it('hides דווח תקלה from a non-holder without REPORT_STATUS', async () => {
         renderWithCapabilities(UNGRANTED, [FUNCTIONAL_ITEM_HELD_BY_OTHER]);
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible', WITH_SIGNAL));
         expect(screen.queryByText('דווח תקלה')).toBeNull();
     });
 
@@ -101,7 +104,7 @@ describe('EquipmentPage row actions: cosmetic capability gating (SEC-H10-3)', ()
 
     it('hides העבר and שייך without TRANSFER', async () => {
         renderWithCapabilities(UNGRANTED, [MALFUNCTIONING_ITEM]);
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible', WITH_SIGNAL));
         expect(screen.queryByText('העבר')).toBeNull();
         expect(screen.queryByText('שייך')).toBeNull();
     });
@@ -111,7 +114,7 @@ describe('EquipmentPage row actions: cosmetic capability gating (SEC-H10-3)', ()
         // (lib/capabilities.ts) -- this is what proves that default actually
         // denies here, not just that it exists.
         renderWithCapabilities(null, [MALFUNCTIONING_ITEM, FUNCTIONAL_ITEM_HELD_BY_OTHER]);
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/equipment/accessible', WITH_SIGNAL));
         expect(screen.queryByText('תקן')).toBeNull();
         expect(screen.queryByText('דווח תקלה')).toBeNull();
         expect(screen.queryByText('העבר')).toBeNull();

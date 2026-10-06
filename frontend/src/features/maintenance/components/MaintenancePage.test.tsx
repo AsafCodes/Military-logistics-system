@@ -35,7 +35,8 @@ describe('MaintenancePage close-ticket button: cosmetic capability gating (SEC-H
 
     it('hides סגור כרטיס without RESOLVE_FAULT', async () => {
         renderWithCapabilities(TEST_CAPABILITIES_NONE);
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/tickets/'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith(
+            '/tickets/', expect.objectContaining({ signal: expect.any(AbortSignal) })));
         // The ticket itself still renders (it's a read) -- only the write
         // action is gated.
         expect(await screen.findByText('Rifle')).toBeInTheDocument();

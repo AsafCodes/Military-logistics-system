@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/axios';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 
 interface User {
     id: number;
@@ -52,9 +53,33 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [selectedGroupId, setSelectedGroupId] = useState("");
 
+    // FE-H5: leaving the panel aborts the load still out. Retry shows only
+    // once a load has failed, so it never finds one to abort. Development
+    // StrictMode aborts the first load while the panel stays up; that load
+    // has no response, so without the guards it would show as 'network'.
+    const next = useLatestRequest();
+
+    const fetchGroups = useCallback(async () => {
+        const signal = next();
+        setGroupsLoading(true);
+        try {
+            const res = await api.get('/groups', { signal });
+            if (signal.aborted) return;
+            setGroups(res.data);
+            setGroupsError(null);
+        } catch (err) {
+            if (signal.aborted) return;
+            console.error("Failed to fetch groups", err);
+            const status = (err as { response?: { status?: number } })?.response?.status;
+            setGroupsError(status === 403 ? 'forbidden' : 'network');
+        } finally {
+            if (!signal.aborted) setGroupsLoading(false);
+        }
+    }, [next]);
+
     useEffect(() => {
         fetchGroups();
-    }, []);
+    }, [fetchGroups]);
 
     // Search Users Effect
     //
@@ -91,21 +116,6 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
             controller.abort();
         };
     }, [searchTerm]);
-
-    const fetchGroups = async () => {
-        setGroupsLoading(true);
-        try {
-            const res = await api.get('/groups');
-            setGroups(res.data);
-            setGroupsError(null);
-        } catch (err) {
-            console.error("Failed to fetch groups", err);
-            const status = (err as { response?: { status?: number } })?.response?.status;
-            setGroupsError(status === 403 ? 'forbidden' : 'network');
-        } finally {
-            setGroupsLoading(false);
-        }
-    };
 
     const handleUserSelect = (user: User) => {
         setSelectedUser(user);

@@ -47,7 +47,8 @@ describe('FaultTypeQueuePage', () => {
 
         expect(await screen.findByText('Cracked Housing')).toBeInTheDocument();
         expect(screen.getByText('Frayed Strap')).toBeInTheDocument();
-        expect(get).toHaveBeenCalledWith(PENDING_URL);
+        expect(get).toHaveBeenCalledWith(
+            PENDING_URL, expect.objectContaining({ signal: expect.any(AbortSignal) }));
         expect(screen.getAllByText(APPROVE)).toHaveLength(2);
     });
 

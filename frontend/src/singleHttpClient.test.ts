@@ -24,6 +24,10 @@ import ts from 'typescript';
  *      that never imports axios at all.
  *   C. nothing calls fetch, opens an XMLHttpRequest or EventSource, or sends a
  *      beacon.
+ *   E. (FE-H5) every `.get(...)` on the shared client passes an object-literal
+ *      config that names a `signal` key, so every read can be cancelled.
+ *  E2. no post/put/patch/delete on the shared client passes one: aborting a
+ *      write can't undo what the server has already committed.
  * Everywhere, tests included:
  *   D. nothing imports or vi.mock()s the deleted client or the deleted
  *      ConnectionTest. tsc catches a stale import, but not a stale vi.mock(),
@@ -34,6 +38,14 @@ import ts from 'typescript';
  * first, an HTTP library other than axios, and create() on a client that
  * arrives some other way than a direct import of lib/axios -- through a
  * re-export such as a services/ barrel, or as a function parameter.
+ *
+ * E and E2 check that the key is there, not that the signal is live or ever
+ * aborted; the tests that drive each page do that. They see only `.get` and
+ * the four write methods on the shared client's default import, so
+ * `api.request(...)`, `api(config)`, head and options go unchecked, as does a
+ * client that arrives other than by that import. E flags a config held in a
+ * variable, or spread into the literal, by design: the key must be visible at
+ * the call. E2 does not see a signal that reaches a write in either shape.
  */
 
 // Named imports from 'axios' that can't send a request: error classification
@@ -55,6 +67,28 @@ interface Scan {
     transports: string[];
     /** Module specifiers that resolve to a deleted module. */
     staleRefs: string[];
+    /** Shared-client GETs with no `signal` key in a literal config. */
+    unsignalledReads: string[];
+    /** Shared-client writes that pass a `signal` key. */
+    signalledWrites: string[];
+}
+
+const WRITE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
+/** A property's name, if it is written as an identifier or a string. */
+function propertyName(name: ts.PropertyName): string | undefined {
+    if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+    if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) {
+        return name.expression.text;
+    }
+    return undefined;
+}
+
+/** Whether `node` is an object literal that names a `signal` key itself. */
+function hasSignalKey(node: ts.Expression | undefined): boolean {
+    return !!node && ts.isObjectLiteralExpression(node) && node.properties.some(p =>
+        (ts.isShorthandPropertyAssignment(p) && p.name.text === 'signal')
+        || (ts.isPropertyAssignment(p) && propertyName(p.name) === 'signal'));
 }
 
 function isAxios(node: ts.Node | undefined): boolean {
@@ -87,12 +121,17 @@ function firstStringArg(call: ts.CallExpression): ts.StringLiteralLike | undefin
 function scan(fileName: string, text: string): Scan {
     const kind = fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
     const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, kind);
-    const result: Scan = { axiosValues: [], createCalls: 0, transports: [], staleRefs: [] };
+    const result: Scan = {
+        axiosValues: [], createCalls: 0, transports: [], staleRefs: [],
+        unsignalledReads: [], signalledWrites: [],
+    };
     // Local names whose .create() makes a client: axios's default or namespace
     // export, the shared client's default export, and any variable holding a
     // client this file created. `axios` itself is always included so a global
     // or re-declared axios is still counted.
     const creators = new Set(['axios']);
+    // Local names of the shared client: its default import.
+    const clients = new Set<string>();
 
     const noteSpecifier = (node: ts.Node | undefined) => {
         if (node && ts.isStringLiteralLike(node) && isStale(fileName, node.text)) {
@@ -126,6 +165,7 @@ function scan(fileName: string, text: string): Scan {
                 && targetOf(fileName, node.moduleSpecifier.text) === SHARED_CLIENT;
             if (fromSharedClient && clause?.name && !clause.isTypeOnly) {
                 creators.add(clause.name.text);
+                clients.add(clause.name.text);
             }
         } else if (ts.isVariableDeclaration(node)) {
             // `const client = axios.create()` -- client.create() is a client too.
@@ -171,6 +211,17 @@ function scan(fileName: string, text: string): Scan {
                     result.transports.push(`${target.text}.fetch()`);
                 }
                 if (method === 'sendBeacon') result.transports.push('sendBeacon()');
+                if (ts.isIdentifier(target) && clients.has(target.text)) {
+                    const call = `${method}(${node.arguments[0]?.getText(source) ?? ''})`;
+                    if (method === 'get' && !hasSignalKey(node.arguments[1])) {
+                        result.unsignalledReads.push(call);
+                    }
+                    // The config follows the body, except for delete, which has none.
+                    const configAt = method === 'delete' ? 1 : 2;
+                    if (WRITE_METHODS.has(method) && hasSignalKey(node.arguments[configAt])) {
+                        result.signalledWrites.push(call);
+                    }
+                }
             }
         } else if (ts.isNewExpression(node)) {
             const callee = node.expression;
@@ -237,6 +288,23 @@ describe('one HTTP client', () => {
     it('D: nothing, tests included, imports or mocks a deleted module', () => {
         const stale = all.filter(entry => entry.staleRefs.length > 0);
         expect(Object.fromEntries(stale.map(entry => [entry.file, entry.staleRefs]))).toEqual({});
+    });
+
+    it('E: every read through the shared client passes a signal', () => {
+        // Equality, not emptiness: equipment.service.ts is dead (FE-M1) and
+        // its two GETs are the only ones left without a signal. This fails
+        // when FE-M1 deletes it -- drop the entry then -- and, while it
+        // stands, shows the detector still finds reads at all.
+        const offenders = app.filter(entry => entry.unsignalledReads.length > 0);
+        expect(Object.fromEntries(offenders.map(entry => [entry.file, entry.unsignalledReads]))).toEqual({
+            'services/equipment.service.ts': ["get('/equipment/accessible')", "get('/users/me/equipment')"],
+        });
+    });
+
+    it('E2: no write through the shared client passes a signal', () => {
+        // Aborting a write can't undo a change the server already committed.
+        const offenders = app.filter(entry => entry.signalledWrites.length > 0);
+        expect(Object.fromEntries(offenders.map(entry => [entry.file, entry.signalledWrites]))).toEqual({});
     });
 });
 
@@ -331,5 +399,59 @@ describe('the detector itself', () => {
         ['a vi.mock of the surviving client', "vi.mock('@/lib/axios', () => ({}));"],
     ])('passes %s', (_label, code) => {
         expect(scan(PAGE, code).staleRefs).toEqual([]);
+    });
+
+    const IMPORT = "import api from '@/lib/axios';\n";
+    const reads = (code: string) => scan(PAGE, code).unsignalledReads;
+    const writes = (code: string) => scan(PAGE, code).signalledWrites;
+
+    it.each([
+        ['a GET with no config', `${IMPORT}api.get('/x');`],
+        ['a config without a signal', `${IMPORT}api.get('/x', { params });`],
+        ['a config held in a variable', `${IMPORT}api.get('/x', config);`],
+        ['a spread config', `${IMPORT}api.get('/x', { ...config });`],
+        ['a relative import of the client', "import http from '../../../lib/axios';\nhttp.get('/x');"],
+        ['a typed GET', `${IMPORT}api.get<User[]>('/x', { params });`],
+        ['a multi-line GET', `${IMPORT}api\n    .get(\n        '/x',\n        { params },\n    );`],
+    ])('E flags %s', (_label, code) => {
+        expect(reads(code)).toHaveLength(1);
+    });
+
+    it.each([
+        ['a shorthand signal', `${IMPORT}api.get('/x', { signal });`],
+        ['a signal property', `${IMPORT}api.get('/x', { signal: c.signal });`],
+        ['a signal beside other keys', `${IMPORT}api.get('/x', { skipAuthRedirect, signal });`],
+        ['a quoted signal key', `${IMPORT}api.get('/x', { 'signal': s });`],
+        ['a spread followed by a signal', `${IMPORT}api.get('/x', { ...config, signal });`],
+        ['a write', `${IMPORT}api.post(x, b);`],
+        ['URLSearchParams.get', `${IMPORT}params.get('q');`],
+        ['Map.get', `${IMPORT}new Map().get(k);`],
+        ['a client from another ./axios', "import api from './axios';\napi.get('/x');"],
+        ['a type-only import', "import type api from '@/lib/axios';\napi.get('/x');"],
+        ['a commented-out GET', `${IMPORT}// api.get('/x');\n/* api.get('/y'); */`],
+    ])('E passes %s', (_label, code) => {
+        expect(reads(code)).toEqual([]);
+    });
+
+    it('E names the call it flags', () => {
+        expect(reads(`${IMPORT}api.get(\`/x/\${id}\`);`)).toEqual(['get(`/x/${id}`)']);
+    });
+
+    it.each([
+        ['a POST with a signal', `${IMPORT}api.post('/x', body, { signal });`],
+        ['a PUT with a signal', `${IMPORT}api.put('/x', body, { signal: c.signal });`],
+        ['a PATCH with a signal', `${IMPORT}api.patch('/x', body, { timeout: 5, signal });`],
+        ['a DELETE with a signal', `${IMPORT}api.delete('/x', { signal });`],
+    ])('E2 flags %s', (_label, code) => {
+        expect(writes(code)).toHaveLength(1);
+    });
+
+    it.each([
+        ['a POST with no config', `${IMPORT}api.post('/x', body);`],
+        ['a POST with a config', `${IMPORT}api.post('/x', body, { timeout: 5 });`],
+        ['a body with a field named signal', `${IMPORT}api.post('/x', { signal: 'flare' });`],
+        ['a GET with a signal', `${IMPORT}api.get('/x', { signal });`],
+    ])('E2 passes %s', (_label, code) => {
+        expect(writes(code)).toEqual([]);
     });
 });

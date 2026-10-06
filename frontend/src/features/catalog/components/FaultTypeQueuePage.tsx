@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/axios';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 import type { FaultType } from '@/types';
 
 // API-H6. The other end of report_fault's is_pending: a reporter without
@@ -31,24 +32,33 @@ export default function FaultTypeQueuePage() {
     // click on the same row cannot send a second PUT while the first is out.
     const [busy, setBusy] = useState<ReadonlySet<number>>(new Set());
 
-    useEffect(() => {
-        fetchPending();
-    }, []);
+    // FE-H5: leaving the page aborts the load still out. Retry shows only
+    // once a load has failed, so it never finds one to abort. Development
+    // StrictMode aborts the first load while the page stays up; that load
+    // has no response, so without the guards it would show as 'network'.
+    const next = useLatestRequest();
 
-    const fetchPending = async () => {
+    const fetchPending = useCallback(async () => {
+        const signal = next();
         setLoading(true);
         try {
-            const res = await api.get('/setup/fault_types/pending');
+            const res = await api.get('/setup/fault_types/pending', { signal });
+            if (signal.aborted) return;
             setPending(res.data);
             setError(null);
         } catch (err) {
+            if (signal.aborted) return;
             console.error('Failed to fetch pending fault types', err);
             const status = (err as { response?: { status?: number } })?.response?.status;
             setError(status === 403 ? 'forbidden' : 'network');
         } finally {
-            setLoading(false);
+            if (!signal.aborted) setLoading(false);
         }
-    };
+    }, [next]);
+
+    useEffect(() => {
+        fetchPending();
+    }, [fetchPending]);
 
     const setRowBusy = (id: number, on: boolean) => {
         setBusy(prev => {

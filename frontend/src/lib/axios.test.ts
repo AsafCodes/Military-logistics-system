@@ -256,6 +256,20 @@ describe('lib/axios cancellation (FE-H5)', () => {
         expect(reload).not.toHaveBeenCalled();
     });
 
+    it('sends nothing for a signal that aborted before the request', async () => {
+        // useLatestRequest hands out such a signal once its component is gone.
+        const reached = vi.fn();
+        adapter.install(async config => {
+            reached();
+            return { data: {}, status: 200, statusText: '', headers: {}, config };
+        });
+        const controller = new AbortController();
+        controller.abort();
+
+        await expect(apiClient.get('/tickets/', { signal: controller.signal })).rejects.toSatisfy(axios.isCancel);
+        expect(reached).not.toHaveBeenCalled();
+    });
+
     it('still navigates for a 401 when nothing aborted (control)', async () => {
         stubLocation('/dashboard');
         const answer = deferredAdapter();

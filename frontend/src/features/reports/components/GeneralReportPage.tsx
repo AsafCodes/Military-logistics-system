@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '@/lib/axios';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
 import type { InventoryReportItem } from '@/types';
@@ -38,22 +39,30 @@ export default function GeneralReportPage() {
     });
 
     // 1. Fetch Data
-    const fetchReport = async () => {
+    // FE-H5: Refresh stays clickable during a load, so a second press aborts
+    // the load still out; leaving the page aborts the last one. Only the
+    // latest load writes rows or clears the loading state.
+    const next = useLatestRequest();
+
+    const fetchReport = useCallback(async () => {
+        const signal = next();
         setLoading(true);
         try {
-            const res = await api.get(`/reports/query`);
+            const res = await api.get(`/reports/query`, { signal });
+            if (signal.aborted) return;
             setItems(res.data);
             setLastUpdated(new Date().toLocaleString('he-IL'));
         } catch (err) {
+            if (signal.aborted) return;
             console.error("Failed to load report", err);
         } finally {
-            setLoading(false);
+            if (!signal.aborted) setLoading(false);
         }
-    };
+    }, [next]);
 
     useEffect(() => {
         fetchReport();
-    }, []);
+    }, [fetchReport]);
 
     // 2. Derived Data for Dropdowns (Unique Values)
     const uniqueTypes = useMemo(() => {

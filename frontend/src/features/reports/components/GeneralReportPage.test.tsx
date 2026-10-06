@@ -35,9 +35,11 @@
  * rather than an invisible sub-day difference a floor() would swallow.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { CanceledError } from 'axios';
 import GeneralReportPage from './GeneralReportPage';
 import api from '@/lib/axios';
+import { holdGets } from '@/test/httpStubs';
 import type { InventoryReportItem } from '@/types';
 
 // Every fixture `satisfies` the shared row type (API-H4), so `tsc -b` --
@@ -142,5 +144,55 @@ describe('GeneralReportPage: a never-verified row (API-H4)', () => {
         // new Date(null) is the epoch, so a null that slipped past the guard
         // would print a delay of some twenty thousand days instead.
         expect(screen.queryByText(/^לפני \d+ ימים$/)).toBeNull();
+    });
+});
+
+// FE-H5. Refresh stays clickable while a load is out, so two presses race.
+// Real timers throughout, for the reason the header gives.
+describe('GeneralReportPage: Refresh twice, the latest load wins (FE-H5)', () => {
+    const OLD_ROW = { ...NEVER_VERIFIED_ITEM, id: 4, serial_number: 'RACE-OLD' } satisfies InventoryReportItem;
+    const NEW_ROW = { ...NEVER_VERIFIED_ITEM, id: 5, serial_number: 'RACE-NEW' } satisfies InventoryReportItem;
+    const REFRESH = '🔄 רענן נתונים';
+
+    // Mount, let the first load land, then press Refresh twice.
+    async function twoRefreshes() {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api);
+        const { container } = render(<GeneralReportPage />);
+        await waitFor(() => expect(held).toHaveLength(1));
+        held[0].resolve([]);
+        expect(await screen.findByText(/מציג 0 מתוך 0/)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByText(REFRESH));
+        fireEvent.click(screen.getByText(REFRESH));
+        expect(held.map(h => h.url)).toEqual(['/reports/query', '/reports/query', '/reports/query']);
+        // The mount load's signal is aborted too, harmlessly: it has settled.
+        expect(held.slice(1).map(h => h.config?.signal?.aborted)).toEqual([true, false]);
+        const spinner = () => container.querySelector('.animate-spin');
+        return { error, first: held[1], second: held[2], spinner };
+    }
+
+    it('a cancelled first load leaves the spinner to the second and logs nothing', async () => {
+        const { error, first, second, spinner } = await twoRefreshes();
+
+        await act(async () => { first.reject(new CanceledError()); });
+        expect(spinner()).not.toBeNull();
+        expect(error).not.toHaveBeenCalled();
+
+        await act(async () => { second.resolve([NEW_ROW]); });
+        expect(spinner()).toBeNull();
+        expect(screen.getByText('RACE-NEW')).toBeInTheDocument();
+    });
+
+    it("a first load that answers after the second keeps the second's rows", async () => {
+        const { error, first, second } = await twoRefreshes();
+
+        await act(async () => { second.resolve([NEW_ROW]); });
+        expect(screen.getByText('RACE-NEW')).toBeInTheDocument();
+
+        await act(async () => { first.resolve([OLD_ROW]); });
+        expect(screen.getByText('RACE-NEW')).toBeInTheDocument();
+        expect(screen.queryByText('RACE-OLD')).toBeNull();
+        expect(error).not.toHaveBeenCalled();
     });
 });

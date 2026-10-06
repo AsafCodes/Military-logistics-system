@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Wrench, RefreshCw, AlertTriangle, CheckCircle, Clock, Inbox } from 'lucide-react';
 import api from '@/lib/axios';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
 
 // ============================================================
@@ -76,19 +77,27 @@ export default function MaintenancePage() {
     const [activeTab, setActiveTab] = useState<FilterTab>('all');
     const [fixingId, setFixingId] = useState<number | null>(null);
 
+    // FE-H5: a reload after closing a ticket aborts the load still out, and
+    // leaving the page aborts the last one. Refresh can't race a load: the
+    // page is only a spinner while one is out.
+    const next = useLatestRequest();
+
     const fetchTickets = useCallback(async () => {
+        const signal = next();
         setLoading(true);
         setError(null);
         try {
-            const ticketRes = await api.get('/tickets/');
+            const ticketRes = await api.get('/tickets/', { signal });
+            if (signal.aborted) return;
             setTickets(ticketRes.data);
         } catch (err) {
+            if (signal.aborted) return;
             console.error(err);
             setError('טעינת כרטיסי תחזוקה נכשלה');
         } finally {
-            setLoading(false);
+            if (!signal.aborted) setLoading(false);
         }
-    }, []);
+    }, [next]);
 
     useEffect(() => { fetchTickets(); }, [fetchTickets]);
 
