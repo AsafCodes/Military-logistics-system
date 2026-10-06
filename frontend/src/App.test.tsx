@@ -86,7 +86,12 @@ describe('App bootstrap', () => {
         // check would be inert here: ErrorBoundary wraps <App/> in main.tsx and
         // is not in this tree at all, so it can never render. main.test.tsx
         // makes that assertion where it means something.
-        expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+        //
+        // The longer limit is for a starved machine. This is the file's first
+        // render of the login page and its first role query, and both cost
+        // more the first time. Under heavy CPU load the page was once still
+        // not on screen when the default one-second wait ran out.
+        expect(await screen.findByRole('button', { name: /sign in/i }, { timeout: 3000 })).toBeInTheDocument();
     });
 
     it('fires no XHR or fetch from the public login page', async () => {
