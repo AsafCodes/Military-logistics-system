@@ -40,7 +40,6 @@ export default function FaultTypeQueuePage() {
 
     const fetchPending = useCallback(async () => {
         const signal = next();
-        setLoading(true);
         try {
             const res = await api.get('/setup/fault_types/pending', { signal });
             if (signal.aborted) return;
@@ -51,13 +50,23 @@ export default function FaultTypeQueuePage() {
             console.error('Failed to fetch pending fault types', err);
             const status = (err as { response?: { status?: number } })?.response?.status;
             setError(status === 403 ? 'forbidden' : 'network');
-        } finally {
-            if (!signal.aborted) setLoading(false);
         }
+        setLoading(false);
     }, [next]);
 
-    useEffect(() => {
+    // Retry. The first load needs no setLoading: the flag starts true.
+    const reload = useCallback(() => {
+        setLoading(true);
         fetchPending();
+    }, [fetchPending]);
+
+    // fetchPending sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchPending() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchPending(); };
+        run();
     }, [fetchPending]);
 
     const setRowBusy = (id: number, on: boolean) => {
@@ -90,9 +99,8 @@ export default function FaultTypeQueuePage() {
                 console.error('Failed to approve fault type', err);
                 alert('אישור סוג התקלה נכשל.');
             }
-        } finally {
-            setRowBusy(fault.id, false);
         }
+        setRowBusy(fault.id, false);
     };
 
     return (
@@ -120,7 +128,7 @@ export default function FaultTypeQueuePage() {
                             </p>
                             {error === 'network' && (
                                 <button
-                                    onClick={fetchPending}
+                                    onClick={reload}
                                     className="text-sm text-primary hover:underline"
                                 >
                                     נסה שוב

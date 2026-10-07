@@ -35,9 +35,8 @@ export function useDashboardData() {
             if (signal.aborted) return;
             console.error('Failed to fetch dashboard data:', err);
             setError('Failed to load system data.');
-        } finally {
-            if (!signal.aborted) setLoading(false);
         }
+        setLoading(false);
     }, [next]);
 
     // Manual refresh helper

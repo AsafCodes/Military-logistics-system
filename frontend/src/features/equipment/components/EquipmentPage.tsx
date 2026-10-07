@@ -422,8 +422,6 @@ export default function EquipmentPage() {
 
     const fetchData = useCallback(async () => {
         const signal = next();
-        setLoading(true);
-        setError(null);
         try {
             const [userRes, equipRes, faultRes] = await Promise.all([
                 api.get('/users/me', { signal }),
@@ -438,12 +436,26 @@ export default function EquipmentPage() {
             if (signal.aborted) return;
             console.error(err);
             setError('טעינת נתוני ציוד נכשלה');
-        } finally {
-            if (!signal.aborted) setLoading(false);
         }
+        setLoading(false);
     }, [next]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    // Refresh, and the reload after a write. The first load needs neither
+    // call: loading starts true and error starts null.
+    const reload = useCallback(() => {
+        setLoading(true);
+        setError(null);
+        fetchData();
+    }, [fetchData]);
+
+    // fetchData sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchData() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchData(); };
+        run();
+    }, [fetchData]);
 
     // ── Derived Data ──
     const uniqueTypes = useMemo(() => {
@@ -470,7 +482,7 @@ export default function EquipmentPage() {
     const handleVerifyPresence = async (id: number) => {
         try {
             await api.post(`/equipment/${id}/verify`);
-            fetchData();
+            reload();
         } catch (err) {
             console.error(err);
             alert('דיווח נוכחות נכשל');
@@ -480,7 +492,7 @@ export default function EquipmentPage() {
     const handleRepair = async (item: Equipment) => {
         try {
             await api.post(`/maintenance/fix/${item.id}`);
-            fetchData();
+            reload();
         } catch (err) {
             console.error(err);
             alert('תיקון נכשל');
@@ -513,7 +525,7 @@ export default function EquipmentPage() {
                         </div>
                     </div>
                     <button
-                        onClick={fetchData}
+                        onClick={reload}
                         className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
                                    text-primary hover:bg-primary/10 transition-colors"
                     >
@@ -632,21 +644,21 @@ export default function EquipmentPage() {
                     item={faultTarget}
                     faultTypes={faultTypes}
                     onClose={() => setFaultTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
             {transferTarget && (
                 <TransferModal
                     item={transferTarget}
                     onClose={() => setTransferTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
             {assignTarget && (
                 <AssignOwnerModal
                     item={assignTarget}
                     onClose={() => setAssignTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
             {historyTargetId && (
@@ -662,7 +674,7 @@ export default function EquipmentPage() {
                     currentStatus={verifyTarget.status}
                     isOpen={true}
                     onClose={() => setVerifyTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
         </div>

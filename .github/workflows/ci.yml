@@ -129,10 +129,13 @@ jobs:
     # no problems. It stays waived all the same. The React Compiler gives up
     # on a component or hook that holds a `try ... finally`, the rule set in
     # use does not report that, and the rules built on the compiler then stay
-    # silent for it (INF-L4 describes the mechanism). Measured at FE-H6-2:
-    # 8 `finally` clauses are left in six files (six data loads and two
-    # write handlers), hiding at least 5 more errors. The rest of FE-H6
-    # fixes those and then turns this step into a gate.
+    # silent for it (INF-L4 describes the mechanism). FE-H6-3 removed the
+    # last 8 such clauses and the 5 errors they hid; measured with the
+    # compiler's own diagnostics switched on, nothing is reported now. But
+    # this step still cannot see a `finally` that comes back, and
+    # set-state-in-effect checks only the calls written directly in an
+    # effect, not what a function called from one does. FE-H6-4 turns the
+    # compiler's diagnostics on here and then makes this step a gate.
     - name: Lint with ESLint
       continue-on-error: true
       run: npm run lint

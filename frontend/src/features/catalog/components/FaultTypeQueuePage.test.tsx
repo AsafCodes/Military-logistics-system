@@ -69,10 +69,13 @@ describe('FaultTypeQueuePage', () => {
 
     it('paints loading, not an empty queue, on its very first frame', () => {
         // render() cannot see this frame: it runs inside act(), which flushes
-        // the mount effect -- and fetchPending's setLoading(true) -- before the
-        // first assertion. So `useState(false)` passed every other test here
-        // and the whole suite, while a browser would paint "nothing pending"
-        // for a frame before the effect ran (the mutation battery found it).
+        // the mount effect before the first assertion. When this test was
+        // written fetchPending set loading itself, so `useState(false)`
+        // passed every other test here and the whole suite, while a browser
+        // would paint "nothing pending" for a frame before the effect ran
+        // (the mutation battery found it). Since FE-H6-3 the load no longer
+        // sets it, and the initial value is all that shows loading during
+        // the first load.
         // Server rendering runs no effects, so its markup IS the first commit.
         vi.spyOn(api, 'get').mockImplementation(() => new Promise(() => { }));
 

@@ -24,7 +24,10 @@ interface FilterState {
 
 export default function GeneralReportPage() {
     const [items, setItems] = useState<InventoryReportItem[]>([]);
-    const [loading, setLoading] = useState(false);
+    // Starts true: the first frame shows the spinner where the table goes,
+    // not an empty table. The counter above it is outside this flag, so
+    // during the first load it still reads "0 of 0".
+    const [loading, setLoading] = useState(true);
     const [lastUpdated, setLastUpdated] = useState<string>("");
 
     // State: Filters
@@ -46,7 +49,6 @@ export default function GeneralReportPage() {
 
     const fetchReport = useCallback(async () => {
         const signal = next();
-        setLoading(true);
         try {
             const res = await api.get(`/reports/query`, { signal });
             if (signal.aborted) return;
@@ -55,13 +57,23 @@ export default function GeneralReportPage() {
         } catch (err) {
             if (signal.aborted) return;
             console.error("Failed to load report", err);
-        } finally {
-            if (!signal.aborted) setLoading(false);
         }
+        setLoading(false);
     }, [next]);
 
-    useEffect(() => {
+    // Refresh. The first load needs no setLoading: the flag starts true.
+    const reload = useCallback(() => {
+        setLoading(true);
         fetchReport();
+    }, [fetchReport]);
+
+    // fetchReport sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchReport() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchReport(); };
+        run();
     }, [fetchReport]);
 
     // 2. Derived Data for Dropdowns (Unique Values)
@@ -167,7 +179,7 @@ export default function GeneralReportPage() {
                         מציג {filteredItems.length} מתוך {items.length} פריטים
                     </span>
                     <button
-                        onClick={fetchReport}
+                        onClick={reload}
                         className="text-muted-foreground hover:text-primary transition-colors text-xs"
                     >
                         🔄 רענן נתונים

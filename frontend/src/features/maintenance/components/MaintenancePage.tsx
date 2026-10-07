@@ -84,8 +84,6 @@ export default function MaintenancePage() {
 
     const fetchTickets = useCallback(async () => {
         const signal = next();
-        setLoading(true);
-        setError(null);
         try {
             const ticketRes = await api.get('/tickets/', { signal });
             if (signal.aborted) return;
@@ -94,12 +92,26 @@ export default function MaintenancePage() {
             if (signal.aborted) return;
             console.error(err);
             setError('טעינת כרטיסי תחזוקה נכשלה');
-        } finally {
-            if (!signal.aborted) setLoading(false);
         }
+        setLoading(false);
     }, [next]);
 
-    useEffect(() => { fetchTickets(); }, [fetchTickets]);
+    // Refresh, and the reload after closing a ticket. The first load needs
+    // neither call: loading starts true and error starts null.
+    const reload = useCallback(() => {
+        setLoading(true);
+        setError(null);
+        fetchTickets();
+    }, [fetchTickets]);
+
+    // fetchTickets sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchTickets() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchTickets(); };
+        run();
+    }, [fetchTickets]);
 
     // ── Counts ──
     const counts = useMemo(() => ({
@@ -120,13 +132,12 @@ export default function MaintenancePage() {
         setFixingId(ticket.id);
         try {
             await api.post(`/maintenance/fix/${ticket.equipment_id}`);
-            fetchTickets();
+            reload();
         } catch (err) {
             console.error(err);
             alert('סגירת הכרטיס נכשלה');
-        } finally {
-            setFixingId(null);
         }
+        setFixingId(null);
     };
 
     // ── Loading ──
@@ -164,7 +175,7 @@ export default function MaintenancePage() {
                         </div>
                     </div>
                     <button
-                        onClick={fetchTickets}
+                        onClick={reload}
                         className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
                                    text-primary hover:bg-primary/10 transition-colors"
                     >

@@ -57,7 +57,6 @@ export default function AdminPanel() {
 
     const fetchGroups = useCallback(async () => {
         const signal = next();
-        setGroupsLoading(true);
         try {
             const res = await api.get('/groups', { signal });
             if (signal.aborted) return;
@@ -68,13 +67,23 @@ export default function AdminPanel() {
             console.error("Failed to fetch groups", err);
             const status = (err as { response?: { status?: number } })?.response?.status;
             setGroupsError(status === 403 ? 'forbidden' : 'network');
-        } finally {
-            if (!signal.aborted) setGroupsLoading(false);
         }
+        setGroupsLoading(false);
     }, [next]);
 
-    useEffect(() => {
+    // Retry. The first load needs no setGroupsLoading: the flag starts true.
+    const reloadGroups = useCallback(() => {
+        setGroupsLoading(true);
         fetchGroups();
+    }, [fetchGroups]);
+
+    // fetchGroups sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchGroups() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchGroups(); };
+        run();
     }, [fetchGroups]);
 
     // Search Users Effect
@@ -234,7 +243,7 @@ export default function AdminPanel() {
                                         </p>
                                         {groupsError === 'network' && (
                                             <button
-                                                onClick={fetchGroups}
+                                                onClick={reloadGroups}
                                                 className="text-sm text-primary hover:underline"
                                             >
                                                 נסה שוב
