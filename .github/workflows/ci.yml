@@ -123,13 +123,15 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    # WAIVER (frontend lint backlog): 13 pre-existing ESLint errors. Same
-    # arrangement as the ruff waiver above -- annotated, not enforced, yet.
-    # (Was 17; SEC-H9 cleared one by rewriting App's mount effect. SEC-H10-2
-    # cleared another in AdminPanel without updating this line, which went on
-    # saying 16. FE-H1-1 measured 15 and cleared one more by deleting
-    # ConnectionTest's `err: any`. FE-H4 measured 14 and cleared StatsGrid's
-    # set-state-in-effect.)
+    # WAIVER (frontend lint backlog). Same arrangement as the ruff waiver
+    # above -- annotated, not enforced, yet. FE-H6-1 measured 13 errors and
+    # cleared them, so this step reports 0 errors and 2 warnings. It stays
+    # waived all the same. The React Compiler gives up on a component or hook
+    # that holds a `try ... finally`, the rule set in use does not report
+    # that, and the rules built on the compiler then stay silent for it
+    # (INF-L4 describes the mechanism). Measured at FE-H6-1: 17 `finally`
+    # clauses in 15 components and hooks, hiding at least 9 more errors.
+    # The rest of FE-H6 fixes those and then turns this step into a gate.
     - name: Lint with ESLint
       continue-on-error: true
       run: npm run lint

@@ -31,7 +31,7 @@ export function useDashboardData() {
             setStats(readinessRes.data);
             setEquipment(equipmentRes.data);
             setError(null);
-        } catch (err: any) {
+        } catch (err) {
             if (signal.aborted) return;
             console.error('Failed to fetch dashboard data:', err);
             setError('Failed to load system data.');

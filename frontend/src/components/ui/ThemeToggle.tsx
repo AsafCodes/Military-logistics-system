@@ -3,41 +3,42 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { readLocal, writeLocal } from "@/lib/safeStorage";
 
+type Theme = "light" | "dark";
+
+// Guarded read: readLocal answers null when the storage accessor throws, so
+// a browser that blocks storage falls back to the system preference instead
+// of failing the render. A stored value that is neither theme falls back the
+// same way. Taking it as the theme left the page light, with a button that
+// offered "Light" or, for an empty string, no button at all.
+//
+// The script in index.html makes this same choice before the first paint.
+// Change one and ThemeToggle.test.tsx fails until the other matches.
+function initialTheme(): Theme {
+    const stored = readLocal("theme");
+    if (stored === "dark" || stored === "light") {
+        return stored;
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export function ThemeToggle() {
-    const [theme, setTheme] = useState<"light" | "dark" | null>(null);
+    // FE-H6: the theme is read once, in the state initialiser, so the button
+    // is there on the first frame and no effect has to write state.
+    const [theme, setTheme] = useState<Theme>(initialTheme);
 
     useEffect(() => {
-        // Guarded: this runs in a mount effect, so a throwing storage accessor
-        // is a failed RENDER, not a failed read. It took down the whole app --
-        // and the ErrorBoundary added by SEC-H9 turned that from a blank page
-        // into a permanent crash screen, which is better but still a lockout.
-        const stored = readLocal("theme") as "light" | "dark" | null;
-        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        
-        const initial = stored ?? (prefersDark ? "dark" : "light");
-        setTheme(initial);
-        
-        if (initial === "dark") {
+        if (theme === "dark") {
             document.documentElement.classList.add("dark");
         } else {
             document.documentElement.classList.remove("dark");
         }
-    }, []);
+    }, [theme]);
 
     const toggleTheme = () => {
         const newTheme = theme === "light" ? "dark" : "light";
         setTheme(newTheme);
         writeLocal("theme", newTheme);
-        
-        if (newTheme === "dark") {
-            document.documentElement.classList.add("dark");
-        } else {
-            document.documentElement.classList.remove("dark");
-        }
     };
-
-    // Avoid hydration mismatch by rendering nothing until client-side check is done
-    if (!theme) return null;
 
     return (
         <Button

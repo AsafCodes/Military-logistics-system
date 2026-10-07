@@ -17,11 +17,7 @@ interface GroupSummary {
     name: string;
 }
 
-interface AdminPanelProps {
-    onClose: () => void;
-}
-
-export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
+export default function AdminPanel() {
     const [groups, setGroups] = useState<GroupSummary[]>([]);
     // SEC-H10. The route guard in App.tsx is a client-side convenience, not
     // the real gate -- MANAGE_PERSONNEL is (list_groups gates on it via
@@ -132,7 +128,7 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
             });
             alert("קבוצה עודכנה בהצלחה!");
             setSelectedUser(null);
-        } catch (err) {
+        } catch {
             alert("עדכון הקבוצה נכשל.");
         }
     };

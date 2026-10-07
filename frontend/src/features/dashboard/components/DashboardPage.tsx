@@ -13,18 +13,10 @@ import { useDashboardData } from '../hooks/useDashboardData';
 import type { User } from '@/types';
 
 // ============================================================
-// Props
-// ============================================================
-
-interface DashboardProps {
-    onLogout: () => void;
-}
-
-// ============================================================
 // Component
 // ============================================================
 
-export default function Dashboard({ onLogout: _onLogout }: DashboardProps) {
+export default function Dashboard() {
     // ── State ──
     const [user, setUser] = useState<User | null>(null);
     const [initLoading, setInitLoading] = useState(true);

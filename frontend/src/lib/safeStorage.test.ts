@@ -54,6 +54,7 @@ describe('nothing bypasses safeStorage', () => {
         join('main.test.tsx'),
         join('lib', 'axios.test.ts'),
         join('services', 'auth.service.test.ts'),
+        join('components', 'ui', 'ThemeToggle.test.tsx'),
         // DEAD CODE, deliberately exempted rather than fixed. LegacyLogin is an
         // orphaned second login form -- nothing imports it -- that still does
         // `localStorage.setItem('token', ...)`, reinstating the exact defect

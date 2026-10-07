@@ -66,7 +66,7 @@ const EFFECT_CASES: Case[] = [
     {
         // Stage 1 only: the page's data reads wait on /users/me, which is held.
         name: 'DashboardPage',
-        ui: () => <DashboardPage onLogout={() => { }} />,
+        ui: () => <DashboardPage />,
         urls: ['/users/me'],
     },
 ];
@@ -76,7 +76,7 @@ const EFFECT_CASES: Case[] = [
 // so none of theirs are out.
 const DASHBOARD_STAGE_2: Case = {
     name: 'DashboardPage (stage 2)',
-    ui: () => <DashboardPage onLogout={() => { }} />,
+    ui: () => <DashboardPage />,
     answers: { '/users/me': TEST_USER },
     urls: ['/analytics/unit_readiness', '/equipment/accessible'],
 };
@@ -102,7 +102,7 @@ const LATEST_REQUEST_CASES: Case[] = [
     {
         // The search is empty, so only /groups goes out.
         name: 'AdminPanel',
-        ui: () => <AdminPanel onClose={() => { }} />,
+        ui: () => <AdminPanel />,
         urls: ['/groups'],
     },
     {

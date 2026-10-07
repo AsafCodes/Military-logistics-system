@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -28,28 +28,27 @@ interface LoginPageProps {
     onLogin: (values: LoginFormValues) => Promise<void>;
 }
 
+// The theme is the `dark` class on <html>, which ThemeToggle and the script
+// in index.html set outside React's state. useSyncExternalStore reads it
+// while rendering and reads it again once subscribed, so a class set between
+// those two moments is not missed.
+function subscribeToTheme(onChange: () => void) {
+    const observer = new MutationObserver(onChange);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+}
+
+function pageIsDark() {
+    return document.documentElement.classList.contains("dark");
+}
+
 export default function LoginPage({ onLogin }: LoginPageProps) {
     const [isLoading, setIsLoading] = useState(false);
     const [serverError, setServerError] = useState<string | null>(null);
-    const [isDark, setIsDark] = useState(false);
-
-    // Watch for theme changes to pass to Globe
-    useEffect(() => {
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (mutation.type === "attributes" && mutation.attributeName === "class") {
-                    setIsDark(document.documentElement.classList.contains("dark"));
-                }
-            });
-        });
-
-        observer.observe(document.documentElement, { attributes: true });
-
-        // Initial check
-        setIsDark(document.documentElement.classList.contains("dark"));
-
-        return () => observer.disconnect();
-    }, []);
+    // Theme for the globe, read during render so its first frame is already
+    // in the right colours. It used to start as "light" and be corrected by
+    // an effect.
+    const isDark = useSyncExternalStore(subscribeToTheme, pageIsDark);
 
     // 2. React Hook Form
     const form = useForm<LoginFormValues>({
@@ -66,7 +65,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         setServerError(null);
         try {
             await onLogin(values);
-        } catch (error: any) {
+        } catch {
             setServerError("שגיאת התחברות: בדוק את הפרטים או את החיבור לרשת.");
         } finally {
             setIsLoading(false);

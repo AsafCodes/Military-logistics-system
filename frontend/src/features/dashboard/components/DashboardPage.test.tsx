@@ -26,7 +26,7 @@ describe('DashboardPage: the first read (FE-H5)', () => {
     it("shows the page once /users/me answers", async () => {
         holdGets(api, { '/users/me': TEST_USER, ...DATA_LOADS });
 
-        const { container } = render(<DashboardPage onLogout={() => { }} />);
+        const { container } = render(<DashboardPage />);
 
         expect(await screen.findByText(new RegExp(TEST_USER.full_name))).toBeInTheDocument();
         await waitFor(() => expect(container.querySelector('.animate-spin')).toBeNull());
@@ -37,7 +37,7 @@ describe('DashboardPage: the first read (FE-H5)', () => {
         const error = vi.spyOn(console, 'error').mockImplementation(() => { });
         const { held } = holdGets(api, DATA_LOADS);
 
-        render(<DashboardPage onLogout={() => { }} />);
+        render(<DashboardPage />);
         await waitFor(() => expect(held.map(h => h.url)).toEqual(['/users/me']));
         const failure = new Error('timeout of 10000ms exceeded');
         held[0].reject(failure);
@@ -64,7 +64,7 @@ describe('DashboardPage: Refresh twice, the latest load wins (FE-H5)', () => {
             '/tickets/?status_filter=Open': [],
             '/reports/daily_movement': [],
         });
-        render(<DashboardPage onLogout={() => { }} />);
+        render(<DashboardPage />);
 
         const PAIR = ['/analytics/unit_readiness', '/equipment/accessible'];
         await waitFor(() => expect(held.map(h => h.url)).toEqual(PAIR));

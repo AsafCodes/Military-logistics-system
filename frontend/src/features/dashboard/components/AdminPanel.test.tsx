@@ -37,7 +37,7 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
             return Promise.resolve({ data: [] });
         });
 
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
 
         // Search still works while /groups is broken -- it never depended on it.
         await selectAUser();
@@ -54,7 +54,7 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
             return Promise.resolve({ data: [] });
         });
 
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
         await selectAUser();
 
         expect(await screen.findByText(/טעינת רשימת הקבוצות נכשלה/)).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
             return Promise.resolve({ data: [] });
         });
 
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
 
         await waitFor(() => expect(api.get).toHaveBeenCalledWith(
             '/groups', expect.objectContaining({ signal: expect.any(AbortSignal) })));
@@ -105,7 +105,7 @@ describe('AdminPanel groups: an aborted first load under StrictMode (FE-H5)', ()
     it('keeps the groups loading, then lists them from the second load', async () => {
         const error = vi.spyOn(console, 'error').mockImplementation(() => { });
         const { held } = holdGets(api, { '/users': [USER] });
-        render(<AdminPanel onClose={() => { }} />, { reactStrictMode: true });
+        render(<AdminPanel />, { reactStrictMode: true });
         await waitFor(() => expect(held.map(h => h.url)).toEqual(['/groups', '/groups']));
         expect(held.map(h => h.config?.signal?.aborted)).toEqual([true, false]);
         await selectAUser();
@@ -129,7 +129,7 @@ describe('AdminPanel user search: a newer term cancels the older request (FE-H5)
 
     async function searchAbThenAbc() {
         const { held } = holdGets(api, { '/groups': GROUPS });
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
         type('ab');
         await waitFor(() => expect(held).toHaveLength(1));
         type('abc');
@@ -174,7 +174,7 @@ describe('AdminPanel user search: a newer term cancels the older request (FE-H5)
 
     it('stops showing the search in progress when the term shrinks below two characters', async () => {
         const { held } = holdGets(api, { '/groups': GROUPS });
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
         type('ab');
         await waitFor(() => expect(held).toHaveLength(1));
         expect(screen.getByText('מחפש...')).toBeInTheDocument();
@@ -194,7 +194,7 @@ describe('AdminPanel user search: a newer term cancels the older request (FE-H5)
         // timeout is one: axios rejects it without aborting the signal.
         const error = vi.spyOn(console, 'error').mockImplementation(() => { });
         const { held } = holdGets(api, { '/groups': GROUPS });
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
         type('ab');
         await waitFor(() => expect(held).toHaveLength(1));
 
@@ -207,7 +207,7 @@ describe('AdminPanel user search: a newer term cancels the older request (FE-H5)
 
     it('aborts a search still in flight when the panel unmounts', async () => {
         const { held } = holdGets(api, { '/groups': GROUPS });
-        const { unmount } = render(<AdminPanel onClose={() => { }} />);
+        const { unmount } = render(<AdminPanel />);
         type('ab');
         await waitFor(() => expect(held).toHaveLength(1));
 
@@ -231,7 +231,7 @@ describe('AdminPanel user search: the term is URL-encoded (FE-L6)', () => {
             // query-string parser reads back as a space; a literal `+` must
             // go as %2B or it would come back as a space as well.
             const term = 'כהן A&B#1+c 100%';
-            render(<AdminPanel onClose={() => { }} />);
+            render(<AdminPanel />);
             type(term);
             await waitFor(() => expect(urls.some(u => new URL(u).pathname === '/users')).toBe(true));
 

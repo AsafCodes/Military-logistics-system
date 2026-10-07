@@ -49,12 +49,12 @@ function AuthenticatedLayout({
     <CapabilitiesContext.Provider value={session.capabilities}>
       <AppShell user={session.user} onLogout={onLogout}>
         <Routes>
-          <Route path="/dashboard" element={<DashboardPage onLogout={onLogout} />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/equipment" element={<EquipmentPage />} />
           <Route path="/maintenance" element={<MaintenancePage />} />
           <Route path="/reports" element={<GeneralReportPage />} />
           {isAdmin && (
-            <Route path="/admin" element={<AdminPanel onClose={() => { }} />} />
+            <Route path="/admin" element={<AdminPanel />} />
           )}
           {canManageCatalog && (
             <Route path="/catalog" element={<FaultTypeQueuePage />} />
