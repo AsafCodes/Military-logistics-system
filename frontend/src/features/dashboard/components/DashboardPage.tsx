@@ -31,25 +31,26 @@ export default function Dashboard() {
     // useDashboardData's useLatestRequest.
     useEffect(() => {
         const controller = new AbortController();
-        initDashboard(controller.signal);
-        return () => controller.abort();
-    }, []);
-
-    const initDashboard = async (signal: AbortSignal) => {
-        try {
-            const userRes = await api.get('/users/me', { signal });
-            if (signal.aborted) return;
-            const currentUser = userRes.data;
-            setUser(currentUser);
-            await fetchData();
-        } catch (err) {
-            if (signal.aborted) return;
-            console.error("Failed to init", err);
-            setError("טעינת לוח הבקרה נכשלה. נסה לרענן.");
-        } finally {
+        const { signal } = controller;
+        const initDashboard = async () => {
+            try {
+                const userRes = await api.get('/users/me', { signal });
+                if (signal.aborted) return;
+                const currentUser = userRes.data;
+                setUser(currentUser);
+                await fetchData();
+            } catch (err) {
+                if (signal.aborted) return;
+                console.error("Failed to init", err);
+                setError("טעינת לוח הבקרה נכשלה. נסה לרענן.");
+            }
+            // fetchData does not throw, so the page can be left while it is
+            // out and execution still arrives here.
             if (!signal.aborted) setInitLoading(false);
-        }
-    };
+        };
+        initDashboard();
+        return () => controller.abort();
+    }, [fetchData]);
 
     // ── Helpers ──
     const getGreeting = () => {

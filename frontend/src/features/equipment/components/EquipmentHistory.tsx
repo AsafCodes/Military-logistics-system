@@ -21,36 +21,40 @@ interface EquipmentHistoryProps {
     onClose: () => void;
 }
 
+// OpenHistory is mounted only while the modal is open, and the key replaces
+// it when the item changes, so every opening and every item starts from
+// fresh state.
 export default function EquipmentHistory({ equipmentId, isOpen, onClose }: EquipmentHistoryProps) {
-    const [history, setHistory] = useState<StatusHistoryItem[]>([]);
-    const [loading, setLoading] = useState(false);
-
-    // FE-H5: closing the modal, switching to another item, or unmounting
-    // aborts the request in flight. When another item's load replaces it,
-    // that load owns `loading`.
-    useEffect(() => {
-        if (isOpen && equipmentId) {
-            const controller = new AbortController();
-            fetchHistory(controller.signal);
-            return () => controller.abort();
-        }
-    }, [isOpen, equipmentId]);
-
-    const fetchHistory = async (signal: AbortSignal) => {
-        setLoading(true);
-        try {
-            const response = await api.get(`/equipment/${equipmentId}/history`, { signal });
-            if (signal.aborted) return;
-            setHistory(response.data);
-        } catch (error) {
-            if (signal.aborted) return;
-            console.error('Failed to fetch history:', error);
-        } finally {
-            if (!signal.aborted) setLoading(false);
-        }
-    };
-
     if (!isOpen) return null;
+    return <OpenHistory key={equipmentId} equipmentId={equipmentId} onClose={onClose} />;
+}
+
+function OpenHistory({ equipmentId, onClose }: Omit<EquipmentHistoryProps, 'isOpen'>) {
+    const [history, setHistory] = useState<StatusHistoryItem[]>([]);
+    // True from the first frame whenever a read will be sent; the read only
+    // ever turns it off.
+    const [loading, setLoading] = useState(Boolean(equipmentId));
+
+    // FE-H5: unmounting aborts the request in flight, and an aborted request
+    // changes nothing.
+    useEffect(() => {
+        if (!equipmentId) return;
+        const controller = new AbortController();
+        const { signal } = controller;
+        const fetchHistory = async () => {
+            try {
+                const response = await api.get(`/equipment/${equipmentId}/history`, { signal });
+                if (signal.aborted) return;
+                setHistory(response.data);
+            } catch (error) {
+                if (signal.aborted) return;
+                console.error('Failed to fetch history:', error);
+            }
+            setLoading(false);
+        };
+        fetchHistory();
+        return () => controller.abort();
+    }, [equipmentId]);
 
     const getStatusColor = (status: string) => {
         switch (status.toLowerCase()) {

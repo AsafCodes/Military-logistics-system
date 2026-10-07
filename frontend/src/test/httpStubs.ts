@@ -8,8 +8,9 @@
  * every assertion would pass vacuously. Going through the adapter means a
  * request runs the real interceptors, exactly as a page's request does.
  *
- * `holdGets` is the exception: a spy on `get`, for tests that only need to
- * control when, and in what order, responses land.
+ * `holdGets` and `holdPosts` are the exceptions: spies on `get` and `post`,
+ * for tests that only need to control when, and in what order, responses
+ * land.
  */
 import { vi } from 'vitest';
 import { AxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
@@ -69,6 +70,29 @@ export function holdGets(client: AxiosInstance, answers: Record<string, unknown>
         },
     );
     return { held, spy };
+}
+
+/** A POST that `holdPosts` is holding open until the test settles it. */
+export interface HeldPost {
+    url: string;
+    body: unknown;
+    resolve: (data?: unknown) => void;
+    reject: (reason: unknown) => void;
+}
+
+/**
+ * Spy on `client.post` and hold every call, so a test can look at a form
+ * while its write is out and then make the write succeed or fail. A spy, like
+ * `holdGets`: the client's interceptors do not run.
+ */
+export function holdPosts(client: AxiosInstance) {
+    const held: HeldPost[] = [];
+    vi.spyOn(client, 'post').mockImplementation(
+        (url: string, body?: unknown) => new Promise((resolve, reject) => {
+            held.push({ url, body, resolve: data => resolve({ data }), reject });
+        }),
+    );
+    return held;
 }
 
 const REAL_LOCATION = Object.getOwnPropertyDescriptor(window, 'location');

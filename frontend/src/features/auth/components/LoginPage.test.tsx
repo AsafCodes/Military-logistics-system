@@ -99,3 +99,71 @@ describe('LoginPage tells the globe the theme', () => {
         await vi.waitFor(() => expect(given.at(-1)).toBe(false));
     });
 });
+
+// FE-H6-2. The submit handler's `finally` became a statement after the
+// try/catch. These pin the form's locked state around it.
+describe('LoginPage: submitting (FE-H6-2)', () => {
+    const SUBMIT = 'Sign in / התחברות';
+    const FAILED = 'שגיאת התחברות: בדוק את הפרטים או את החיבור לרשת.';
+    const VALUES = { personalNumber: '1234567', password: 'secret' };
+
+    // Renders the page, submits VALUES and resolves once onLogin has been
+    // called; the returned functions settle that call.
+    async function submit() {
+        let settle!: { resolve: () => void; reject: (reason: unknown) => void };
+        const onLogin = vi.fn(() => new Promise<void>((resolve, reject) => { settle = { resolve, reject }; }));
+        render(<LoginPage onLogin={onLogin} />);
+        fireEvent.change(screen.getByPlaceholderText('מספר אישי'), { target: { value: VALUES.personalNumber } });
+        fireEvent.change(screen.getByPlaceholderText('סיסמה'), { target: { value: VALUES.password } });
+        fireEvent.click(screen.getByText(SUBMIT));
+        await vi.waitFor(() => expect(onLogin).toHaveBeenCalledTimes(1));
+        return { onLogin, settle };
+    }
+
+    const submitButton = () => {
+        const button = document.querySelector('button[type="submit"]');
+        if (!(button instanceof HTMLButtonElement)) throw new Error('the submit button did not render');
+        return button;
+    };
+
+    it('locks the form while the login is out', async () => {
+        const { onLogin } = await submit();
+
+        expect(onLogin).toHaveBeenCalledWith(VALUES);
+        expect(submitButton()).toBeDisabled();
+        expect(screen.queryByText(SUBMIT)).toBeNull();
+        expect(screen.getByPlaceholderText('מספר אישי')).toBeDisabled();
+        expect(screen.getByPlaceholderText('סיסמה')).toBeDisabled();
+    });
+
+    it('unlocks the form and shows the error when the login fails', async () => {
+        const { settle } = await submit();
+
+        settle.reject(new Error('Request failed with status code 401'));
+
+        expect(await screen.findByText(FAILED)).toBeInTheDocument();
+        expect(screen.getByText(SUBMIT)).toBeEnabled();
+        expect(screen.getByPlaceholderText('סיסמה')).toBeEnabled();
+    });
+
+    it('clears the earlier error while the next attempt is out', async () => {
+        const { onLogin, settle } = await submit();
+        settle.reject(new Error('Request failed with status code 401'));
+        await screen.findByText(FAILED);
+
+        fireEvent.click(screen.getByText(SUBMIT));
+        await vi.waitFor(() => expect(onLogin).toHaveBeenCalledTimes(2));
+
+        expect(screen.queryByText(FAILED)).toBeNull();
+        expect(submitButton()).toBeDisabled();
+    });
+
+    it('unlocks the form without an error when the login succeeds', async () => {
+        const { settle } = await submit();
+
+        settle.resolve();
+
+        expect(await screen.findByText(SUBMIT)).toBeEnabled();
+        expect(screen.queryByText(FAILED)).toBeNull();
+    });
+});

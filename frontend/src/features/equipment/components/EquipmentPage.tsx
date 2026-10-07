@@ -27,12 +27,14 @@ function ReportFaultModal({
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
+        const faultName = selectedFaultId === 'other'
+            ? customFaultName
+            : faultTypes.find(f => f.id === parseInt(selectedFaultId))?.name;
         setLoading(true);
         try {
-            const isOther = selectedFaultId === 'other';
             await api.post('/maintenance/report', {
                 equipment_id: item.id,
-                fault_name: isOther ? customFaultName : faultTypes.find(f => f.id === parseInt(selectedFaultId))?.name,
+                fault_name: faultName,
                 description,
             });
             onSuccess();
@@ -40,9 +42,8 @@ function ReportFaultModal({
         } catch (err) {
             console.error(err);
             alert('דיווח התקלה נכשל');
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (
@@ -128,8 +129,9 @@ function TransferModal({
 
     // FE-H5: the cleanup cancels the timer and aborts a request already sent,
     // so a response for an earlier term can't land after a later term's, or
-    // after the else-branch has cleared the list. FE-L6: the term goes as a
-    // param, so axios encodes it.
+    // after the list has been cleared. FE-L6: the term goes as a param, so
+    // axios encodes it. The list is cleared by the handlers that end a
+    // search (changeTerm, showLocation, picking a result), not here.
     useEffect(() => {
         if (mode === 'person' && searchTerm.length > 1) {
             const controller = new AbortController();
@@ -148,26 +150,32 @@ function TransferModal({
                 clearTimeout(timer);
                 controller.abort();
             };
-        } else {
-            setSearchResults([]);
         }
     }, [searchTerm, mode]);
 
+    const changeTerm = (term: string) => {
+        setSearchTerm(term);
+        setSelectedUserId(null);
+        if (term.length <= 1) setSearchResults([]);
+    };
+
+    const showLocation = () => {
+        setMode('location');
+        setSearchResults([]);
+    };
+
     const handleSubmit = async () => {
+        const target = mode === 'person' ? { to_holder_id: selectedUserId } : { to_location: locationName };
         setLoading(true);
         try {
-            await api.post('/equipment/transfer', {
-                equipment_id: item.id,
-                ...(mode === 'person' ? { to_holder_id: selectedUserId } : { to_location: locationName }),
-            });
+            await api.post('/equipment/transfer', { equipment_id: item.id, ...target });
             onSuccess();
             onClose();
         } catch (err) {
             console.error(err);
             alert('העברה נכשלה');
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (
@@ -190,7 +198,7 @@ function TransferModal({
                             👤 העבר לאדם
                         </button>
                         <button
-                            onClick={() => setMode('location')}
+                            onClick={showLocation}
                             className={`flex-1 px-4 py-2 text-sm font-medium transition-colors
                                 ${mode === 'location' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-accent'}`}>
                             📍 העבר למיקום
@@ -202,7 +210,7 @@ function TransferModal({
                             <input
                                 type="text"
                                 value={searchTerm}
-                                onChange={e => { setSearchTerm(e.target.value); setSelectedUserId(null); }}
+                                onChange={e => changeTerm(e.target.value)}
                                 className="w-full px-3 py-2 rounded-lg border border-border/50 bg-background text-foreground
                                            focus:ring-2 focus:ring-primary/50 outline-none"
                                 placeholder="חפש משתמש..."
@@ -263,7 +271,7 @@ function AssignOwnerModal({
     const [loading, setLoading] = useState(false);
 
     // FE-H5 / FE-L6: the same abort-on-cleanup and encoded term as
-    // TransferModal's search above.
+    // TransferModal's search above, and the same clearing in changeTerm.
     useEffect(() => {
         if (searchTerm.length > 1) {
             const controller = new AbortController();
@@ -282,10 +290,14 @@ function AssignOwnerModal({
                 clearTimeout(timer);
                 controller.abort();
             };
-        } else {
-            setSearchResults([]);
         }
     }, [searchTerm]);
+
+    const changeTerm = (term: string) => {
+        setSearchTerm(term);
+        setSelectedUserId(null);
+        if (term.length <= 1) setSearchResults([]);
+    };
 
     const handleSubmit = async () => {
         if (!selectedUserId) return;
@@ -300,9 +312,8 @@ function AssignOwnerModal({
         } catch (err) {
             console.error(err);
             alert('שיוך נכשל');
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (
@@ -320,7 +331,7 @@ function AssignOwnerModal({
                         <input
                             type="text"
                             value={searchTerm}
-                            onChange={e => { setSearchTerm(e.target.value); setSelectedUserId(null); }}
+                            onChange={e => changeTerm(e.target.value)}
                             className="w-full px-3 py-2 rounded-lg border border-border/50 bg-background text-foreground
                                        focus:ring-2 focus:ring-primary/50 outline-none"
                             placeholder="חפש משתמש לשיוך..."

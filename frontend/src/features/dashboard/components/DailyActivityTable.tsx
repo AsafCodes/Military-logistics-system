@@ -91,6 +91,13 @@ function getEventLabel(eventType: string) {
     return eventMeta(eventType)?.label ?? (eventType || 'אירוע');
 }
 
+// The API returns a flat array, not { items: [...] }; the second shape is
+// still accepted.
+function activityList(data: unknown): DailyActivityItem[] {
+    if (Array.isArray(data)) return data;
+    return (data as { items?: DailyActivityItem[] } | null)?.items || [];
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -109,16 +116,15 @@ export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTa
             try {
                 const res = await api.get('/reports/daily_movement', { signal });
                 if (signal.aborted) return;
-                // API returns a flat array, not { items: [...] }
-                const data = Array.isArray(res.data) ? res.data : (res.data?.items || []);
-                setActivities(data);
+                setActivities(activityList(res.data));
             } catch (err) {
                 if (signal.aborted) return;
                 console.error("Failed to fetch daily activity", err);
                 setError("טעינת יומן הפעילות נכשלה");
-            } finally {
-                if (!signal.aborted) setLoading(false);
             }
+            // An aborted request has returned above, so this runs only for
+            // one that was answered or failed.
+            setLoading(false);
         };
 
         fetchActivity();

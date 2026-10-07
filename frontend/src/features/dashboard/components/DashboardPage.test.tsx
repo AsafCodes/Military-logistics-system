@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { CanceledError } from 'axios';
 import DashboardPage from './DashboardPage';
 import api from '@/lib/axios';
@@ -44,6 +45,50 @@ describe('DashboardPage: the first read (FE-H5)', () => {
 
         expect(await screen.findByText(INIT_ERROR)).toBeInTheDocument();
         expect(error).toHaveBeenCalledWith('Failed to init', failure);
+    });
+});
+
+/**
+ * FE-H6-2. The first load moved inside its effect and its `finally` became a
+ * statement after the try/catch. The spinner still covers both stages.
+ */
+describe('DashboardPage: the spinner covers the whole first load (FE-H6-2)', () => {
+    it('shows only the spinner in the first frame, before any effect has run', () => {
+        const markup = renderToStaticMarkup(<DashboardPage />);
+        expect(markup).toContain('animate-spin');
+        expect(markup).not.toContain('רענן');
+    });
+
+    it('keeps the spinner while the data reads are out, and drops it when they answer', async () => {
+        const { held } = holdGets(api, {
+            '/users/me': TEST_USER,
+            '/tickets/?status_filter=Open': [],
+            '/reports/daily_movement': [],
+        });
+        const { container } = render(<DashboardPage />);
+        await waitFor(() => expect(held).toHaveLength(2));
+        await act(async () => { });
+
+        expect(container.querySelector('.animate-spin')).not.toBeNull();
+        expect(screen.queryByText(new RegExp(TEST_USER.full_name))).toBeNull();
+
+        await act(async () => {
+            held[0].resolve(DATA_LOADS['/analytics/unit_readiness']);
+            held[1].resolve([]);
+        });
+        expect(screen.getByText(new RegExp(TEST_USER.full_name))).toBeInTheDocument();
+    });
+
+    it('drops the spinner when a data read fails, and shows that error', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, { '/users/me': TEST_USER });
+        const { container } = render(<DashboardPage />);
+        await waitFor(() => expect(held).toHaveLength(2));
+
+        await act(async () => { held[0].reject(new Error('timeout of 10000ms exceeded')); });
+
+        expect(container.querySelector('.animate-spin')).toBeNull();
+        expect(screen.getByText('Failed to load system data.')).toBeInTheDocument();
     });
 });
 

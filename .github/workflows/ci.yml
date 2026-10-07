@@ -125,13 +125,14 @@ jobs:
 
     # WAIVER (frontend lint backlog). Same arrangement as the ruff waiver
     # above -- annotated, not enforced, yet. FE-H6-1 measured 13 errors and
-    # cleared them, so this step reports 0 errors and 2 warnings. It stays
-    # waived all the same. The React Compiler gives up on a component or hook
-    # that holds a `try ... finally`, the rule set in use does not report
-    # that, and the rules built on the compiler then stay silent for it
-    # (INF-L4 describes the mechanism). Measured at FE-H6-1: 17 `finally`
-    # clauses in 15 components and hooks, hiding at least 9 more errors.
-    # The rest of FE-H6 fixes those and then turns this step into a gate.
+    # cleared them, and FE-H6-2 cleared the 2 warnings, so this step reports
+    # no problems. It stays waived all the same. The React Compiler gives up
+    # on a component or hook that holds a `try ... finally`, the rule set in
+    # use does not report that, and the rules built on the compiler then stay
+    # silent for it (INF-L4 describes the mechanism). Measured at FE-H6-2:
+    # 8 `finally` clauses are left in six files (six data loads and two
+    # write handlers), hiding at least 5 more errors. The rest of FE-H6
+    # fixes those and then turns this step into a gate.
     - name: Lint with ESLint
       continue-on-error: true
       run: npm run lint

@@ -31,9 +31,8 @@ export default function Login({ onLogin }: LoginProps) {
             const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
             const msg = detail || 'Login failed. Check your connection.';
             setError(msg);
-        } finally {
-            setIsLoading(false);
         }
+        setIsLoading(false);
     };
 
     return (

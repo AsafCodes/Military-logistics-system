@@ -67,9 +67,8 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             await onLogin(values);
         } catch {
             setServerError("שגיאת התחברות: בדוק את הפרטים או את החיבור לרשת.");
-        } finally {
-            setIsLoading(false);
         }
+        setIsLoading(false);
     };
 
     return (

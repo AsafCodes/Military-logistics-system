@@ -20,6 +20,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import DailyActivityTable from './DailyActivityTable';
 import api from '@/lib/axios';
 
@@ -144,5 +145,38 @@ describe('DailyActivityTable: a real failure is still reported (FE-H5)', () => {
 
         expect(await screen.findByText('טעינת יומן הפעילות נכשלה')).toBeInTheDocument();
         expect(error).toHaveBeenCalledWith('Failed to fetch daily activity', failure);
+    });
+});
+
+/**
+ * FE-H6-2. The read's `finally` became a statement after the try/catch, and
+ * the check on the response's shape moved into a helper.
+ */
+describe('DailyActivityTable: loading and the response shapes (FE-H6-2)', () => {
+    const LOADING = 'טוען פעילות...';
+    const EMPTY = 'אין פעילות מתועדת ב-24 השעות האחרונות';
+    const answerWith = (data: unknown) => vi.spyOn(api, 'get').mockResolvedValue({ data });
+
+    it('shows loading in the first frame, before any effect has run', () => {
+        expect(renderToStaticMarkup(<DailyActivityTable />)).toContain(LOADING);
+    });
+
+    it('stops loading once a flat array has answered', async () => {
+        answerWith([ACTIVITY_ITEM]);
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(ACTIVITY_ITEM.serial_number)).toBeInTheDocument();
+        expect(screen.queryByText(LOADING)).toBeNull();
+    });
+
+    it('also reads rows from an { items } body', async () => {
+        answerWith({ items: [ACTIVITY_ITEM] });
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(ACTIVITY_ITEM.serial_number)).toBeInTheDocument();
+    });
+
+    it.each([[null], [{}], [{ items: null }]])('treats a body of %j as no activity', async (body) => {
+        answerWith(body);
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(EMPTY)).toBeInTheDocument();
     });
 });
