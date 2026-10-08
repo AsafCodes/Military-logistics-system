@@ -123,21 +123,16 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    # WAIVER (frontend lint backlog). Same arrangement as the ruff waiver
-    # above -- annotated, not enforced, yet. FE-H6-1 measured 13 errors and
-    # cleared them, and FE-H6-2 cleared the 2 warnings, so this step reports
-    # no problems. It stays waived all the same. The React Compiler gives up
-    # on a component or hook that holds a `try ... finally`, the rule set in
-    # use does not report that, and the rules built on the compiler then stay
-    # silent for it (INF-L4 describes the mechanism). FE-H6-3 removed the
-    # last 8 such clauses and the 5 errors they hid; measured with the
-    # compiler's own diagnostics switched on, nothing is reported now. But
-    # this step still cannot see a `finally` that comes back, and
-    # set-state-in-effect checks only the calls written directly in an
-    # effect, not what a function called from one does. FE-H6-4 turns the
-    # compiler's diagnostics on here and then makes this step a gate.
+    # Hard gate since FE-H6-4. The script runs with `--max-warnings 0`, so a
+    # warning fails this step as an error does. It also fails on a component
+    # or hook the React Compiler gives up on, which the compiler-backed rules
+    # would otherwise skip without a word (INF-L4). A limit it does not
+    # lift: set-state-in-effect checks only the calls written directly in an
+    # effect, not what a function called from one does.
+    # frontend/src/lintGate.test.ts fails if this step or its job is given
+    # `continue-on-error` or an `if:`, and if a .ts or .tsx file carries a
+    # disable comment for a react-hooks rule.
     - name: Lint with ESLint
-      continue-on-error: true
       run: npm run lint
 
     # Hard gate. `npm run build` is `tsc -b && vite build`, so this covers
@@ -146,8 +141,9 @@ jobs:
     - name: Typecheck and build
       run: npm run build
 
-    # Hard gate from the day it lands, deliberately unlike the two lint waivers
-    # above. The frontend had no test framework at all until SEC-H9; there is no
-    # backlog to forgive, so a failure here is always a real regression.
+    # Hard gate from the day it lands, deliberately unlike the ruff waiver in
+    # the backend job. The frontend had no test framework at all until SEC-H9;
+    # there is no backlog to forgive, so a failure here is always a real
+    # regression.
     - name: Run tests
       run: npm run test
