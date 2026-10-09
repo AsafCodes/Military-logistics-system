@@ -135,10 +135,17 @@ jobs:
     - name: Lint with ESLint
       run: npm run lint
 
-    # Hard gate. `npm run build` is `tsc -b && vite build`, so this covers
-    # typecheck and build in one step. It passes today, which is what makes it
-    # usable as a gate.
-    - name: Typecheck and build
+    # Hard gate (FE-H7). `npm run typecheck` is `tsc -b`, which checks both
+    # projects tsconfig.json references and writes no JavaScript. Its own step,
+    # so a type error fails here by name and not inside the build.
+    - name: Typecheck
+      run: npm run typecheck
+
+    # Hard gate. `npm run build` runs the typecheck script again before
+    # `vite build`, so that script typechecks wherever it is run.
+    # frontend/src/typecheckConfig.test.ts pins both scripts, and reads both
+    # steps and their job for `continue-on-error` and `if:`.
+    - name: Build
       run: npm run build
 
     # Hard gate from the day it lands, deliberately unlike the ruff waiver in

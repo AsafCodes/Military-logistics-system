@@ -13,10 +13,11 @@
  *
  * Each probe below must FAIL to typecheck. If one of these eight elements is
  * loosened in the way its probe checks, that `@ts-expect-error` goes unused
- * (TS2578), `tsc -b` fails, and so does `npm run build`, which is a hard CI
- * gate. A loosening that leaves the probed fault an error, or one that touches
- * another element, goes unnoticed. Each probe line carries exactly one fault,
- * because `@ts-expect-error` accepts any error on its line.
+ * (TS2578), and `tsc -b` fails. That is `npm run typecheck`, a hard CI gate,
+ * and `npm run build` runs it first. A loosening that leaves the probed fault
+ * an error, or one that touches another element, goes unnoticed. Each probe
+ * line carries exactly one fault, because `@ts-expect-error` accepts any error
+ * on its line.
  *
  * Nothing imports this file, so vite never bundles it. Its name does not match
  * vitest's `*.test.*` / `*.spec.*` glob, so vitest never runs it. `tsc -b`

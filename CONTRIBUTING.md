@@ -62,3 +62,5 @@ git branch -d feat/login-page
 
 - Run backend tests: `pytest`
 - Run frontend linting: `npm run lint`
+- Run the frontend typecheck: `npm run typecheck`
+- Run frontend tests: `npm run test`

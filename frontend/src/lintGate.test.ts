@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { ESLint } from 'eslint';
 import tseslint from 'typescript-eslint';
+import { ciJobSettings, ciStep } from './test/ciWorkflow';
 
 /**
  * FE-H6 / INF-L4: lint is a gate, and this keeps it one.
@@ -218,35 +219,11 @@ describe('lint gate (FE-H6, INF-L4)', () => {
     });
 
     it('has no waiver on the CI lint step or on its job', () => {
-        // Read as text: this project declares no YAML parser. A missing file
-        // throws, which is a failure and not a skip.
-        const workflow = readFileSync(resolve(ROOT, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
-        const lines = workflow.split(/\r?\n/);
-        const meaningful = (block: string[]) => block
-            .map(line => line.trim())
-            .filter(line => line !== '' && !line.startsWith('#'));
-
-        const starts = lines.flatMap((line, i) => (/^\s*- name: Lint with ESLint\s*$/.test(line) ? [i] : []));
-        expect(starts).toHaveLength(1);
-        const [start] = starts;
-
-        const after = lines.slice(start + 1);
-        const next = after.findIndex(line => /^\s*- /.test(line) || /^\S/.test(line));
         // The whole step, so that `continue-on-error`, an `if:`, or a command
         // that bypasses the script's flag each fail this.
-        expect(meaningful([lines[start], ...(next === -1 ? after : after.slice(0, next))]))
-            .toEqual(['- name: Lint with ESLint', 'run: npm run lint']);
+        expect(ciStep('Lint with ESLint')).toEqual(['- name: Lint with ESLint', 'run: npm run lint']);
 
-        // The job the step belongs to: a job is a key at two spaces, and its
-        // own settings are the keys at four, before or after its steps. The
-        // job ends at the next line indented less than that.
-        const job = lines.slice(0, start).map(line => /^ {2}[\w-]+:\s*$/.test(line)).lastIndexOf(true);
-        expect(job).toBeGreaterThan(-1);
-        const rest = lines.slice(job + 1);
-        const end = rest.findIndex(line => /^ {0,2}\S/.test(line));
-        const settings = (end === -1 ? rest : rest.slice(0, end))
-            .filter(line => /^ {4}[\w-]+:/.test(line))
-            .map(line => line.trim().split(':')[0]);
+        const settings = ciJobSettings('Lint with ESLint');
         expect(settings).toContain('steps');
         expect(settings).not.toContain('continue-on-error');
         expect(settings).not.toContain('if');

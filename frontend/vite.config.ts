@@ -27,7 +27,7 @@ export default defineConfig({
     // 'vitest' explicitly, so `globals` is deliberately off -- switching it on
     // would advertise a convention no file here follows, and the globals would
     // be untyped besides (no tsconfig carries vitest/globals), so the first
-    // author to trust it gets a `tsc -b` failure from the CI build gate.
+    // author to trust it gets a `tsc -b` failure from the CI typecheck gate.
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     // Restores spies between tests once, centrally, instead of every file
     // remembering a restoreAllMocks hook -- including files not written yet.
