@@ -13,9 +13,9 @@ so that what the Dockerfile's comment says about the trust list and the worker
 count is measured rather than quoted from help text.
 
 What is NOT covered:
-  - that the image builds, or that either stack starts under Docker. No test
-    and no CI job builds this image (the `frontend-image` job builds the
-    frontend's);
+  - the image run under Docker with its own command. The `compose-stack` CI
+    job builds this image and starts it, but with the development stack's
+    command and mounts in place of the image's own;
   - an ENTRYPOINT inherited from the base image;
   - FORWARDED_ALLOW_IPS set in docker-compose.yml's `environment:`.
 

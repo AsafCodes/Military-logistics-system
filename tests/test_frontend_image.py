@@ -25,7 +25,9 @@ What is NOT covered here:
     decides, for one, what Content-Type a .js file gets and so whether
     `gzip_types` matches it;
   - what the .dockerignore patterns match. Its lines are compared as text;
-  - that the development stack starts under Docker;
+  - that the development stack starts under Docker. The `compose-stack` CI
+    job starts it and asks the development server for its page
+    (tests/test_backend_mounts.py);
   - an ENTRYPOINT inherited from a base image. The nginx image has one, and
     it runs the CMD it is given.
 

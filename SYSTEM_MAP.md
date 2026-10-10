@@ -353,7 +353,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
 | `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
-| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image |
+| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image. Compose mounts `backend/`, `alembic/` and `alembic.ini` from the host, read-only; the rest of `/app` is as built, and the host's `.env` is not in the container |
 | `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf` |
 
 ### Database Connection

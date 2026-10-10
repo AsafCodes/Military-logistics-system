@@ -25,17 +25,39 @@ services:
       # Note what this line does: it INVERTS security.py's fail-secure default
       # for anything started from this file, so here "unset" means insecure.
       # That is correct for what this file is -- the local http development
-      # stack, with hardcoded localhost CORS origins and the repository bind-
-      # mounted over /app (SEC-M15) -- and it is wrong for anything else. A real
-      # deployment must not be derived from this compose file; if one ever is,
-      # this default is the first line to delete.
+      # stack, with hardcoded localhost CORS origins and host source
+      # bind-mounted into /app (INF-H3) -- and it is wrong for anything else. A
+      # real deployment must not be derived from this compose file; if one ever
+      # is, this default is the first line to delete.
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
+    # INF-H3. Development only: the paths the server loads from /app, taken
+    # from the host so that the container runs the working tree's code. The
+    # rest of /app is what the image was built with. A change to
+    # requirements.txt, or a new module beside backend/, needs
+    # `docker compose up --build`.
+    #
+    # The repository as a whole is not mounted. That put .env, .git and the
+    # local database file inside the container, which .dockerignore keeps out
+    # of the image (SEC-M15). The server does not need .env: DATABASE_URL,
+    # SECRET_KEY and COOKIE_SECURE are in `environment:` above. A line in
+    # .env no longer reaches a command run in the container either, so
+    # SEED_ENABLED and BOOTSTRAP_ADMIN_ENABLED are given per run:
+    # `docker compose exec -e SEED_ENABLED=1 backend python -m backend.seed_data`.
+    #
+    # Read-only: nothing in the container writes to the host tree. A command
+    # that writes into these paths, `alembic revision` for one, fails here
+    # and is run on the host, against the host's own DATABASE_URL.
+    #
+    # tests/test_backend_mounts.py holds this list, and the `compose-stack`
+    # CI job starts the stack and looks inside the container.
     volumes:
-      - ./:/app
+      - ./backend:/app/backend:ro
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
     # Ensure hot reload works well by overriding default restart policy if needed
     restart: unless-stopped
     # INF-H1. Development only: restart the server when a source file under
-    # the bind mount changes. This replaces the image's own command
+    # the bind mounts changes. This replaces the image's own command
     # (Dockerfile.backend), which has no watcher. No --workers: the reloader
     # runs one server process whatever the count says.
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

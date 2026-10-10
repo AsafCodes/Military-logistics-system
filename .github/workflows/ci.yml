@@ -174,8 +174,8 @@ jobs:
   # of that configuration, is shown here and nowhere else. That test also
   # fails if this job or a step in it is given `continue-on-error` or an `if:`.
   #
-  # Not covered: the backend image, and the stack docker-compose.yml starts
-  # (INF-L10).
+  # Not covered here: the backend image and the stack docker-compose.yml
+  # starts. The `compose-stack` job below builds and starts both.
   frontend-image:
     runs-on: ubuntu-latest
 
@@ -240,3 +240,108 @@ jobs:
         if docker exec frontend-image sh -c 'command -v node'; then
           echo "the image contains node"; exit 1
         fi
+
+  # INF-H3. The only place the stack docker-compose.yml describes is started.
+  # It builds both services' images (so this is also the only place
+  # Dockerfile.backend is built), starts the three containers, and looks at
+  # the backend one: what is in /app, what is mounted there and how, and
+  # whether a file created on the host reaches the running server. It also
+  # asks the frontend service for its page.
+  # tests/test_backend_mounts.py reads the compose file without Docker; that
+  # test also fails if this job or a step in it is given `continue-on-error`
+  # or an `if:`.
+  #
+  # Not covered: the backend image run with its own command. Compose replaces
+  # that command, and mounts host source over part of what the image holds.
+  compose-stack:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # docker-compose.yml refuses to start without these. They are throwaway
+    # values for containers that live as long as this job. The file is also
+    # what the first probe below is about: a checkout has no .env, and with
+    # none on the host "there is no .env in the container" would show nothing.
+    - name: Write a throwaway .env
+      run: |
+        cat > .env <<'EOF'
+        SECRET_KEY=compose-stack-job-throwaway-secret
+        POSTGRES_USER=stack
+        POSTGRES_PASSWORD=stack-job-throwaway
+        EOF
+
+    - name: Build and start the stack
+      run: docker compose up -d --build
+
+    # As in the job above, each "must not" is an `if`: `set -e` ignores a
+    # command with a `!` in front of it.
+    - name: Probe the backend container
+      run: |
+        set -euo pipefail
+        trap 'docker compose logs || true' ERR
+        api=http://localhost:8000
+        ui=http://localhost:3000
+        started='Started server process'
+        notice="detected changes in 'backend/reload_probe.py'"
+
+        # The backend answers. It waits for Postgres itself, so this can take
+        # a while on a database that is being created.
+        for attempt in $(seq 1 60); do
+          if curl -fsS -o /dev/null "$api/openapi.json"; then break; fi
+          sleep 1
+        done
+        curl -fsS -o /dev/null "$api/openapi.json"
+
+        # The two things looked for below exist on the host, and a command can
+        # be run in the container at all. Without these a probe that expects
+        # a failure would pass for the wrong reason.
+        test -f .env
+        test -e .git
+        docker compose exec -T backend test -f /app/backend/main.py
+
+        # What .dockerignore keeps out of the image is not in the container
+        # either: no mount puts it back.
+        if docker compose exec -T backend test -e /app/.env; then
+          echo "the host's .env is inside the container"; exit 1
+        fi
+        if docker compose exec -T backend test -e /app/.git; then
+          echo "the host's .git is inside the container"; exit 1
+        fi
+        databases=$(docker compose exec -T backend find /app -name '*.db')
+        test -z "$databases"
+
+        # Exactly the three mounts, each read-only. `grep .` drops the empty
+        # line docker prints after the last one.
+        container=$(docker compose ps -q backend)
+        mounts=$(docker inspect --format '{{range .Mounts}}{{.Type}} {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' "$container" | grep . | LC_ALL=C sort)
+        echo "$mounts"
+        test "$mounts" = "$(printf '%s\n' 'bind /app/alembic rw=false' 'bind /app/alembic.ini rw=false' 'bind /app/backend rw=false')"
+        if docker compose exec -T backend touch /app/backend/written-from-the-container; then
+          echo "the container wrote to the host's source tree"; exit 1
+        fi
+
+        # A file written on the host is in the container, and the reloader
+        # restarts the server for it. A new file, not an edit, so that no
+        # file git tracks is changed.
+        docker compose logs backend > backend.log 2>&1
+        before=$(grep -c "$started" backend.log)
+        echo '# Written by the compose-stack CI job.' > backend/reload_probe.py
+        docker compose exec -T backend test -f /app/backend/reload_probe.py
+        for attempt in $(seq 1 60); do
+          docker compose logs backend > backend.log 2>&1
+          if grep -qF "$notice" backend.log && test "$(grep -c "$started" backend.log)" -gt "$before" && curl -fsS -o /dev/null "$api/openapi.json"; then break; fi
+          sleep 1
+        done
+        grep -qF "$notice" backend.log
+        test "$(grep -c "$started" backend.log)" -gt "$before"
+        curl -fsS -o /dev/null "$api/openapi.json"
+
+        # The frontend service is Vite's development server: the page it
+        # serves loads the source entry, which the built image's page must not.
+        for attempt in $(seq 1 60); do
+          if curl -fsS -o /dev/null "$ui/"; then break; fi
+          sleep 1
+        done
+        curl -fsS -o ui.html "$ui/"
+        grep -q '/src/main.tsx' ui.html

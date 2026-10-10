@@ -12,8 +12,9 @@ load_dotenv()
 
 # DATA-H11. No fallback, deliberately. This used to default to
 # sqlite:///./sql_app.db, so a deployment that forgot the variable came up
-# looking healthy on an ephemeral file -- and under docker-compose.yml's
-# ./:/app bind mount that file materialises inside the source tree.
+# looking healthy on an ephemeral file -- and under the ./:/app bind mount
+# docker-compose.yml had at the time, that file appeared in the host's
+# source tree (the mount is gone: INF-H3).
 #
 # Raised HERE rather than inside create_database_engine() so that every reader
 # of this constant may assume a non-empty str: create_database_engine below
