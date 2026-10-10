@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { ciJobSettings, ciStep } from './ciWorkflow';
 
 /**
- * The reader behind the CI pins in lintGate.test.ts and
- * typecheckConfig.test.ts, tried on workflows the real file does not hold.
+ * The reader behind the CI pins in lintGate.test.ts, typecheckConfig.test.ts
+ * and auditGate.test.ts, tried on workflows the real file does not hold.
  * Those pins are only as good as what this reader can see.
  */
 

@@ -123,6 +123,18 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    # Hard gate (FE-H8). `npm run audit:prod` is
+    # `npm audit --omit=dev --audit-level=high`: it fails on a high or critical
+    # advisory against `dependencies` or anything they pull in. It does not
+    # read `devDependencies`, and it lets moderate and low advisories through.
+    # It asks the registry for today's advisories, so it can fail on a commit
+    # that changed no dependency, and it fails when the registry does not
+    # answer.
+    # frontend/src/auditGate.test.ts pins the script, and reads this step and
+    # its job for `continue-on-error` and `if:`.
+    - name: Audit production dependencies
+      run: npm run audit:prod
+
     # Hard gate since FE-H6-4. The script runs with `--max-warnings 0`, so a
     # warning fails this step as an error does. It also fails on a component
     # or hook the React Compiler gives up on, which the compiler-backed rules

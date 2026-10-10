@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 /**
  * Reads .github/workflows/ci.yml for the tests that keep a CI step a gate
- * (lintGate.test.ts, typecheckConfig.test.ts).
+ * (lintGate.test.ts, typecheckConfig.test.ts, auditGate.test.ts).
  *
  * Read as text: this project declares no YAML parser. A missing file throws,
  * which is a failure and not a skip. What follows knows the block style the
