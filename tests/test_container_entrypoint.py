@@ -22,6 +22,7 @@ PyYAML is imported here and is not named in requirements.txt; it arrives
 through `uvicorn[standard]`.
 """
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -266,7 +267,10 @@ def test_the_image_reads_proxy_headers_and_takes_the_trust_list_from_the_environ
     # deployment that runs the command as it stands, and "*" would trust every
     # client.
     assert "forwarded_allow_ips" not in given_on_the_command_line(argv)
-    assert configured(argv).forwarded_allow_ips == "127.0.0.1"
+    # The fallback is uvicorn's and differs by version: "127.0.0.1" in 0.52,
+    # "127.0.0.1,::1" in 0.54. What matters is that it is loopback only.
+    fallback = configured(argv).forwarded_allow_ips.split(",")
+    assert fallback and all(ipaddress.ip_address(entry).is_loopback for entry in fallback)
     assert configured(argv, FORWARDED_ALLOW_IPS="10.0.0.5").forwarded_allow_ips == "10.0.0.5"
 
 

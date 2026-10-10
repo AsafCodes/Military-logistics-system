@@ -22,7 +22,7 @@ COPY . .
 # (X-Forwarded-For, X-Forwarded-Proto). This is uvicorn's default as well, so
 # the flag changes no behaviour; it is here so the setting is written down.
 # Which peers are trusted comes from the FORWARDED_ALLOW_IPS environment
-# variable, read by uvicorn when it starts; unset, only 127.0.0.1 is trusted.
+# variable, read by uvicorn when it starts; unset, only loopback is trusted.
 # A proxy in another container connects from a different address, so its
 # headers are ignored until the variable names it. Do not add
 # --forwarded-allow-ips here: a trust-everything value would let any client
