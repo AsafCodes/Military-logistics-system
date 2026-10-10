@@ -7,4 +7,31 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# INF-H1. This is the production command: what the image runs when nothing
+# overrides it. It has no file watcher. The development stack asks for one
+# itself, with its own `command:` in docker-compose.yml.
+#
+# --workers 1 is a decision, not a leftover. backend/main.py migrates the
+# database in its lifespan handler, which runs once per worker process, so
+# more than one worker would run the migrations concurrently. The flag is
+# written out because without it uvicorn takes the count from the environment
+# (WEB_CONCURRENCY). Raising it needs the migration race closed first
+# (DATA-M24).
+#
+# --proxy-headers: a trusted proxy supplies the client address and scheme
+# (X-Forwarded-For, X-Forwarded-Proto). This is uvicorn's default as well, so
+# the flag changes no behaviour; it is here so the setting is written down.
+# Which peers are trusted comes from the FORWARDED_ALLOW_IPS environment
+# variable, read by uvicorn when it starts; unset, only 127.0.0.1 is trusted.
+# A proxy in another container connects from a different address, so its
+# headers are ignored until the variable names it. Do not add
+# --forwarded-allow-ips here: a trust-everything value would let any client
+# choose the address the server believes it has.
+#
+# Do not set UVICORN_* variables in this file either. uvicorn takes any option
+# from a UVICORN_<OPTION> variable, so one would change this command without
+# appearing in it.
+#
+# tests/test_container_entrypoint.py reads this line and starts a server with
+# its flags.
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers"]

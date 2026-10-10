@@ -47,9 +47,9 @@ async def lifespan(app: FastAPI):
     semantics, not an oversight.
 
     NOT a fix for the multi-worker race: lifespan runs once per worker process,
-    so N workers still run N migrations concurrently. Nothing in this repo runs
-    more than one worker today; a deployment that does needs the migration
-    hoisted out of the server entirely.
+    so N workers still run N migrations concurrently. Dockerfile.backend's
+    command names one worker for this reason (INF-H1); a deployment that wants
+    more needs the migration hoisted out of the server entirely.
     """
     wait_for_db()
     run_migrations()

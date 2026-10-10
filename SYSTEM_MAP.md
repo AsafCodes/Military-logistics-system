@@ -98,7 +98,7 @@ Marker_System/
 │       └── types/
 │           └── index.ts                     # TypeScript interfaces
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
-├── Dockerfile.backend          # Python 3.10 + uvicorn
+├── Dockerfile.backend          # Python 3.10 + uvicorn (production command; compose replaces it with a --reload one)
 ├── frontend/Dockerfile         # Node frontend container
 ├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
 ├── alembic/                    # Migration environment + versions/
@@ -353,7 +353,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
 | `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
-| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn with hot-reload |
+| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image |
 | `frontend` | `frontend/Dockerfile` (Node) | `3000` | React dev server |
 
 ### Database Connection

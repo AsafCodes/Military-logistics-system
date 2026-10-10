@@ -34,6 +34,11 @@ services:
       - ./:/app
     # Ensure hot reload works well by overriding default restart policy if needed
     restart: unless-stopped
+    # INF-H1. Development only: restart the server when a source file under
+    # the bind mount changes. This replaces the image's own command
+    # (Dockerfile.backend), which has no watcher. No --workers: the reloader
+    # runs one server process whatever the count says.
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:
     build:
