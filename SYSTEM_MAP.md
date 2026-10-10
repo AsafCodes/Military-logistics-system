@@ -99,7 +99,7 @@ Marker_System/
 │           └── index.ts                     # TypeScript interfaces
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
 ├── Dockerfile.backend          # Python 3.10 + uvicorn (production command; compose replaces it with a --reload one)
-├── frontend/Dockerfile         # Node frontend container
+├── frontend/Dockerfile         # Three stages: Node (`dev`, what compose runs), the build, then nginx serving it (the image)
 ├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
 ├── alembic/                    # Migration environment + versions/
 ├── requirements.txt            # Python dependencies
@@ -354,7 +354,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 |---------|---------------|------|---------|
 | `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
 | `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image |
-| `frontend` | `frontend/Dockerfile` (Node) | `3000` | React dev server |
+| `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf` |
 
 ### Database Connection
 - **Docker:** `DATABASE_URL=postgresql://user:password@db:5432/military_db` (from env)
@@ -366,7 +366,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 |----------|-------|-------------|
 | `SECRET_KEY` | `.env` | JWT signing key (required, crashes if missing) |
 | `DATABASE_URL` | `docker-compose.yml` (containers); `.env` or shell (host) | Connection string (required, crashes if missing) |
-| `VITE_API_URL` | `docker-compose.yml` | Backend URL for frontend Axios |
+| `VITE_API_URL` | `docker-compose.yml` (dev server); `--build-arg` (image) | Backend URL for frontend Axios. Read when the JavaScript is built: the dev server reads it at start, the image has it fixed at `docker build` |
 | `SEED_ENABLED` | shell, per-run | Must be `1` for `seed_data.py` to run at all |
 | `BOOTSTRAP_ADMIN_ENABLED` | shell, per-run | Must be `1` for `bootstrap_admin.py` to create the first MASTER |
 

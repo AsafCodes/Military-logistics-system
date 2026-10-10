@@ -166,3 +166,77 @@ jobs:
     # regression.
     - name: Run tests
       run: npm run test
+
+  # INF-H2. The only place the frontend image is built and run. It builds
+  # frontend/Dockerfile to its last stage, starts the result, and requests
+  # pages from it. tests/test_frontend_image.py reads the Dockerfile and
+  # nginx.conf without Docker; whether the image builds, and what nginx makes
+  # of that configuration, is shown here and nowhere else. That test also
+  # fails if this job or a step in it is given `continue-on-error` or an `if:`.
+  #
+  # Not covered: the backend image, and the stack docker-compose.yml starts
+  # (INF-L10).
+  frontend-image:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # The address is a made-up one. The probe below looks for it in the built
+    # JavaScript, which shows that the build argument reaches the bundle.
+    - name: Build the frontend image
+      run: docker build --build-arg VITE_API_URL=https://api.example.test -t vector-frontend:ci ./frontend
+
+    # A `!` in front of a command would not stop this script (`set -e` ignores
+    # a negated command), so each "must not" is written as an `if`.
+    - name: Start the image and probe what it serves
+      run: |
+        set -euo pipefail
+        trap 'docker logs frontend-image || true' ERR
+        base=http://localhost:3000
+        html=/usr/share/nginx/html
+
+        docker run -d --name frontend-image -p 3000:3000 vector-frontend:ci
+        for attempt in $(seq 1 30); do
+          if curl -fsS -o /dev/null "$base/"; then break; fi
+          sleep 1
+        done
+
+        # The page: HTML, the built one, and told to be revalidated.
+        curl -fsS -D root.headers -o root.html "$base/"
+        grep -qi '^content-type: text/html' root.headers
+        grep -qi '^cache-control: no-cache' root.headers
+        grep -q '<div id="root">' root.html
+        if grep -q '/src/main.tsx' root.html; then
+          echo "index.html still loads the source entry: this is not a build"; exit 1
+        fi
+
+        # A route the browser handles gets the same page.
+        curl -fsS -o deep.html "$base/dashboard"
+        cmp root.html deep.html
+
+        # The script the page names: served as JavaScript, cacheable for good,
+        # and compressed for a client that asks.
+        script=$(sed -n 's/.*<script[^>]*src="\([^"]*\)".*/\1/p' root.html)
+        case "$script" in
+          /assets/*.js) ;;
+          *) echo "unexpected script reference: '$script'"; exit 1 ;;
+        esac
+        curl -fsS -H 'Accept-Encoding: gzip' -D script.headers -o /dev/null "$base$script"
+        grep -qi '^content-type: .*javascript' script.headers
+        grep -qi '^cache-control: .*immutable' script.headers
+        grep -qi '^content-encoding: gzip' script.headers
+
+        # An asset that does not exist is a 404, not the page.
+        status=$(curl -s -o /dev/null -w '%{http_code}' "$base/assets/nope.js")
+        test "$status" = 404
+
+        # The build argument is in the bundle.
+        docker exec frontend-image grep -rlF 'https://api.example.test' "$html/assets"
+
+        # No source maps, and no Node in the image.
+        maps=$(docker exec frontend-image find "$html" -name '*.map')
+        test -z "$maps"
+        if docker exec frontend-image sh -c 'command -v node'; then
+          echo "the image contains node"; exit 1
+        fi

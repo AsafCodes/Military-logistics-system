@@ -44,6 +44,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # INF-H2. The first stage of that file: Node, the installed
+      # dependencies and the source. The image itself, its last stage, is
+      # nginx serving a production build, and this stack does not run it.
+      #
+      # A frontend container that already exists keeps its anonymous
+      # /app/node_modules volume when it is recreated, so a rebuild alone
+      # does not replace what was installed before (INF-M5).
+      # `docker compose up --build -V` does.
+      target: dev
     ports:
       - "3000:3000"
     depends_on:
@@ -53,6 +62,10 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules # Avoid overwriting container node_modules with host's if host does not have them or OS mismatch
+    # INF-H2. Development only: Vite's development server, which rebuilds on
+    # a change under the bind mount. The `dev` stage sets no command, so
+    # without this line it would start the node image's `node`.
+    command: ["npm", "run", "dev"]
 
 volumes:
   postgres_data:

@@ -14,7 +14,8 @@ count is measured rather than quoted from help text.
 
 What is NOT covered:
   - that the image builds, or that either stack starts under Docker. No test
-    and no CI job builds an image;
+    and no CI job builds this image (the `frontend-image` job builds the
+    frontend's);
   - an ENTRYPOINT inherited from the base image;
   - FORWARDED_ALLOW_IPS set in docker-compose.yml's `environment:`.
 

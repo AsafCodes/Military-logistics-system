@@ -1,0 +1,21 @@
+# What `docker build ./frontend` does not send to the builder (INF-H6). The
+# root .dockerignore does not apply here: it belongs to the backend's context.
+
+# Installed and built on the host, for the host's platform. The image installs
+# and builds its own; these would be copied over them.
+node_modules
+dist
+dist-ssr
+
+# Vite reads .env files at build time, so one of these could decide what the
+# image's JavaScript contains.
+.env
+.env.*
+*.local
+
+# Logs
+*.log
+
+# Editor directories
+.vscode
+.idea
