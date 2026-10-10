@@ -29,15 +29,28 @@ export default defineConfig({
     // be untyped besides (no tsconfig carries vitest/globals), so the first
     // author to trust it gets a `tsc -b` failure from the CI typecheck gate.
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
-    // Restores spies between tests once, centrally, instead of every file
-    // remembering a restoreAllMocks hook -- including files not written yet.
+    // Two settings, one job: no test sees a `vi.spyOn` or a `vi.fn()` as an
+    // earlier test left it, without every file remembering a hook -- including
+    // files not written yet. `restoreMocks` puts back what `vi.spyOn`
+    // replaced. `mockReset` empties the call history of every `vi.fn()` and
+    // drops what a test configured on it. Vitest 3 did both under
+    // `restoreMocks` alone; Vitest 4 split them (FE-H8-2), and without
+    // `mockReset` a `vi.fn()` shared by two tests lets `toHaveBeenCalled()`
+    // pass on the earlier test's call. src/test/mockIsolation.test.ts pins
+    // both. Neither undoes `vi.stubEnv`, `vi.stubGlobal` or fake timers: a
+    // file that uses those still needs its own hook.
     //
-    // CAVEAT, and it bites silently: this also strips the implementation off a
-    // `vi.fn()` created inside a `vi.mock(...)` FACTORY, from the first test
-    // onward. Such a mock then returns undefined and the tests around it can
-    // keep passing while the mocked module is quietly broken. Write module
-    // factories with plain functions -- `() => Promise.resolve(x)` -- and keep
-    // vi.fn() for spies you actually assert on.
+    // CAVEAT, and it bites silently: `mockReset` also strips what was
+    // configured on a `vi.fn()` created inside a `vi.mock(...)` FACTORY --
+    // `vi.fn().mockResolvedValue(x)` -- before every test that starts after
+    // the factory has run. For a module the test file imports at the top,
+    // that is every test, the first included. Such a mock then returns
+    // undefined and the tests around it can keep passing while the mocked
+    // module is quietly broken. An implementation passed as the argument,
+    // `vi.fn(() => x)`, survives. Write module factories with plain functions
+    // -- `() => Promise.resolve(x)` -- and keep vi.fn() for spies you
+    // actually assert on.
     restoreMocks: true,
+    mockReset: true,
   },
 })

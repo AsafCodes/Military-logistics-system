@@ -43,11 +43,11 @@ vi.mock('@/components/ui/NetworkGlobe', () => ({
 // actually arrives. If a future test forgets to, it gets "nobody is signed
 // in" rather than a session built from the `[]` the data calls receive.
 //
-// Plain functions, NOT vi.fn().mockResolvedValue(): `restoreMocks` in
-// vite.config.ts strips implementations off spies created in a module factory,
-// from the very first test. Written as spies these returned `undefined`, the
-// dashboard did `.then()` on it, and the resulting render errors were invisible
-// because nothing here asserts on dashboard data.
+// Plain functions, NOT vi.fn().mockResolvedValue(): `mockReset` in
+// vite.config.ts strips what was configured on a spy created in a module
+// factory, from the very first test. Written as spies these returned
+// `undefined`, the dashboard did `.then()` on it, and the resulting render
+// errors were invisible because nothing here asserts on dashboard data.
 vi.mock('@/lib/axios', () => ({
     default: {
         get: (_url: string, config?: { skipAuthRedirect?: boolean }) => config?.skipAuthRedirect

@@ -2,7 +2,7 @@
  * SEC-H9's third clause: there was no error boundary anywhere in the tree, so
  * any throw during render unmounted everything and left a blank white page.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -13,7 +13,7 @@ function Boom(): React.ReactNode {
 describe('ErrorBoundary', () => {
     // React logs every caught error to console.error regardless, so a passing
     // run would otherwise read as a failing one. Restored centrally.
-    let logged: ReturnType<typeof vi.spyOn>;
+    let logged: MockInstance<typeof console.error>;
     beforeEach(() => {
         logged = vi.spyOn(console, 'error').mockImplementation(() => { });
     });
