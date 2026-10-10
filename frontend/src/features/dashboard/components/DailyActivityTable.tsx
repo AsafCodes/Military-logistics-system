@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle, ShieldAlert, PackagePlus, ClipboardCheck } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 
 // ============================================================
 // Types — matches the actual API response from /reports/daily_movement
@@ -91,6 +91,13 @@ function getEventLabel(eventType: string) {
     return eventMeta(eventType)?.label ?? (eventType || 'אירוע');
 }
 
+// The API returns a flat array, not { items: [...] }; the second shape is
+// still accepted.
+function activityList(data: unknown): DailyActivityItem[] {
+    if (Array.isArray(data)) return data;
+    return (data as { items?: DailyActivityItem[] } | null)?.items || [];
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -100,22 +107,28 @@ export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTa
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // FE-H5: unmounting aborts the request, and an aborted request is not
+    // reported as a failure.
     useEffect(() => {
+        const controller = new AbortController();
+        const { signal } = controller;
         const fetchActivity = async () => {
             try {
-                const res = await api.get('/reports/daily_movement');
-                // API returns a flat array, not { items: [...] }
-                const data = Array.isArray(res.data) ? res.data : (res.data?.items || []);
-                setActivities(data);
+                const res = await api.get('/reports/daily_movement', { signal });
+                if (signal.aborted) return;
+                setActivities(activityList(res.data));
             } catch (err) {
+                if (signal.aborted) return;
                 console.error("Failed to fetch daily activity", err);
                 setError("טעינת יומן הפעילות נכשלה");
-            } finally {
-                setLoading(false);
             }
+            // An aborted request has returned above, so this runs only for
+            // one that was answered or failed.
+            setLoading(false);
         };
 
         fetchActivity();
+        return () => controller.abort();
     }, []);
 
     if (loading) return (

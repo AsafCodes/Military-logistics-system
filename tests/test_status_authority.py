@@ -375,7 +375,8 @@ def test_a_novel_fault_type_is_pending_only_for_a_possession_only_reporter(
     approval, which is what a pending flag is for.
 
     Switch the query to RESOLVE_FAULT and the commander's fault type joins the
-    queue too -- a queue API-H6 records as having no way to drain it.
+    queue too, newly needing an approval it never needed before.
+    test_fault_type_approval_loop.py walks that queue to its end.
     """
     item = item_named(db_session, "SA100")
 

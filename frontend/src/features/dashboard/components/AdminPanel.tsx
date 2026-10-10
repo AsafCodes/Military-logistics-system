@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import api from '@/api';
+import { useState, useEffect, useCallback } from 'react';
+import api from '@/lib/axios';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 
 interface User {
     id: number;
@@ -16,11 +17,7 @@ interface GroupSummary {
     name: string;
 }
 
-interface AdminPanelProps {
-    onClose: () => void;
-}
-
-export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
+export default function AdminPanel() {
     const [groups, setGroups] = useState<GroupSummary[]>([]);
     // SEC-H10. The route guard in App.tsx is a client-side convenience, not
     // the real gate -- MANAGE_PERSONNEL is (list_groups gates on it via
@@ -52,42 +49,78 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [selectedGroupId, setSelectedGroupId] = useState("");
 
-    useEffect(() => {
+    // FE-H5: leaving the panel aborts the load still out. Retry shows only
+    // once a load has failed, so it never finds one to abort. Development
+    // StrictMode aborts the first load while the panel stays up; that load
+    // has no response, so without the guards it would show as 'network'.
+    const next = useLatestRequest();
+
+    const fetchGroups = useCallback(async () => {
+        const signal = next();
+        try {
+            const res = await api.get('/groups', { signal });
+            if (signal.aborted) return;
+            setGroups(res.data);
+            setGroupsError(null);
+        } catch (err) {
+            if (signal.aborted) return;
+            console.error("Failed to fetch groups", err);
+            const status = (err as { response?: { status?: number } })?.response?.status;
+            setGroupsError(status === 403 ? 'forbidden' : 'network');
+        }
+        setGroupsLoading(false);
+    }, [next]);
+
+    // Retry. The first load needs no setGroupsLoading: the flag starts true.
+    const reloadGroups = useCallback(() => {
+        setGroupsLoading(true);
         fetchGroups();
-    }, []);
+    }, [fetchGroups]);
+
+    // fetchGroups sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchGroups() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchGroups(); };
+        run();
+    }, [fetchGroups]);
 
     // Search Users Effect
+    //
+    // FE-H5: each run of this effect sends at most one request. Its cleanup
+    // runs whenever searchTerm changes, and on unmount: it cancels the timer
+    // if it has not fired and aborts the request if one was sent, so an
+    // earlier term's response can't land over a later term's results. An
+    // aborted run leaves isSearching alone; the latest run sets it when its
+    // timer fires, on either branch.
     useEffect(() => {
+        const controller = new AbortController();
+        const { signal } = controller;
         const delayDebounceFn = setTimeout(async () => {
             if (searchTerm.length > 1) {
                 setIsSearching(true);
                 try {
-                    const res = await api.get(`/users?q=${searchTerm}`);
+                    // FE-L6: a param, not interpolation, so axios encodes the term.
+                    const res = await api.get('/users', { params: { q: searchTerm }, signal });
+                    if (signal.aborted) return;
                     setSearchResults(res.data);
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    if (signal.aborted) return;
+                    console.error(e);
+                }
                 setIsSearching(false);
             } else {
                 setSearchResults([]);
+                setIsSearching(false);
             }
         }, 300);
 
-        return () => clearTimeout(delayDebounceFn);
+        return () => {
+            clearTimeout(delayDebounceFn);
+            controller.abort();
+        };
     }, [searchTerm]);
-
-    const fetchGroups = async () => {
-        setGroupsLoading(true);
-        try {
-            const res = await api.get('/groups');
-            setGroups(res.data);
-            setGroupsError(null);
-        } catch (err) {
-            console.error("Failed to fetch groups", err);
-            const status = (err as { response?: { status?: number } })?.response?.status;
-            setGroupsError(status === 403 ? 'forbidden' : 'network');
-        } finally {
-            setGroupsLoading(false);
-        }
-    };
 
     const handleUserSelect = (user: User) => {
         setSelectedUser(user);
@@ -104,7 +137,7 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
             });
             alert("קבוצה עודכנה בהצלחה!");
             setSelectedUser(null);
-        } catch (err) {
+        } catch {
             alert("עדכון הקבוצה נכשל.");
         }
     };
@@ -210,7 +243,7 @@ export default function AdminPanel({ onClose: _onClose }: AdminPanelProps) {
                                         </p>
                                         {groupsError === 'network' && (
                                             <button
-                                                onClick={fetchGroups}
+                                                onClick={reloadGroups}
                                                 className="text-sm text-primary hover:underline"
                                             >
                                                 נסה שוב

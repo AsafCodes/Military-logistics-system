@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import api from '@/api';
+import api from '@/lib/axios';
 
 interface LoginProps {
     onLogin: () => void;
@@ -26,13 +26,13 @@ export default function Login({ onLogin }: LoginProps) {
             localStorage.setItem('token', response.data.access_token);
             // Notify App component
             onLogin();
-        } catch (err: any) {
+        } catch (err) {
             console.error('Login failed:', err);
-            const msg = err.response?.data?.detail || 'Login failed. Check your connection.';
+            const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+            const msg = detail || 'Login failed. Check your connection.';
             setError(msg);
-        } finally {
-            setIsLoading(false);
         }
+        setIsLoading(false);
     };
 
     return (

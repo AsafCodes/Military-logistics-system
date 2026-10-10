@@ -34,7 +34,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import MaintenancePage from './MaintenancePage';
 import { TEST_CAPABILITIES, withCapabilities } from '@/test/setup';
-import api from '@/api';
+import api from '@/lib/axios';
 
 const BASE_TICKET = {
     id: 1,

@@ -9,10 +9,12 @@
  * permanently blank page. Not a transient error -- a dead application, until
  * someone thought to clear their browser storage.
  */
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from './App';
 import { authService } from './services';
+import type { Session } from './types';
 import {
     TEST_SESSION as SESSION,
     TEST_CAPABILITIES_NONE as NO_CAPS,
@@ -31,25 +33,26 @@ vi.mock('@/components/ui/NetworkGlobe', () => ({
     default: () => null,
 }));
 
-// ConnectionTest fires a real XHR at a hardcoded 127.0.0.1:8000 on mount and
-// dumps the resulting network error to stderr. Stubbed so a passing run reads
-// as one. Deleting the component for real is SEC-M13, a separate entry.
-vi.mock('./components/shared/ConnectionTest', () => ({
-    default: () => null,
-}));
-
-// The dashboard loads its own data on mount through the other axios client.
-// These tests are about the session bootstrap, not that data, and letting the
+// The dashboard loads its own data on mount through the shared client. These
+// tests are about the session bootstrap, not that data, and letting the
 // requests fly produces real network errors in the output.
 //
-// Plain functions, NOT vi.fn().mockResolvedValue(): `restoreMocks` in
-// vite.config.ts strips implementations off spies created in a module factory,
-// from the very first test. Written as spies these returned `undefined`, the
-// dashboard did `.then()` on it, and the resulting render errors were invisible
-// because nothing here asserts on dashboard data.
-vi.mock('@/api', () => ({
+// authService goes through this same client, so the mock answers the session
+// probe's signature (`skipAuthRedirect`) the way an anonymous visit is
+// answered: refused. Every test here stubs resolveSession, so the probe never
+// actually arrives. If a future test forgets to, it gets "nobody is signed
+// in" rather than a session built from the `[]` the data calls receive.
+//
+// Plain functions, NOT vi.fn().mockResolvedValue(): `mockReset` in
+// vite.config.ts strips what was configured on a spy created in a module
+// factory, from the very first test. Written as spies these returned
+// `undefined`, the dashboard did `.then()` on it, and the resulting render
+// errors were invisible because nothing here asserts on dashboard data.
+vi.mock('@/lib/axios', () => ({
     default: {
-        get: () => Promise.resolve({ data: [] }),
+        get: (_url: string, config?: { skipAuthRedirect?: boolean }) => config?.skipAuthRedirect
+            ? Promise.reject(Object.assign(new Error('401 (mocked)'), { response: { status: 401 } }))
+            : Promise.resolve({ data: [] }),
         post: () => Promise.resolve({ data: {} }),
         interceptors: { request: { use: () => { } }, response: { use: () => { } } },
     },
@@ -58,6 +61,13 @@ vi.mock('@/api', () => ({
 // The spinner is the only element with this class; App renders it while
 // isLoading is true and nothing else at all.
 const spinner = (container: HTMLElement) => container.querySelector('.animate-spin');
+
+// A test that starts at `/` and then clicks a nav item must wait for this
+// first. The catch-all route redirects `/` to /dashboard from an effect, and
+// the shell's nav is already on screen before that effect runs. A click in
+// that gap navigates, and the redirect then lands on top of it, so the app
+// stays on /dashboard and the clicked page never shows.
+const landedOnDashboard = () => waitFor(() => expect(window.location.pathname).toBe('/dashboard'));
 
 // Spy restoration and localStorage clearing are owned centrally --
 // `restoreMocks` in vite.config.ts and the afterEach in src/test/setup.ts.
@@ -76,7 +86,39 @@ describe('App bootstrap', () => {
         // check would be inert here: ErrorBoundary wraps <App/> in main.tsx and
         // is not in this tree at all, so it can never render. main.test.tsx
         // makes that assertion where it means something.
+        //
+        // The longer limit is for a starved machine. This is the file's first
+        // render of the login page and its first role query, and both cost
+        // more the first time. Under heavy CPU load the page was once still
+        // not on screen when the default one-second wait ran out.
+        expect(await screen.findByRole('button', { name: /sign in/i }, { timeout: 3000 })).toBeInTheDocument();
+    });
+
+    it('fires no XHR or fetch from the public login page', async () => {
+        // SEC-M13 / FE-H1-1. A connection widget used to sit on this page and,
+        // on mount, fire a bare request at a hardcoded backend address, then
+        // display that address to anyone who could reach the login screen
+        // whenever the request failed, and log the raw error. Deleting it left no test able to notice it coming
+        // back -- without a mock it just fires the request and logs an error,
+        // so this watches the transports themselves.
+        //
+        // One blind spot: a request made through `@/lib/axios` never reaches a
+        // transport here, because this file mocks that client wholesale.
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(null);
+        const open = vi.spyOn(XMLHttpRequest.prototype, 'open');
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        render(<App />);
         expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+        // A bare axios or fetch call reaches the transport synchronously inside
+        // the effect, so findByRole's await already catches it (the restored
+        // widget is caught without this line). A request issued after an
+        // `await` inside the effect lands a few microtasks later; one more
+        // macrotask covers that case too.
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(open).not.toHaveBeenCalled();
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('renders the authenticated shell when the cookie is recognised', async () => {
@@ -134,6 +176,56 @@ describe('App bootstrap', () => {
         expect(alerted).toHaveBeenCalled();
         expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
     });
+
+    it('FE-H5: unmounting aborts the session probe, and the cancelled probe raises no alert', async () => {
+        // The stub rejects on abort with the signal's reason, as the real
+        // resolveSession does. That rejection reaches establishSession's
+        // catch, which must recognise it as a cancel and not a fault.
+        const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
+        let probeSignal: AbortSignal | undefined;
+        const probe = vi.spyOn(authService, 'resolveSession').mockImplementation(signal => {
+            probeSignal = signal;
+            return new Promise((_, reject) => {
+                signal?.addEventListener('abort', () => reject(signal.reason));
+            });
+        });
+
+        const { unmount } = render(<App />);
+        await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+        expect(probeSignal?.aborted).toBe(false);
+
+        unmount();
+        expect(probeSignal?.aborted).toBe(true);
+        await act(async () => { });
+        expect(alerted).not.toHaveBeenCalled();
+    });
+
+    it('FE-H5: under StrictMode the cancelled first probe neither alerts nor ends the loading state', async () => {
+        // main.tsx renders <StrictMode>, so in development the mount effect
+        // runs, is cleaned up, and runs again: the first probe is cancelled at
+        // once and the second is the real one. The cancelled probe rejects
+        // first. If its null were taken as the answer, the login page would
+        // flash until the second probe lands.
+        const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
+        const probes: Array<{ signal?: AbortSignal; resolve: (session: Session | null) => void }> = [];
+        vi.spyOn(authService, 'resolveSession').mockImplementation(signal =>
+            new Promise((resolve, reject) => {
+                probes.push({ signal, resolve });
+                signal?.addEventListener('abort', () => reject(signal.reason));
+            }));
+
+        const { container } = render(<StrictMode><App /></StrictMode>);
+        await waitFor(() => expect(probes).toHaveLength(2));
+        expect(probes.map(p => p.signal?.aborted)).toEqual([true, false]);
+        await act(async () => { });
+
+        expect(spinner(container)).not.toBeNull();
+        expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
+        expect(alerted).not.toHaveBeenCalled();
+
+        probes[1].resolve(SESSION);
+        expect(await screen.findByText(/Master Admin/i)).toBeInTheDocument();
+    });
 });
 
 describe('SEC-H10: the /admin route guard', () => {
@@ -147,6 +239,7 @@ describe('SEC-H10: the /admin route guard', () => {
         render(<App />);
 
         expect(await screen.findByText('ניהול מערכת')).toBeInTheDocument();
+        await landedOnDashboard();
         fireEvent.click(screen.getByText('ניהול מערכת'));
 
         expect(await screen.findByText(/שיוך משתמשים לקבוצות/)).toBeInTheDocument();
@@ -168,6 +261,67 @@ describe('SEC-H10: the /admin route guard', () => {
         expect(screen.queryByText('ניהול מערכת')).toBeNull();
         // Landed in the shell (the `*` catch-all to /dashboard), not blanked.
         expect(await screen.findByText(/Master Admin/i)).toBeInTheDocument();
+    });
+});
+
+describe('API-H6: the /catalog route guard', () => {
+    // Each session holds exactly ONE of the two global verbs. SESSION holds
+    // both, so it cannot tell a guard keyed on MANAGE_CATALOG from one keyed
+    // on MANAGE_PERSONNEL -- or from one keyed on "holds any system verb".
+    // Brigade Tech Commander is the real account shaped like the first one.
+    const SESSION_CATALOG_ONLY = {
+        ...SESSION,
+        capabilities: { system: ['MANAGE_CATALOG'], anywhere: [] },
+    };
+    const SESSION_PERSONNEL_ONLY = {
+        ...SESSION,
+        capabilities: { system: ['MANAGE_PERSONNEL'], anywhere: [] },
+    };
+    const CATALOG_NAV = 'אישור סוגי תקלות';
+    // Text only the queue page renders -- its subtitle.
+    const QUEUE_PAGE = /אישור מוסיף את הסוג לרשימת הבחירה/;
+
+    beforeEach(() => {
+        window.history.pushState({}, '', '/');
+    });
+
+    it('offers the queue to a MANAGE_CATALOG holder who is not an admin', async () => {
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_CATALOG_ONLY);
+
+        render(<App />);
+
+        expect(await screen.findByText(CATALOG_NAV)).toBeInTheDocument();
+        expect(screen.queryByText('ניהול מערכת')).toBeNull();
+        await landedOnDashboard();
+        fireEvent.click(screen.getByText(CATALOG_NAV));
+
+        expect(await screen.findByText(QUEUE_PAGE)).toBeInTheDocument();
+    });
+
+    it('refuses the queue to an admin without MANAGE_CATALOG, even by URL', async () => {
+        window.history.pushState({}, '', '/catalog');
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_PERSONNEL_ONLY);
+
+        const { container } = render(<App />);
+
+        await waitFor(() => expect(spinner(container)).toBeNull());
+        // The admin's own item is still there, so the shell did render ...
+        expect(await screen.findByText('ניהול מערכת')).toBeInTheDocument();
+        // ... and the queue never mounted, from the nav or from the URL.
+        expect(screen.queryByText(CATALOG_NAV)).toBeNull();
+        expect(screen.queryByText(QUEUE_PAGE)).toBeNull();
+    });
+
+    it('refuses the queue to an ungranted user by URL, landing in the shell', async () => {
+        window.history.pushState({}, '', '/catalog');
+        vi.spyOn(authService, 'resolveSession').mockResolvedValue(SESSION_NO_ADMIN);
+
+        const { container } = render(<App />);
+
+        await waitFor(() => expect(spinner(container)).toBeNull());
+        expect(await screen.findByText(/Master Admin/i)).toBeInTheDocument();
+        expect(screen.queryByText(CATALOG_NAV)).toBeNull();
+        expect(screen.queryByText(QUEUE_PAGE)).toBeNull();
     });
 });
 

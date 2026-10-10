@@ -11,9 +11,11 @@
  * These tests pin the corrected, scoped behavior directly.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { CanceledError } from 'axios';
 import AdminPanel from './AdminPanel';
-import api from '@/api';
+import api from '@/lib/axios';
+import { holdGets, withAdapter } from '@/test/httpStubs';
 
 const GROUPS = [{ id: 1, name: 'Company A' }];
 const USER = { id: 1, full_name: 'Test User', personal_number: 'u_test' };
@@ -31,11 +33,11 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
     it('shows a real permission refusal on a 403, without breaking user search', async () => {
         vi.spyOn(api, 'get').mockImplementation((url: string) => {
             if (url === '/groups') return Promise.reject({ response: { status: 403 } });
-            if (url.startsWith('/users?q=')) return Promise.resolve({ data: [USER] });
+            if (url === '/users') return Promise.resolve({ data: [USER] });
             return Promise.resolve({ data: [] });
         });
 
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
 
         // Search still works while /groups is broken -- it never depended on it.
         await selectAUser();
@@ -48,11 +50,11 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
     it('offers a retry on a network failure, distinct wording from a 403, and recovers', async () => {
         const get = vi.spyOn(api, 'get').mockImplementation((url: string) => {
             if (url === '/groups') return Promise.reject(new Error('network down'));
-            if (url.startsWith('/users?q=')) return Promise.resolve({ data: [USER] });
+            if (url === '/users') return Promise.resolve({ data: [USER] });
             return Promise.resolve({ data: [] });
         });
 
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
         await selectAUser();
 
         expect(await screen.findByText(/טעינת רשימת הקבוצות נכשלה/)).toBeInTheDocument();
@@ -60,7 +62,7 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
 
         get.mockImplementation((url: string) => {
             if (url === '/groups') return Promise.resolve({ data: GROUPS });
-            if (url.startsWith('/users?q=')) return Promise.resolve({ data: [USER] });
+            if (url === '/users') return Promise.resolve({ data: [USER] });
             return Promise.resolve({ data: [] });
         });
         fireEvent.click(screen.getByText('נסה שוב'));
@@ -76,10 +78,169 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
             return Promise.resolve({ data: [] });
         });
 
-        render(<AdminPanel onClose={() => { }} />);
+        render(<AdminPanel />);
 
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/groups'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith(
+            '/groups', expect.objectContaining({ signal: expect.any(AbortSignal) })));
         expect(screen.queryByText(/טעינת רשימת הקבוצות נכשלה/)).toBeNull();
         expect(screen.queryByText(/אין לך הרשאה/)).toBeNull();
+    });
+});
+
+/**
+ * FE-H5. The search is debounced, but the debounce only cancels a timer that
+ * has not fired. Before this fix a request already sent was left to land, so
+ * an older term's response arriving after a newer one's replaced the newer
+ * results. Real timers throughout: each search waits out the 300 ms debounce
+ * inside waitFor's 1 s.
+ */
+const type = (value: string) =>
+    fireEvent.change(screen.getByPlaceholderText('התחל להקליד...'), { target: { value } });
+
+// The group selector shows only once a user is selected, so the sweep in
+// abortOnUnmount.test.tsx, which selects nobody, can't see its loading state.
+describe('AdminPanel groups: an aborted first load under StrictMode (FE-H5)', () => {
+    const LOADING = 'טוען קבוצות...';
+
+    it('keeps the groups loading, then lists them from the second load', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, { '/users': [USER] });
+        render(<AdminPanel />, { reactStrictMode: true });
+        await waitFor(() => expect(held.map(h => h.url)).toEqual(['/groups', '/groups']));
+        expect(held.map(h => h.config?.signal?.aborted)).toEqual([true, false]);
+        await selectAUser();
+        expect(screen.getByText(LOADING)).toBeInTheDocument();
+
+        await act(async () => { held[0].reject(new CanceledError()); });
+        expect(screen.getByText(LOADING)).toBeInTheDocument();
+        expect(error).not.toHaveBeenCalled();
+
+        await act(async () => { held[1].resolve(GROUPS); });
+        expect(screen.queryByText(LOADING)).toBeNull();
+        expect(screen.getByRole('option', { name: 'Company A' })).toBeInTheDocument();
+    });
+});
+
+describe('AdminPanel user search: a newer term cancels the older request (FE-H5)', () => {
+    const OLDER = { id: 2, full_name: 'Ab Older', personal_number: 'u_ab' };
+    const NEWER = { id: 3, full_name: 'Abc Newer', personal_number: 'u_abc' };
+    // Drains the promise jobs a settled request queues, and the render they cause.
+    const settle = () => act(async () => { });
+
+    async function searchAbThenAbc() {
+        const { held } = holdGets(api, { '/groups': GROUPS });
+        render(<AdminPanel />);
+        type('ab');
+        await waitFor(() => expect(held).toHaveLength(1));
+        type('abc');
+        await waitFor(() => expect(held).toHaveLength(2));
+        return held;
+    }
+
+    it("aborts the older request and shows only the newer term's results", async () => {
+        const [ab, abc] = await searchAbThenAbc();
+
+        expect(ab.url).toBe('/users');
+        expect(ab.config?.params).toEqual({ q: 'ab' });
+        expect(abc.config?.params).toEqual({ q: 'abc' });
+        expect(ab.config?.signal?.aborted).toBe(true);
+        expect(abc.config?.signal?.aborted).toBe(false);
+
+        abc.resolve([NEWER]);
+        expect(await screen.findByText(NEWER.full_name)).toBeInTheDocument();
+
+        // The older response arrives last. Through the real client it would
+        // reject as a CanceledError; here it resolves, so the panel's own
+        // post-await check is what has to drop it.
+        ab.resolve([OLDER]);
+        await settle();
+        expect(screen.queryByText(OLDER.full_name)).toBeNull();
+        expect(screen.getByText(NEWER.full_name)).toBeInTheDocument();
+    });
+
+    it('treats the abort as no error and leaves the newer search showing as in progress', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const [ab] = await searchAbThenAbc();
+
+        ab.reject(new CanceledError());
+        await settle();
+
+        expect(error).not.toHaveBeenCalled();
+        // "abc" is still out. Clearing the flag here would show "no users
+        // found" for a search that hasn't answered yet.
+        expect(screen.getByText('מחפש...')).toBeInTheDocument();
+        expect(screen.queryByText('לא נמצאו משתמשים.')).toBeNull();
+    });
+
+    it('stops showing the search in progress when the term shrinks below two characters', async () => {
+        const { held } = holdGets(api, { '/groups': GROUPS });
+        render(<AdminPanel />);
+        type('ab');
+        await waitFor(() => expect(held).toHaveLength(1));
+        expect(screen.getByText('מחפש...')).toBeInTheDocument();
+
+        type('a');
+        expect(held[0].config?.signal?.aborted).toBe(true);
+        held[0].reject(new CanceledError());
+
+        // The aborted run leaves the flag alone, so the short-term branch is
+        // the one that must clear it.
+        await waitFor(() => expect(screen.queryByText('מחפש...')).toBeNull());
+        expect(held).toHaveLength(1);
+    });
+
+    it('still reports a real failure and stops showing the search in progress', async () => {
+        // The abort guard must not swallow errors that are not aborts. A
+        // timeout is one: axios rejects it without aborting the signal.
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { held } = holdGets(api, { '/groups': GROUPS });
+        render(<AdminPanel />);
+        type('ab');
+        await waitFor(() => expect(held).toHaveLength(1));
+
+        const failure = new Error('timeout of 10000ms exceeded');
+        held[0].reject(failure);
+
+        await waitFor(() => expect(screen.queryByText('מחפש...')).toBeNull());
+        expect(error).toHaveBeenCalledWith(failure);
+    });
+
+    it('aborts a search still in flight when the panel unmounts', async () => {
+        const { held } = holdGets(api, { '/groups': GROUPS });
+        const { unmount } = render(<AdminPanel />);
+        type('ab');
+        await waitFor(() => expect(held).toHaveLength(1));
+
+        unmount();
+        expect(held[0].config?.signal?.aborted).toBe(true);
+    });
+});
+
+describe('AdminPanel user search: the term is URL-encoded (FE-L6)', () => {
+    it('sends the term as an encoded parameter, so &, #, + and % reach the server intact', async () => {
+        // Through the real client, so axios's own URL building is what's tested.
+        const { install, restore } = withAdapter(api);
+        const urls: string[] = [];
+        install(async config => {
+            urls.push(api.getUri(config));
+            const data = config.url === '/groups' ? GROUPS : [];
+            return { data, status: 200, statusText: 'OK', headers: {}, config };
+        });
+        try {
+            // Hebrew and a space too: axios writes the space as `+`, which a
+            // query-string parser reads back as a space; a literal `+` must
+            // go as %2B or it would come back as a space as well.
+            const term = 'כהן A&B#1+c 100%';
+            render(<AdminPanel />);
+            type(term);
+            await waitFor(() => expect(urls.some(u => new URL(u).pathname === '/users')).toBe(true));
+
+            const sent = new URL(urls.find(u => new URL(u).pathname === '/users')!);
+            expect(sent.searchParams.get('q')).toBe(term);
+            expect([...sent.searchParams.keys()]).toEqual(['q']);
+            expect(sent.hash).toBe('');
+        } finally {
+            restore();
+        }
     });
 });

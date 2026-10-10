@@ -11,13 +11,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 
 vi.mock('@/components/ui/NetworkGlobe', () => ({ default: () => null }));
-vi.mock('./components/shared/ConnectionTest', () => ({ default: () => null }));
-// Plain functions, deliberately not vi.fn(): `restoreMocks` in vite.config.ts
-// resets implementations between tests, which would strip the mockResolvedValue
-// off a spy declared in a module factory -- from the FIRST test onward, not
-// just subsequent ones -- handing App an undefined return where it expects a
-// promise. Nothing here asserts on these calls, so there is nothing to gain
-// from spies.
+// Plain functions, deliberately not vi.fn(): `mockReset` in vite.config.ts
+// resets implementations before each test, which would strip the
+// mockResolvedValue off a spy declared in a module factory. Here the factory
+// first runs inside the first test (`./main` is imported there), so that test
+// would keep it and every later one would hand App an undefined return where
+// it expects a promise. Nothing here asserts on these calls, so there is
+// nothing to gain from spies.
 vi.mock('./services', () => ({
     authService: {
         resolveSession: () => Promise.resolve(null),

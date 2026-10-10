@@ -10,7 +10,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import MaintenancePage from './MaintenancePage';
 import type { Capabilities } from '@/lib/capabilities';
 import { TEST_CAPABILITIES, TEST_CAPABILITIES_NONE, withCapabilities } from '@/test/setup';
-import api from '@/api';
+import api from '@/lib/axios';
 
 const OPEN_TICKET = {
     id: 1, equipment_id: 10, equipment_name: 'Rifle', fault_type: 'Jammed',
@@ -35,7 +35,8 @@ describe('MaintenancePage close-ticket button: cosmetic capability gating (SEC-H
 
     it('hides סגור כרטיס without RESOLVE_FAULT', async () => {
         renderWithCapabilities(TEST_CAPABILITIES_NONE);
-        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/tickets/'));
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith(
+            '/tickets/', expect.objectContaining({ signal: expect.any(AbortSignal) })));
         // The ticket itself still renders (it's a read) -- only the write
         // action is gated.
         expect(await screen.findByText('Rifle')).toBeInTheDocument();

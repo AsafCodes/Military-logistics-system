@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { matchPath, useNavigate, useLocation } from 'react-router-dom';
 import {
     LayoutDashboard,
     Package,
     Wrench,
     FileBarChart,
     Shield,
+    ListChecks,
     ChevronRight,
     ChevronLeft,
     LogOut,
@@ -46,6 +47,7 @@ const NAV_ITEMS: NavItem[] = [
     { path: '/maintenance', label: 'תחזוקה', icon: <Wrench size={20} /> },
     { path: '/reports', label: 'דוחות', icon: <FileBarChart size={20} /> },
     { path: '/admin', label: 'ניהול מערכת', icon: <Shield size={20} />, capability: CAPABILITY.MANAGE_PERSONNEL },
+    { path: '/catalog', label: 'אישור סוגי תקלות', icon: <ListChecks size={20} />, capability: CAPABILITY.MANAGE_CATALOG },
 ];
 
 // ============================================================
@@ -60,10 +62,26 @@ export default function AppShell({ user, onLogout, children }: AppShellProps) {
     const [isExpanded, setIsExpanded] = useState(true);
     const [isMobileOpen, setIsMobileOpen] = useState(false);
 
-    // Close mobile menu on route change
-    useEffect(() => {
+    // Close mobile menu on route change. FE-H6: done while rendering, by
+    // comparing against the path of the previous render, in place of an
+    // effect that set the state after the new page had rendered. This is
+    // what closes it for a route change the menu did not start: a link
+    // inside the page, or Back.
+    const [renderedPath, setRenderedPath] = useState(location.pathname);
+    if (renderedPath !== location.pathname) {
+        setRenderedPath(location.pathname);
         setIsMobileOpen(false);
-    }, [location.pathname]);
+    }
+
+    // Picking an item closes the menu itself, because picking the page that
+    // is already showing changes no path for the check above to notice. That
+    // pick also replaces the history entry: pushing a second one for the same
+    // page made the next Back look as if it did nothing. matchPath is the
+    // router's own test, so /dashboard/ and /Dashboard count as that page.
+    const goTo = (path: string) => {
+        setIsMobileOpen(false);
+        navigate(path, { replace: matchPath(path, location.pathname) !== null });
+    };
 
     // Close mobile menu on resize past breakpoint
     useEffect(() => {
@@ -145,7 +163,7 @@ export default function AppShell({ user, onLogout, children }: AppShellProps) {
                         return (
                             <button
                                 key={item.path}
-                                onClick={() => navigate(item.path)}
+                                onClick={() => goTo(item.path)}
                                 title={!isExpanded ? item.label : undefined}
                                 className={`
                                     w-full flex items-center gap-3 px-3 py-2.5 rounded-lg

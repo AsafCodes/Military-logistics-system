@@ -9,7 +9,9 @@
     "types": [
       "node"
     ],
-    "skipLibCheck": true,
+    /* Declaration files are checked too (INF-H9). vite's types need the
+       name `Worker`, which vite.config.globals.d.ts supplies. */
+    "skipLibCheck": false,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -24,6 +26,7 @@
     "noUncheckedSideEffectImports": true
   },
   "include": [
-    "vite.config.ts"
+    "vite.config.ts",
+    "vite.config.globals.d.ts"
   ]
 }

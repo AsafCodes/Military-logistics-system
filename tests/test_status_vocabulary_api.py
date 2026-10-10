@@ -174,8 +174,8 @@ def test_the_inventory_report_refuses_a_status_outside_the_vocabulary(
 
     `""` is in the list as a documented behaviour change rather than an
     oversight: it used to be falsy and SKIP the filter, returning everything,
-    and is now refused like any other non-member. Nothing in the repo sends it
-    -- reports.service.ts omits the key when the filter is unset.
+    and is now refused like any other non-member. The app never sends it --
+    the only frontend caller, GeneralReportPage.tsx, passes no params at all.
 
     "FUNCTIONAL" is the member's NAME and must be refused too: Pydantic matches
     a str-mixin enum by VALUE, and a caller reading the Python source rather

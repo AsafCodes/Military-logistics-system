@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import api from '@/api';
+import api from '@/lib/axios';
 
 interface VerificationFormProps {
     equipmentId: number;
@@ -34,9 +34,8 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
         } catch (err) {
             setError('שגיאה בשמירת הדיווח');
             console.error(err);
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     if (!isOpen) return null;

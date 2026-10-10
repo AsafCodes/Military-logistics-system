@@ -48,20 +48,19 @@ Marker_System/
 ├── frontend/                   # React + TypeScript + Vite
 │   └── src/
 │       ├── App.tsx                          # Root: auth state, routing
-│       ├── api.ts                           # Axios instance
 │       ├── index.css                        # CSS design tokens (dark/light)
-│       ├── r3f.d.ts                         # React Three Fiber type declarations
 │       ├── components/
 │       │   ├── layout/
 │       │   │   └── AppShell.tsx             # Sidebar + top bar + content area
 │       │   ├── ui/                          # Shadcn/UI + custom components
 │       │   │   ├── button.tsx, card.tsx, form.tsx, input.tsx, label.tsx
 │       │   │   ├── NetworkGlobe.tsx         # 3D particle globe (R3F)
+│       │   │   ├── r3fJsxTypes.typecheck.tsx # tsc-only guard: R3F JSX stays strictly typed
 │       │   │   ├── ThemeToggle.tsx          # Dark/light toggle
 │       │   │   ├── AutocompleteInput.tsx    # Searchable input
 │       │   │   └── SearchableMultiSelect.tsx
 │       │   └── shared/
-│       │       └── ConnectionTest.tsx       # Backend health check widget
+│       │       └── ErrorBoundary.tsx        # Top-level render-error fallback
 │       ├── features/
 │       │   ├── auth/
 │       │   │   └── components/
@@ -70,11 +69,16 @@ Marker_System/
 │       │   ├── dashboard/
 │       │   │   ├── components/
 │       │   │   │   ├── DashboardPage.tsx    # Welcome + stats + equipment preview
-│       │   │   │   ├── StatsGrid.tsx        # 4 animated ring stat cards
+│       │   │   │   ├── StatsGrid.tsx        # 4 stat cards with animated counters (readiness inside a ring)
 │       │   │   │   ├── EquipmentTable.tsx   # Top-5 equipment preview table
 │       │   │   │   ├── DailyActivityTable.tsx # Recent event feed
 │       │   │   │   └── AdminPanel.tsx       # User search, group assignment
 │       │   │   └── hooks/                   # Dashboard-specific hooks
+│       │   │       ├── useDashboardData.ts  # Readiness + accessible-equipment fetch
+│       │   │       └── useAnimatedCounter.ts # StatsGrid's eased counter, cancels its frame
+│       │   ├── catalog/
+│       │   │   └── components/
+│       │   │       └── FaultTypeQueuePage.tsx # Pending fault-type approval queue
 │       │   ├── equipment/
 │       │   │   └── components/
 │       │   │       ├── EquipmentPage.tsx     # Full table + modals (41KB)
@@ -86,10 +90,11 @@ Marker_System/
 │       │   └── reports/
 │       │       └── components/
 │       │           └── GeneralReportPage.tsx # Inventory reports + CSV export
+│       ├── lib/
+│       │   └── axios.ts                     # The only HTTP client: base URL, timeout, 401 → /login
 │       ├── services/
 │       │   ├── auth.service.ts              # Login/logout/getMe
-│       │   ├── equipment.service.ts         # Equipment API calls
-│       │   └── reports.service.ts           # Report API calls
+│       │   └── equipment.service.ts         # Equipment API calls
 │       └── types/
 │           └── index.ts                     # TypeScript interfaces
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
@@ -129,7 +134,7 @@ Marker_System/
 - **Responsibility:** `report_fault` → creates `FaultType` (if new) → creates `MaintenanceLog` ticket → marks equipment "Malfunctioning". `fix_equipment` → sets "Functional" → closes all open tickets → logs the fix.
 - **Audit (DATA-H4-2):** neither route writes a status or an audit row itself — both go through `audit_trail.set_status` / `record_event`, which own the `equipment.status` assignment. `report_fault` emits `FAULT` + a `fault_report` history row; `fix_equipment` emits `FIX` + a `repair` one. Both writes sit **below** the find-or-create `db.commit()` and inside the ticket's flush, so an audit row cannot outlive the ticket it explains. A **repeat** report on an already-broken item logs the event and adds no history row — that table records transitions, not assertions.
 - **Authority (H1-9):** both writes resolve through `get_scoped_equipment_or_404` and then gate. `report_fault` uses `require_status_authority` (**holder or `REPORT_STATUS`**); `fix_equipment` uses `require(RESOLVE_FAULT)` and deliberately has **no possession arm** — a soldier holding a broken item may report it and may not declare it fixed, and a company commander may report on their company and may not close the ticket.
-- **⚠️ Non-Obvious Detail:** whoever creates a new fault type without holding `REPORT_STATUS` over the item's group gets `is_pending=True` — approval is needed before it shows up in the general list. That is now a grant question rather than a profile boolean, and it is the one place `may()` is called instead of `require()`, because a "no" here narrows the write rather than refusing it. Note the approval workflow itself has no caller (API-H6), so pending fault types currently have no way out of the queue.
+- **⚠️ Non-Obvious Detail:** whoever creates a new fault type without holding `REPORT_STATUS` over the item's group gets `is_pending=True` — approval is needed before it shows up in the general list. That is now a grant question rather than a profile boolean, and it is the one place `may()` is called instead of `require()`, because a "no" here narrows the write rather than refusing it. "The general list" means the Report Fault dropdown: `GET /setup/fault_types` returns pending types too, and `EquipmentPage` is what filters them out. A report naming a pending type by name reuses it. The queue is drained from `/catalog` (`FaultTypeQueuePage`, API-H6), which offers Approve only, because a report-minted type in practice has a ticket and `DELETE` refuses those (DATA-H7). Not always: `report_fault` commits the type before the ticket, so a report that fails in between leaves a ticketless pending type.
 - **Scoping (H1-10.5):** `GET /tickets/` runs through `dependencies.scope_equipment_derived_query` — a ticket is exactly as visible as the item it is about. The join is **inner**, so a ticket whose `equipment_id` is NULL or dangling disappears rather than rendering as "Unknown"; that is a behaviour change for such rows, not merely a narrowing.
 
 ### Module E: Verification & Audit Trail
@@ -166,16 +171,16 @@ Marker_System/
 - **⚠️ Non-Obvious Detail:** every gated route runs **404 before 403** — resolve the item inside the caller's own VIEW extent (`get_scoped_equipment_or_404`), *then* `authz.require(...)`. Run the other way round, a 403 confirms an id the caller was never allowed to know existed. Calling `require()` on an id straight from a request body reinstates that oracle.
 
 ### Module G: Login Page & 3D Globe ("Orbital" Design)
-- **Files:** `features/auth/components/LoginPage.tsx`, `components/ui/NetworkGlobe.tsx`, `components/ui/ThemeToggle.tsx`, `r3f.d.ts`
+- **Files:** `features/auth/components/LoginPage.tsx`, `components/ui/NetworkGlobe.tsx`, `components/ui/ThemeToggle.tsx`, `components/ui/r3fJsxTypes.typecheck.tsx`
 - **Responsibility:** Full-screen login page with an Orbital-style layout: hero text + inline login form (left 45%), animated 3D particle globe (right 55%), stats bar (bottom), navbar with dark/light theme toggle.
-- **How it works:** `NetworkGlobe.tsx` uses React Three Fiber (`@react-three/fiber`) + drei helpers (`Points`, `PointMaterial`) to render 3,000 uniformly-distributed particles on a sphere. A `<torus>` ring orbits the sphere. Colors, particle size, ring opacity, and glow opacity are all **theme-aware**. `ThemeToggle.tsx` toggles `.dark` class on `<html>`, persists to `localStorage`, and `LoginPage.tsx` watches for class changes via `MutationObserver` to pass `isDark` to the globe.
-- **⚠️ Non-Obvious Detail:** The `r3f.d.ts` file must declare every Three.js JSX element used (e.g., `mesh`, `torusGeometry`, `ambientLight`) — missing declarations cause TypeScript build failures.
+- **How it works:** `NetworkGlobe.tsx` uses React Three Fiber (`@react-three/fiber`) + drei helpers (`Points`, `PointMaterial`) to render 3,000 uniformly-distributed particles on a sphere. A ring (a `<mesh>` holding a `<torusGeometry>`) orbits the sphere. Colors, particle size, ring opacity, and glow opacity are all **theme-aware**. `ThemeToggle.tsx` toggles `.dark` class on `<html>`, persists to `localStorage`, and `LoginPage.tsx` reads that class through `useSyncExternalStore` (a `MutationObserver` underneath) to pass `isDark` to the globe. Only `dark` and `light` count as a stored theme; anything else falls back to the system preference. The toggle mounts only after the session check, so `index.html` carries an inline script that sets the class before the first paint, plus one inline rule that repeats the dark `--background` token for the time before any stylesheet has loaded. Both repeat choices made elsewhere (`initialTheme()` in `ThemeToggle.tsx`, the token in `index.css`); `ThemeToggle.test.tsx` fails if either copy differs.
+- **⚠️ Non-Obvious Detail:** `@react-three/fiber` v9 types every Three.js JSX element itself (`mesh`, `torusGeometry`, `ambientLight`, ...) through its `ThreeElements` interface. Do not re-declare them locally: a re-declaration replaces fiber's type, and when the new type is `any` (or narrower than fiber's) the compiler reports nothing. The deleted `r3f.d.ts` did exactly that. Its import no longer resolved, so it turned eight elements into `any` and the typecheck accepted any prop on them. `r3fJsxTypes.typecheck.tsx` is the guard: `tsc -b` compiles it but nothing imports it, and each probe line in it must fail to typecheck. If one of those eight elements is loosened in the way its probe checks, the build fails. Other elements, and other kinds of loosening, are not covered.
 
 ### Module H: Orbital Dashboard Shell & Page Architecture
 - **Files:** `App.tsx`, `components/layout/AppShell.tsx`, `index.css` (design tokens)
 - **Responsibility:** Provides the authenticated layout (sidebar + top bar + content area) and React Router page routing for all features.
-- **How it works:** After login, `App.tsx` renders `<AppShell>` wrapping `<Routes>`. `AppShell.tsx` provides a collapsible sidebar (Dashboard, Equipment, Maintenance, Reports, Admin), top bar with user name + role badge + theme toggle + sign out, and a content area that renders the active route's page component. All pages use shared design tokens defined in `index.css` — CSS variables (`--foreground`, `--background`, `--card`, `--primary`, `--border`, `--accent`, etc.) with separate `:root` (light) and `.dark` (dark) values. The `.glass-card` utility class uses `backdrop-blur` + themed borders for glassmorphism.
-- **⚠️ Non-Obvious Detail:** The sidebar's Admin link is **not gated at all** (H1-12) — the frontend has no per-user capability signal to filter on (SEC-H10, deferred), so every nav item renders for every authenticated user and the backend's `MANAGE_PERSONNEL` check on the routes `/admin` calls is the real boundary; an unauthorized visitor gets a 403, not a hole. The current route is synced via React Router's `useLocation()` + `useNavigate()`, not component state.
+- **How it works:** After login, `App.tsx` renders `<AppShell>` wrapping `<Routes>`. `AppShell.tsx` provides a collapsible sidebar (Dashboard, Equipment, Maintenance, Reports, Admin, Fault-type approval), top bar with user name + role badge + theme toggle + sign out, and a content area that renders the active route's page component. All pages use shared design tokens defined in `index.css` — CSS variables (`--foreground`, `--background`, `--card`, `--primary`, `--border`, `--accent`, etc.) with separate `:root` (light) and `.dark` (dark) values. `color-scheme` is declared beside them, so the browser draws scrollbars and form controls that have no background of their own to match the theme. The `.glass-card` utility class uses `backdrop-blur` + themed borders for glassmorphism.
+- **⚠️ Non-Obvious Detail:** Two nav items are gated, each on one GLOBAL capability from `GET /users/me/capabilities` (SEC-H10): Admin on `MANAGE_PERSONNEL`, Fault-type approval on `MANAGE_CATALOG` (API-H6). `App.tsx` registers `/admin` and `/catalog` only for holders, so typing the URL without the verb falls through to the `*` redirect. That is a convenience; the real boundary is each route those pages call. Most use `require_global`, but AdminPanel's user search (`GET /users?q=`) is scoped to what the caller can see, not gated. The two verbs have different holders: `u_brig_cmdr` holds `MANAGE_CATALOG` without `MANAGE_PERSONNEL`, which is why the queue is its own page and not a tab inside `/admin`. The current route is synced via React Router's `useLocation()` + `useNavigate()`, not component state.
 
 **Frontend Route → Page Component Map:**
 
@@ -186,6 +191,7 @@ Marker_System/
 | `/maintenance` | `MaintenancePage` | `features/maintenance/components/MaintenancePage.tsx` |
 | `/reports` | `GeneralReportPage` | `features/reports/components/GeneralReportPage.tsx` |
 | `/admin` | `AdminPanel` | `features/dashboard/components/AdminPanel.tsx` |
+| `/catalog` | `FaultTypeQueuePage` | `features/catalog/components/FaultTypeQueuePage.tsx` |
 
 ---
 
@@ -234,11 +240,11 @@ Marker_System/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/groups` | List all groups (`MANAGE_PERSONNEL`) |
-| `GET` | `/setup/fault_types` | List all fault types |
-| `GET` | `/setup/fault_types/pending` | List pending fault types (manager only) |
-| `POST` | `/setup/fault_types` | Create fault type |
-| `PUT` | `/setup/fault_types/{id}/approve` | Approve pending fault type |
-| `DELETE` | `/setup/fault_types/{id}` | Delete fault type |
+| `GET` | `/setup/fault_types` | List all fault types, pending included |
+| `GET` | `/setup/fault_types/pending` | List pending fault types (`MANAGE_CATALOG`) |
+| `POST` | `/setup/fault_types` | Create fault type (any user; pending without `MANAGE_CATALOG`) |
+| `PUT` | `/setup/fault_types/{id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
+| `DELETE` | `/setup/fault_types/{id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
 
 ### Reports (`routers/reports.py`)
 | Method | Path | Description |
@@ -258,7 +264,7 @@ Marker_System/
 ### Input (Where data starts)
 - **Frontend Forms** → React components → Axios → FastAPI endpoints
 - **Seed Script** → `seed_data.py` builds the group graph, then bulk-inserts Users, Catalogs, Equipment. Requires `SEED_ENABLED=1` and a local `DATABASE_URL`; only destroys data with `--reset`
-- **JWT Login** → `POST /login` → token set as an **httpOnly, SameSite=Lax cookie** (SEC-H9). Nothing auth-related is **stored** in `localStorage`; the browser attaches the cookie itself, so both axios clients send `withCredentials` and neither sets an `Authorization` header. Identity comes from `GET /users/me` on every load. `Secure` is on by default and downgraded only for the local http stack via `COOKIE_SECURE=false`.
+- **JWT Login** → `POST /login` → token set as an **httpOnly, SameSite=Lax cookie** (SEC-H9). Nothing auth-related is **stored** in `localStorage`; the browser attaches the cookie itself, so the axios client (`lib/axios.ts`) sends `withCredentials` and sets no `Authorization` header. Identity comes from `GET /users/me` on every load. `Secure` is on by default and downgraded only for the local http stack via `COOKIE_SECURE=false`.
   - The login *response body* still contains the JWT, and page JavaScript can read it — `auth.service.ts` simply never touches it. What the fix guarantees is that the token is never **persisted**, so an XSS has no stored credential to steal and nothing survives a reload.
   - The `Authorization: Bearer` path still works and takes precedence when it carries a usable token — that is how the pytest suite, Swagger, and any non-browser client authenticate. A malformed or non-Bearer header falls through to the cookie rather than shadowing it.
   - CSRF rests on `SameSite=Lax`, which is sufficient **only while every `GET` route stays read-only**; `tests/test_cookie_auth.py` pins that with an allowlist. `POST /logout` is forgeable cross-site by design (availability only) — see its docstring.
@@ -329,11 +335,12 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 ### Output (Where data goes)
 - **Login Page** → Orbital-style landing with 3D globe, theme toggle, inline login form
-- **Dashboard** (`/dashboard`) → Welcome card, stats grid (4 stat cards with animated rings), equipment preview (top 5), activity feed (last 8 events)
+- **Dashboard** (`/dashboard`) → Welcome card, stats grid (4 stat cards with animated counters, readiness inside a ring), equipment preview (top 5), activity feed (last 8 events)
 - **Equipment** (`/equipment`) → Full equipment table with search/filter (by serial, type, status), expandable inline history rows, action modals (Report Fault with fault type picker + "other", Transfer with person/location toggle, Assign Owner with user search), Verification Form, full History modal
 - **Maintenance** (`/maintenance`) → Ticket management: 4 summary stat cards, filter tabs (All/Open/In Progress/Closed), ticket cards with equipment name + fault type + dates, manager "close & fix" action
 - **Reports** (`/reports`) → `GET /reports/query` with dynamic filters → table display, CSV export, print support
 - **Admin** (`/admin`) → User search, group assignment
+- **Fault-type approval** (`/catalog`) → Pending fault types with an Approve button; approving one adds it to the Report Fault dropdown
 - **API Docs** → FastAPI auto-generated at `/docs`
 - **All pages** → Full dark/light theme support via CSS variables (`.glass-card`, `text-foreground`, `bg-background`, etc.), Hebrew-first labels, RTL layout
 
@@ -389,7 +396,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 10. **`compliance_level` and `current_state_description` are computed properties,** not database columns. Don't try to query/filter by them directly in SQL.
 
-11. **The `erasableSyntaxOnly` tsconfig option was removed** because the TypeScript version doesn't support it. Don't add it back.
+11. **The `erasableSyntaxOnly` tsconfig option is not set.** It was removed while the project ran TypeScript 5.6, which predates the option (5.8 added it). FE-H3-2 moved the project to 5.9, so that reason is gone; setting it is now an open choice, not a constraint.
 
 12. **DO NOT define duplicate Pydantic classes in `schemas.py`.** Python uses the **last** definition. A duplicate `UnitReadinessResponse` with `readiness_score` silently overrode the correct one with `readiness_percentage`, causing a 500 crash. Always search for existing classes before adding new ones.
 
@@ -402,15 +409,15 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 15. **The `analytics.py` endpoint returns a plain dict**, not a Pydantic `response_model`. This was done intentionally to avoid `__pycache__` staleness issues with the `UnitReadinessResponse` schema.
 
-16. **Frontend expects `GET /setup/fault_types/pending`** — this endpoint must exist in `setup.py`. Without it, `DashboardPage.tsx` gets a 405 and fails to set `isManager`, breaking the manager UI.
+16. **`FaultTypeQueuePage.tsx` (`/catalog`) is the only frontend caller of `GET /setup/fault_types/pending` and `PUT /setup/fault_types/{id}/approve`** (API-H6). `DashboardPage.tsx` does not call either route, whatever older notes say. `DELETE /setup/fault_types/{id}` still has no frontend caller.
 
-17. **The `reports.py` endpoint returns a plain dict** matching the frontend `GeneralReportItem` interface (`item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
+17. **The `reports.py` endpoint returns a plain dict** matching the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
 19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
 
-20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. The file `src/r3f.d.ts` provides TypeScript JSX intrinsic element declarations (`mesh`, `group`, `torusGeometry`, etc.) for React Three Fiber — if you add a new Three.js element to the globe, you must also declare it in `r3f.d.ts`. Don't remove these packages or the declaration file.
+20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. Fiber's own types declare its JSX elements (`mesh`, `group`, `torusGeometry`, etc.), so a new Three.js element in the globe needs no local declaration — see Module G. Don't remove these packages.
 
 ---
 

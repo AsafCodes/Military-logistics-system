@@ -1,43 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Package, CheckCircle2, AlertTriangle } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 import type { UnitReadiness } from '@/types';
-
-// ============================================================
-// Animated Counter Hook
-// ============================================================
-
-function useAnimatedCounter(target: number, duration = 1200) {
-    const [count, setCount] = useState(0);
-
-    useEffect(() => {
-        if (target === 0) { setCount(0); return; }
-
-        let start = 0;
-        const startTime = performance.now();
-
-        const tick = (now: number) => {
-            const elapsed = now - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-            // Ease-out cubic
-            const eased = 1 - Math.pow(1 - progress, 3);
-            const current = Math.round(eased * target);
-
-            if (current !== start) {
-                start = current;
-                setCount(current);
-            }
-
-            if (progress < 1) {
-                requestAnimationFrame(tick);
-            }
-        };
-
-        requestAnimationFrame(tick);
-    }, [target, duration]);
-
-    return count;
-}
+import { useAnimatedCounter } from '../hooks/useAnimatedCounter';
 
 // ============================================================
 // Types
@@ -54,11 +19,14 @@ interface StatsGridProps {
 export default function StatsGrid({ stats }: StatsGridProps) {
     const [openTickets, setOpenTickets] = useState(0);
 
-    // Fetch open tickets count
+    // Fetch open tickets count. FE-H5: unmounting aborts the request.
     useEffect(() => {
-        api.get('/tickets/?status_filter=Open')
-            .then(res => setOpenTickets(Array.isArray(res.data) ? res.data.length : 0))
-            .catch(() => setOpenTickets(0));
+        const controller = new AbortController();
+        const { signal } = controller;
+        api.get('/tickets/?status_filter=Open', { signal })
+            .then(res => { if (!signal.aborted) setOpenTickets(Array.isArray(res.data) ? res.data.length : 0); })
+            .catch(() => { if (!signal.aborted) setOpenTickets(0); });
+        return () => controller.abort();
     }, []);
 
     // Animated values

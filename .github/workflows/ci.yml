@@ -123,21 +123,46 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    # WAIVER (frontend lint backlog): 16 pre-existing ESLint errors. Same
-    # arrangement as the ruff waiver above -- annotated, not enforced, yet.
-    # (Was 17; SEC-H9 cleared one by deleting a dead type.)
+    # Hard gate (FE-H8). `npm run audit:prod` is
+    # `npm audit --omit=dev --audit-level=high`: it fails on a high or critical
+    # advisory against `dependencies` or anything they pull in. It does not
+    # read `devDependencies`, and it lets moderate and low advisories through.
+    # It asks the registry for today's advisories, so it can fail on a commit
+    # that changed no dependency, and it fails when the registry does not
+    # answer.
+    # frontend/src/auditGate.test.ts pins the script, and reads this step and
+    # its job for `continue-on-error` and `if:`.
+    - name: Audit production dependencies
+      run: npm run audit:prod
+
+    # Hard gate since FE-H6-4. The script runs with `--max-warnings 0`, so a
+    # warning fails this step as an error does. It also fails on a component
+    # or hook the React Compiler gives up on, which the compiler-backed rules
+    # would otherwise skip without a word (INF-L4). A limit it does not
+    # lift: set-state-in-effect checks only the calls written directly in an
+    # effect, not what a function called from one does.
+    # frontend/src/lintGate.test.ts fails if this step or its job is given
+    # `continue-on-error` or an `if:`, and if a .ts or .tsx file carries a
+    # disable comment for a react-hooks rule.
     - name: Lint with ESLint
-      continue-on-error: true
       run: npm run lint
 
-    # Hard gate. `npm run build` is `tsc -b && vite build`, so this covers
-    # typecheck and build in one step. It passes today, which is what makes it
-    # usable as a gate.
-    - name: Typecheck and build
+    # Hard gate (FE-H7). `npm run typecheck` is `tsc -b`, which checks both
+    # projects tsconfig.json references and writes no JavaScript. Its own step,
+    # so a type error fails here by name and not inside the build.
+    - name: Typecheck
+      run: npm run typecheck
+
+    # Hard gate. `npm run build` runs the typecheck script again before
+    # `vite build`, so that script typechecks wherever it is run.
+    # frontend/src/typecheckConfig.test.ts pins both scripts, and reads both
+    # steps and their job for `continue-on-error` and `if:`.
+    - name: Build
       run: npm run build
 
-    # Hard gate from the day it lands, deliberately unlike the two lint waivers
-    # above. The frontend had no test framework at all until SEC-H9; there is no
-    # backlog to forgive, so a failure here is always a real regression.
+    # Hard gate from the day it lands, deliberately unlike the ruff waiver in
+    # the backend job. The frontend had no test framework at all until SEC-H9;
+    # there is no backlog to forgive, so a failure here is always a real
+    # regression.
     - name: Run tests
       run: npm run test

@@ -1,31 +1,35 @@
-import { useRef, useMemo } from "react";
+import { useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Points, PointMaterial } from "@react-three/drei";
 import * as THREE from "three";
+
+// Generate points uniformly distributed on a sphere
+// Represents abstract data nodes connected by the system
+function randomSpherePoints() {
+    const temp = [];
+    const count = 3000;
+
+    for (let i = 0; i < count; i++) {
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = 1.2;
+
+        const x = r * Math.sin(phi) * Math.cos(theta);
+        const y = r * Math.sin(phi) * Math.sin(theta);
+        const z = r * Math.cos(phi);
+
+        temp.push(x, y, z);
+    }
+    return new Float32Array(temp);
+}
 
 function Globe({ isDark }: { isDark: boolean }) {
     const pointsRef = useRef<THREE.Points>(null!);
     const ringRef = useRef<THREE.Mesh>(null!);
 
-    // Generate points uniformly distributed on a sphere
-    // Represents abstract data nodes connected by the system
-    const particles = useMemo(() => {
-        const temp = [];
-        const count = 3000;
-
-        for (let i = 0; i < count; i++) {
-            const theta = Math.random() * 2 * Math.PI;
-            const phi = Math.acos(2 * Math.random() - 1);
-            const r = 1.2;
-
-            const x = r * Math.sin(phi) * Math.cos(theta);
-            const y = r * Math.sin(phi) * Math.sin(theta);
-            const z = r * Math.cos(phi);
-
-            temp.push(x, y, z);
-        }
-        return new Float32Array(temp);
-    }, []);
+    // FE-H6: kept once per mount, from a state initialiser. Rendering must
+    // give the same output for the same input, and Math.random does not.
+    const [particles] = useState(randomSpherePoints);
 
     useFrame((state: { clock: { elapsedTime: number } }, delta: number) => {
         // Rotate globe slowly

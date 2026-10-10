@@ -20,8 +20,9 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import DailyActivityTable from './DailyActivityTable';
-import api from '@/api';
+import api from '@/lib/axios';
 
 const ACTIVITY_ITEM = {
     id: 1,
@@ -126,5 +127,56 @@ describe('DailyActivityTable: labels the event types the backend really writes (
 
         expect(await screen.findByText(label)).toBeInTheDocument();
         expect(screen.queryByText(eventType)).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * FE-H5. The read is aborted on unmount and an aborted read reports nothing
+ * (src/abortOnUnmount.test.tsx). This is the other half: a read that fails
+ * for real still logs and shows the error.
+ */
+describe('DailyActivityTable: a real failure is still reported (FE-H5)', () => {
+    it('logs the failure and shows the error message', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const failure = new Error('timeout of 10000ms exceeded');
+        vi.spyOn(api, 'get').mockRejectedValue(failure);
+
+        render(<DailyActivityTable />);
+
+        expect(await screen.findByText('טעינת יומן הפעילות נכשלה')).toBeInTheDocument();
+        expect(error).toHaveBeenCalledWith('Failed to fetch daily activity', failure);
+    });
+});
+
+/**
+ * FE-H6-2. The read's `finally` became a statement after the try/catch, and
+ * the check on the response's shape moved into a helper.
+ */
+describe('DailyActivityTable: loading and the response shapes (FE-H6-2)', () => {
+    const LOADING = 'טוען פעילות...';
+    const EMPTY = 'אין פעילות מתועדת ב-24 השעות האחרונות';
+    const answerWith = (data: unknown) => vi.spyOn(api, 'get').mockResolvedValue({ data });
+
+    it('shows loading in the first frame, before any effect has run', () => {
+        expect(renderToStaticMarkup(<DailyActivityTable />)).toContain(LOADING);
+    });
+
+    it('stops loading once a flat array has answered', async () => {
+        answerWith([ACTIVITY_ITEM]);
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(ACTIVITY_ITEM.serial_number)).toBeInTheDocument();
+        expect(screen.queryByText(LOADING)).toBeNull();
+    });
+
+    it('also reads rows from an { items } body', async () => {
+        answerWith({ items: [ACTIVITY_ITEM] });
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(ACTIVITY_ITEM.serial_number)).toBeInTheDocument();
+    });
+
+    it.each([[null], [{}], [{ items: null }]])('treats a body of %j as no activity', async (body) => {
+        answerWith(body);
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(EMPTY)).toBeInTheDocument();
     });
 });

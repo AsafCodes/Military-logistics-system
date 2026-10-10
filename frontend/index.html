@@ -5,6 +5,40 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>frontend</title>
+    <!-- Sets the dark theme before the first paint. Without it nothing sets
+         the class until ThemeToggle mounts, which is after the session check
+         has answered, so a dark-theme user watched a light loading screen.
+         Must make the same choice as initialTheme() in
+         src/components/ui/ThemeToggle.tsx; ThemeToggle.test.tsx runs this
+         script and fails if the two differ. Keep it an inline classic
+         script: `type="module"` would defer it until the document has been
+         parsed, which lets the browser paint first.
+
+         The rule below is for the time before any stylesheet has loaded.
+         The dev server delivers index.css from JavaScript, so until then the
+         class alone would leave the page white. The colour repeats the dark
+         `background` token in src/index.css; ThemeToggle.test.tsx compares them
+         too. -->
+    <style>
+      html.dark { background-color: hsl(222.2 84% 4.9%); }
+    </style>
+    <script>
+      (function () {
+        var stored = null;
+        try {
+          stored = localStorage.getItem('theme');
+        } catch (e) {
+          // Storage is blocked. Fall back to the system setting, as the
+          // application does.
+        }
+        // Anything stored that is neither theme counts as nothing stored.
+        var dark = stored === 'dark' ||
+          (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

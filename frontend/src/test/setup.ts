@@ -5,7 +5,7 @@ import { createElement, type ReactNode } from 'react';
 import { CapabilitiesContext, type Capabilities } from '@/lib/capabilities';
 
 // jsdom implements no CSS media query engine, so window.matchMedia is simply
-// absent. ThemeToggle calls it in a mount effect, which means ANY test that
+// absent. ThemeToggle calls it on its first render, which means ANY test that
 // renders the app shell dies on it for a reason unrelated to what it asserts.
 // Reports "light" -- a deterministic default beats a random one.
 Object.defineProperty(window, 'matchMedia', {

@@ -68,21 +68,28 @@ export interface AssignOwnerRequest {
 }
 
 // ============ REPORTS ============
-export interface InventoryReportFilters {
-    equipment_type?: string;
-    location?: string;
-    status?: string;
-    holder_name?: string;
-}
-
+// One row of GET /reports/query, key for key (API-H4). The route builds a
+// plain dict with no response model, so nothing generates this -- it is
+// held to the route by tests/test_report_item_contract.py, which reads this
+// block. Every key is always sent, and last_verified_at alone is null by
+// design, for an item never verified. reporting_status is always computed;
+// the other string fields fall back when the item's own column is NULL or a
+// related row is missing -- but not when a related owner or holder EXISTS
+// with a NULL full_name: that column is nullable, and designated_owner or
+// last_reporter would forward its null. No write path creates such a user;
+// the column, not this type, is where that gets fixed.
 export interface InventoryReportItem {
     id: number;
-    serial_number?: string;
-    item_name: string;
-    status: string;
-    holder_name?: string;
-    location?: string;
-    last_verified?: string;
+    item_type: string;
+    unit_association: string;
+    designated_owner: string;
+    actual_location: string;
+    serial_number: string;
+    // "Reported", or get_daily_status's "WARNING" / "SEVERE". Left a plain
+    // string: the vocabulary itself is DATA-M7's to settle.
+    reporting_status: string;
+    last_reporter: string;
+    last_verified_at: string | null; // ISO-8601, Z-suffixed
 }
 
 // ============ MAINTENANCE ============

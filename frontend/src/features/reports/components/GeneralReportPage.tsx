@@ -1,23 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
-import api from '@/api';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import api from '@/lib/axios';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
+import type { InventoryReportItem } from '@/types';
 
 // ==========================================
 // Interfaces
 // ==========================================
-interface GeneralReportItem {
-    id?: number;
-    item_type: string;
-    unit_association: string;
-    designated_owner: string;
-    actual_location: string;
-    serial_number: string;
-    reporting_status: string; // "Reported" | "Late" | "Missing"
-    last_reporter: string;
-    last_verified_at?: string; // ISO Date String
-}
-
 interface FilterState {
     types: string[]; // Multi-select
     unit: string;
@@ -33,8 +23,11 @@ interface FilterState {
 // ==========================================
 
 export default function GeneralReportPage() {
-    const [items, setItems] = useState<GeneralReportItem[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [items, setItems] = useState<InventoryReportItem[]>([]);
+    // Starts true: the first frame shows the spinner where the table goes,
+    // not an empty table. The counter above it is outside this flag, so
+    // during the first load it still reads "0 of 0".
+    const [loading, setLoading] = useState(true);
     const [lastUpdated, setLastUpdated] = useState<string>("");
 
     // State: Filters
@@ -49,22 +42,39 @@ export default function GeneralReportPage() {
     });
 
     // 1. Fetch Data
-    const fetchReport = async () => {
-        setLoading(true);
+    // FE-H5: Refresh stays clickable during a load, so a second press aborts
+    // the load still out; leaving the page aborts the last one. Only the
+    // latest load writes rows or clears the loading state.
+    const next = useLatestRequest();
+
+    const fetchReport = useCallback(async () => {
+        const signal = next();
         try {
-            const res = await api.get(`/reports/query`);
+            const res = await api.get(`/reports/query`, { signal });
+            if (signal.aborted) return;
             setItems(res.data);
             setLastUpdated(new Date().toLocaleString('he-IL'));
         } catch (err) {
+            if (signal.aborted) return;
             console.error("Failed to load report", err);
-        } finally {
-            setLoading(false);
         }
-    };
+        setLoading(false);
+    }, [next]);
 
-    useEffect(() => {
+    // Refresh. The first load needs no setLoading: the flag starts true.
+    const reload = useCallback(() => {
+        setLoading(true);
         fetchReport();
-    }, []);
+    }, [fetchReport]);
+
+    // fetchReport sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchReport() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchReport(); };
+        run();
+    }, [fetchReport]);
 
     // 2. Derived Data for Dropdowns (Unique Values)
     const uniqueTypes = useMemo(() => {
@@ -96,7 +106,7 @@ export default function GeneralReportPage() {
     }, [items, filters]);
 
     // Helpers
-    const calculateDelay = (lastVerified?: string) => {
+    const calculateDelay = (lastVerified: string | null) => {
         if (!lastVerified) return "אין רשומה";
         const diffMs = new Date().getTime() - new Date(lastVerified).getTime();
         const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -169,7 +179,7 @@ export default function GeneralReportPage() {
                         מציג {filteredItems.length} מתוך {items.length} פריטים
                     </span>
                     <button
-                        onClick={fetchReport}
+                        onClick={reload}
                         className="text-muted-foreground hover:text-primary transition-colors text-xs"
                     >
                         🔄 רענן נתונים

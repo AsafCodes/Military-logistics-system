@@ -9,10 +9,17 @@
       "DOM.Iterable"
     ],
     "module": "ESNext",
+    /* "node" is for the tests and test helpers that read the repository
+       (node:fs, __dirname). Vitest 3's types imported vite's, which reference
+       it; Vitest 4's do not bring it in (FE-H8-2). It also lets application
+       code name Node globals, as it could before. */
     "types": [
-      "vite/client"
+      "vite/client",
+      "node"
     ],
-    "skipLibCheck": true,
+    /* Declaration files are checked too (INF-H9). Skipping them skips every
+       .d.ts, src included, which is how a broken src/r3f.d.ts passed (FE-H3). */
+    "skipLibCheck": false,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

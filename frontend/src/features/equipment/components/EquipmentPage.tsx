@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Package, Search, Filter, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
-import api from '@/api';
+import api from '@/lib/axios';
 import { useCapabilities, hasAnywhere, CAPABILITY } from '@/lib/capabilities';
+import { useLatestRequest } from '@/lib/useLatestRequest';
 import type { Equipment, User, FaultType } from '@/types';
 import EquipmentHistory from './EquipmentHistory';
 import VerificationForm from './VerificationForm';
@@ -26,12 +27,14 @@ function ReportFaultModal({
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
+        const faultName = selectedFaultId === 'other'
+            ? customFaultName
+            : faultTypes.find(f => f.id === parseInt(selectedFaultId))?.name;
         setLoading(true);
         try {
-            const isOther = selectedFaultId === 'other';
             await api.post('/maintenance/report', {
                 equipment_id: item.id,
-                fault_name: isOther ? customFaultName : faultTypes.find(f => f.id === parseInt(selectedFaultId))?.name,
+                fault_name: faultName,
                 description,
             });
             onSuccess();
@@ -39,9 +42,8 @@ function ReportFaultModal({
         } catch (err) {
             console.error(err);
             alert('דיווח התקלה נכשל');
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (
@@ -125,35 +127,55 @@ function TransferModal({
     const [locationName, setLocationName] = useState('');
     const [loading, setLoading] = useState(false);
 
+    // FE-H5: the cleanup cancels the timer and aborts a request already sent,
+    // so a response for an earlier term can't land after a later term's, or
+    // after the list has been cleared. FE-L6: the term goes as a param, so
+    // axios encodes it. The list is cleared by the handlers that end a
+    // search (changeTerm, showLocation, picking a result), not here.
     useEffect(() => {
         if (mode === 'person' && searchTerm.length > 1) {
+            const controller = new AbortController();
+            const { signal } = controller;
             const timer = setTimeout(async () => {
                 try {
-                    const res = await api.get(`/users?q=${searchTerm}`);
+                    const res = await api.get('/users', { params: { q: searchTerm }, signal });
+                    if (signal.aborted) return;
                     setSearchResults(res.data);
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    if (signal.aborted) return;
+                    console.error(e);
+                }
             }, 300);
-            return () => clearTimeout(timer);
-        } else {
-            setSearchResults([]);
+            return () => {
+                clearTimeout(timer);
+                controller.abort();
+            };
         }
     }, [searchTerm, mode]);
 
+    const changeTerm = (term: string) => {
+        setSearchTerm(term);
+        setSelectedUserId(null);
+        if (term.length <= 1) setSearchResults([]);
+    };
+
+    const showLocation = () => {
+        setMode('location');
+        setSearchResults([]);
+    };
+
     const handleSubmit = async () => {
+        const target = mode === 'person' ? { to_holder_id: selectedUserId } : { to_location: locationName };
         setLoading(true);
         try {
-            await api.post('/equipment/transfer', {
-                equipment_id: item.id,
-                ...(mode === 'person' ? { to_holder_id: selectedUserId } : { to_location: locationName }),
-            });
+            await api.post('/equipment/transfer', { equipment_id: item.id, ...target });
             onSuccess();
             onClose();
         } catch (err) {
             console.error(err);
             alert('העברה נכשלה');
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (
@@ -176,7 +198,7 @@ function TransferModal({
                             👤 העבר לאדם
                         </button>
                         <button
-                            onClick={() => setMode('location')}
+                            onClick={showLocation}
                             className={`flex-1 px-4 py-2 text-sm font-medium transition-colors
                                 ${mode === 'location' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-accent'}`}>
                             📍 העבר למיקום
@@ -188,7 +210,7 @@ function TransferModal({
                             <input
                                 type="text"
                                 value={searchTerm}
-                                onChange={e => { setSearchTerm(e.target.value); setSelectedUserId(null); }}
+                                onChange={e => changeTerm(e.target.value)}
                                 className="w-full px-3 py-2 rounded-lg border border-border/50 bg-background text-foreground
                                            focus:ring-2 focus:ring-primary/50 outline-none"
                                 placeholder="חפש משתמש..."
@@ -248,19 +270,34 @@ function AssignOwnerModal({
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [loading, setLoading] = useState(false);
 
+    // FE-H5 / FE-L6: the same abort-on-cleanup and encoded term as
+    // TransferModal's search above, and the same clearing in changeTerm.
     useEffect(() => {
         if (searchTerm.length > 1) {
+            const controller = new AbortController();
+            const { signal } = controller;
             const timer = setTimeout(async () => {
                 try {
-                    const res = await api.get(`/users?q=${searchTerm}`);
+                    const res = await api.get('/users', { params: { q: searchTerm }, signal });
+                    if (signal.aborted) return;
                     setSearchResults(res.data);
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    if (signal.aborted) return;
+                    console.error(e);
+                }
             }, 300);
-            return () => clearTimeout(timer);
-        } else {
-            setSearchResults([]);
+            return () => {
+                clearTimeout(timer);
+                controller.abort();
+            };
         }
     }, [searchTerm]);
+
+    const changeTerm = (term: string) => {
+        setSearchTerm(term);
+        setSelectedUserId(null);
+        if (term.length <= 1) setSearchResults([]);
+    };
 
     const handleSubmit = async () => {
         if (!selectedUserId) return;
@@ -275,9 +312,8 @@ function AssignOwnerModal({
         } catch (err) {
             console.error(err);
             alert('שיוך נכשל');
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (
@@ -295,7 +331,7 @@ function AssignOwnerModal({
                         <input
                             type="text"
                             value={searchTerm}
-                            onChange={e => { setSearchTerm(e.target.value); setSelectedUserId(null); }}
+                            onChange={e => changeTerm(e.target.value)}
                             className="w-full px-3 py-2 rounded-lg border border-border/50 bg-background text-foreground
                                        focus:ring-2 focus:ring-primary/50 outline-none"
                             placeholder="חפש משתמש לשיוך..."
@@ -379,27 +415,47 @@ export default function EquipmentPage() {
     const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
 
     // ── Data Fetching ──
+    // FE-H5: a reload after a write aborts the load still out, and leaving
+    // the page aborts the last one. Refresh can't race a load: the page is
+    // only a spinner while one is out.
+    const next = useLatestRequest();
+
     const fetchData = useCallback(async () => {
-        setLoading(true);
-        setError(null);
+        const signal = next();
         try {
             const [userRes, equipRes, faultRes] = await Promise.all([
-                api.get('/users/me'),
-                api.get('/equipment/accessible'),
-                api.get('/setup/fault_types'),
+                api.get('/users/me', { signal }),
+                api.get('/equipment/accessible', { signal }),
+                api.get('/setup/fault_types', { signal }),
             ]);
+            if (signal.aborted) return;
             setUser(userRes.data);
             setEquipment(equipRes.data);
             setFaultTypes(faultRes.data);
         } catch (err) {
+            if (signal.aborted) return;
             console.error(err);
             setError('טעינת נתוני ציוד נכשלה');
-        } finally {
-            setLoading(false);
         }
-    }, []);
+        setLoading(false);
+    }, [next]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    // Refresh, and the reload after a write. The first load needs neither
+    // call: loading starts true and error starts null.
+    const reload = useCallback(() => {
+        setLoading(true);
+        setError(null);
+        fetchData();
+    }, [fetchData]);
+
+    // fetchData sets no state before its first await. Lint does not check
+    // that: react-hooks/set-state-in-effect looks only at calls written
+    // directly in the effect. It reports a direct fetchData() here even
+    // so, because the load sets state after its await.
+    useEffect(() => {
+        const run = async () => { await fetchData(); };
+        run();
+    }, [fetchData]);
 
     // ── Derived Data ──
     const uniqueTypes = useMemo(() => {
@@ -426,7 +482,7 @@ export default function EquipmentPage() {
     const handleVerifyPresence = async (id: number) => {
         try {
             await api.post(`/equipment/${id}/verify`);
-            fetchData();
+            reload();
         } catch (err) {
             console.error(err);
             alert('דיווח נוכחות נכשל');
@@ -436,7 +492,7 @@ export default function EquipmentPage() {
     const handleRepair = async (item: Equipment) => {
         try {
             await api.post(`/maintenance/fix/${item.id}`);
-            fetchData();
+            reload();
         } catch (err) {
             console.error(err);
             alert('תיקון נכשל');
@@ -469,7 +525,7 @@ export default function EquipmentPage() {
                         </div>
                     </div>
                     <button
-                        onClick={fetchData}
+                        onClick={reload}
                         className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
                                    text-primary hover:bg-primary/10 transition-colors"
                     >
@@ -588,21 +644,21 @@ export default function EquipmentPage() {
                     item={faultTarget}
                     faultTypes={faultTypes}
                     onClose={() => setFaultTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
             {transferTarget && (
                 <TransferModal
                     item={transferTarget}
                     onClose={() => setTransferTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
             {assignTarget && (
                 <AssignOwnerModal
                     item={assignTarget}
                     onClose={() => setAssignTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
             {historyTargetId && (
@@ -618,7 +674,7 @@ export default function EquipmentPage() {
                     currentStatus={verifyTarget.status}
                     isOpen={true}
                     onClose={() => setVerifyTarget(null)}
-                    onSuccess={fetchData}
+                    onSuccess={reload}
                 />
             )}
         </div>
@@ -773,11 +829,15 @@ function InlineHistory({ equipmentId }: { equipmentId: number }) {
     }>>([]);
     const [loading, setLoading] = useState(true);
 
+    // FE-H5: collapsing the row unmounts this and aborts the request.
     useEffect(() => {
-        api.get(`/equipment/${equipmentId}/history`)
-            .then(res => setHistory(res.data))
-            .catch(err => console.error(err))
-            .finally(() => setLoading(false));
+        const controller = new AbortController();
+        const { signal } = controller;
+        api.get(`/equipment/${equipmentId}/history`, { signal })
+            .then(res => { if (!signal.aborted) setHistory(res.data); })
+            .catch(err => { if (!signal.aborted) console.error(err); })
+            .finally(() => { if (!signal.aborted) setLoading(false); });
+        return () => controller.abort();
     }, [equipmentId]);
 
     // DATA-H4-2. This was a fused copy of EquipmentHistory.tsx's two switches,
