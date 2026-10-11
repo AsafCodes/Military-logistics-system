@@ -2,10 +2,11 @@ fastapi
 uvicorn[standard]
 python-dotenv
 python-jose[cryptography]
-passlib[bcrypt]
 python-multipart
 psycopg2-binary
 python-dotenv
 sqlalchemy
 alembic
-bcrypt==3.2.2
+# No longer held at 3.2.2: nothing between the application and bcrypt needs
+# the old release now (INF-H5-1). INF-H5-2 pins this with the rest.
+bcrypt

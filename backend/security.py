@@ -1,7 +1,7 @@
 from datetime import timedelta
 from typing import Optional
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 import os
 import secrets
@@ -83,13 +83,53 @@ def clear_auth_cookie(response):
     response.delete_cookie(key=COOKIE_NAME, **_cookie_attributes())
 
 # --- Password Hashing ---
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# INF-H5. bcrypt is called directly. passlib used to sit between. Its last
+# release, 1.7.4, can neither hash nor verify on bcrypt 5.0.0, and
+# requirements.txt held bcrypt at 3.2.2 beneath it. The stored format is
+# unchanged: "$2b$", cost 12, 60 characters. A hash passlib wrote verifies
+# here.
+
+# bcrypt reads the first 72 bytes of a password and no more. 3.2.2 dropped the
+# rest without saying so; 5.0.0 raises ValueError instead. Neither the login
+# form nor schemas.UserCreate limits a password's length, so the cut is made
+# here, on both paths: a longer password is still accepted at login, and an
+# account whose password was already longer than this still verifies.
+#
+# passlib did refuse a password over 4096 characters, by raising. That limit went
+# with it, and nothing replaces it here (SEC-M7).
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+def _password_bytes(password):
+    if isinstance(password, str):
+        password = password.encode("utf-8")
+    return password[:BCRYPT_MAX_PASSWORD_BYTES]
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    # users.password_hash is nullable; an account without a hash has no
+    # password that matches.
+    if not hashed_password:
+        return False
+    password = _password_bytes(plain_password)
+    try:
+        if isinstance(hashed_password, str):
+            hashed_password = hashed_password.encode("utf-8")
+        return bcrypt.checkpw(password, hashed_password)
+    except ValueError:
+        # The stored value is not a hash bcrypt accepts. For a value that is
+        # no hash at all passlib raised, and nothing between here and the
+        # client catches that. The answer here is False.
+        #
+        # passlib accepted two kinds of value that bcrypt 5.0.0 does not: the
+        # "$2$" prefix, and a salt or checksum whose last character carries
+        # bits the encoding leaves unused. The prefix and the salt arrive
+        # here; such a checksum is answered False by checkpw itself. Neither
+        # passlib as it was set up here nor bcrypt writes any of them, so no
+        # hash this application made is among them. One brought in from
+        # another system could be, and would stop verifying.
+        return False
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("ascii")
 
 # ~144 bits of entropy, comfortably under bcrypt's 72-byte input limit.
 PASSWORD_BYTES = 18
