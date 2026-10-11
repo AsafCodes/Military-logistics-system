@@ -241,12 +241,34 @@ jobs:
           echo "the image contains node"; exit 1
         fi
 
+        # INF-H4. Every process in the container belongs to the image's
+        # `nginx` account (uid 101), the master process too. /proc has one
+        # directory per process, and its owner is the account the process
+        # runs as (or root, for one the kernel does not let others inspect,
+        # which fails this too). A process that ends between the listing and
+        # the look at it is an error to `stat` and nothing to this probe:
+        # the errors are dropped and the owners it did read are compared.
+        # With nothing read at all the comparison fails.
+        owners=$(docker exec frontend-image sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        echo "$owners"
+        test "$owners" = 101
+
+        # And what it serves is root's, which that account can read and
+        # cannot add to.
+        served=$(docker exec frontend-image find "$html" ! -user 0)
+        test -z "$served"
+        if docker exec frontend-image touch "$html/written-from-the-container"; then
+          echo "nginx's account can write where the page is served from"; exit 1
+        fi
+
   # INF-H3. The only place the stack docker-compose.yml describes is started.
   # It builds both services' images (so this is also the only place
   # Dockerfile.backend is built), starts the three containers, and looks at
   # the backend one: what is in /app, what is mounted there and how, and
   # whether a file created on the host reaches the running server. It also
-  # asks the frontend service for its page.
+  # asks the frontend service for its page. Since INF-H4 and INF-M6 it reads
+  # who runs the processes in both containers, and what the backend image
+  # holds when nothing is mounted over it.
   # tests/test_backend_mounts.py reads the compose file without Docker; that
   # test also fails if this job or a step in it is given `continue-on-error`
   # or an `if:`.
@@ -270,6 +292,19 @@ jobs:
         POSTGRES_USER=stack
         POSTGRES_PASSWORD=stack-job-throwaway
         EOF
+
+    # INF-M6. The same for what a developer's tree has and a checkout has
+    # not: a bytecode cache, a bytecode file outside one and a .env, each
+    # inside a directory the image copies, which only .dockerignore keeps
+    # out; and a file beside the source, which only the COPY lines of
+    # Dockerfile.backend keep out.
+    - name: Plant what the image must not take
+      run: |
+        mkdir -p backend/__pycache__
+        echo planted > backend/__pycache__/planted.cpython-310.pyc
+        echo planted > backend/planted.pyc
+        echo PLANTED=1 > backend/.env
+        echo planted > planted-beside-the-source.txt
 
     - name: Build and start the stack
       run: docker compose up -d --build
@@ -298,10 +333,16 @@ jobs:
         # a failure would pass for the wrong reason.
         test -f .env
         test -e .git
+        test -f backend/__pycache__/planted.cpython-310.pyc
+        test -f backend/planted.pyc
+        test -f backend/.env
+        test -f planted-beside-the-source.txt
         docker compose exec -T backend test -f /app/backend/main.py
 
-        # What .dockerignore keeps out of the image is not in the container
-        # either: no mount puts it back.
+        # The .env, the .git and any database file at the top of the
+        # checkout are not in the container: no mount covers them. (What is
+        # inside backend/ is another matter. The mount shows that directory
+        # as the checkout has it, the planted .env included.)
         if docker compose exec -T backend test -e /app/.env; then
           echo "the host's .env is inside the container"; exit 1
         fi
@@ -317,8 +358,35 @@ jobs:
         mounts=$(docker inspect --format '{{range .Mounts}}{{.Type}} {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' "$container" | grep . | LC_ALL=C sort)
         echo "$mounts"
         test "$mounts" = "$(printf '%s\n' 'bind /app/alembic rw=false' 'bind /app/alembic.ini rw=false' 'bind /app/backend rw=false')"
-        if docker compose exec -T backend touch /app/backend/written-from-the-container; then
+        # As root, which only a read-only mount stops: the server's own
+        # account (INF-H4) may be refused by the checkout's permissions alone.
+        if docker compose exec -T --user 0 backend touch /app/backend/written-from-the-container; then
           echo "the container wrote to the host's source tree"; exit 1
+        fi
+
+        # INF-M6. What the image holds, read from the image with nothing
+        # mounted over it; the container above shows backend/ and alembic/
+        # as the checkout has them. At the top of /app, the four paths
+        # Dockerfile.backend names and no other. Below it, none of what was
+        # planted and nothing else of those kinds.
+        image=$(docker inspect --format '{{.Image}}' "$container")
+        docker run --rm "$image" test -f /app/backend/main.py
+        built=$(docker run --rm "$image" ls -A /app | LC_ALL=C sort)
+        echo "$built"
+        test "$built" = "$(printf '%s\n' alembic alembic.ini backend requirements.txt)"
+        planted=$(docker run --rm "$image" find /app -name __pycache__ -o -name '*.pyc' -o -name '.env*' -o -name '*.db' -o -name 'planted*')
+        echo "$planted"
+        test -z "$planted"
+
+        # INF-H4. Every process in the container belongs to the account
+        # Dockerfile.backend makes (uid 10001): the reloader and the server
+        # it starts, read from /proc as in the job above. And that account,
+        # which is who `exec` runs a command as, cannot make a file in /app.
+        owners=$(docker compose exec -T backend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        echo "$owners"
+        test "$owners" = 10001
+        if docker compose exec -T backend touch /app/written-from-the-container; then
+          echo "the server's account can write to /app"; exit 1
         fi
 
         # A file written on the host is in the container, and the reloader
@@ -345,3 +413,11 @@ jobs:
         done
         curl -fsS -o ui.html "$ui/"
         grep -q '/src/main.tsx' ui.html
+
+        # INF-H4. That server, and everything npm started to run it, belongs
+        # to the node image's `node` account (uid 1000). The page above was
+        # served by it from the runner's checkout, whichever account owns
+        # that.
+        owners=$(docker compose exec -T frontend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        echo "$owners"
+        test "$owners" = 1000

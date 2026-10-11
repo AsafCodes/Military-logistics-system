@@ -19,7 +19,10 @@ What is NOT covered here:
     image, starts it and requests pages from it, and is the only check of
     either. These tests do not run that job. They check that it exists,
     has no `if` or `continue-on-error` on the job or on a step, builds and
-    starts the image, and still contains each of its probe lines;
+    starts the image, and still contains each of its probe lines, outside
+    any block that could step over it. The reader that says so follows
+    `if`, loops and `case` and refuses a list of other constructs; a command
+    replaced by some means not on that list is not seen;
   - the rest of nginx's configuration. nginx.conf is one file included by
     the nginx image's own /etc/nginx/nginx.conf, which with its mime.types
     decides, for one, what Content-Type a .js file gets and so whether
@@ -39,6 +42,7 @@ import os
 import re
 import shlex
 
+import pytest
 import yaml
 
 from tests.test_container_entrypoint import dockerfile_instructions, exec_form
@@ -164,6 +168,172 @@ def major(version):
     return int(re.search(r"\d+", version).group())
 
 
+# --- Reading a probe script ---------------------------------------------------
+
+OPENS_A_BLOCK = re.compile(r"(if|for|while|until|case|select)\b")
+CLOSES_A_BLOCK = re.compile(r"(fi|done|esac)\b")
+CLOSED_WHERE_IT_OPENED = re.compile(r";\s*(fi|done|esac)$")
+# A script that stops and reports success, or hands over to something else.
+LEAVES_EARLY = re.compile(r"(^|[;&|]\s*)(exit|return)\b(?!\s+1\b)")
+# Ways of making a line mean something other than what it says.
+REDEFINES = re.compile(
+    r"(^|[;&|]\s*)"
+    r"((exec|eval|alias|unalias|function|source|unset|enable|shopt|export)\b|PATH=|\.\s|\w+\s*\(\))"
+)
+THE_TRAP = re.compile(r"trap '[^']* \|\| true' ERR")
+
+
+def reached(script):
+    """The lines of a probe script that run whenever the script gets that far.
+
+    That is, the lines outside every `if`, loop and `case`: a probe inside
+    `if false; then ... fi` is in the script and never runs. A block's first
+    line counts (it is evaluated) and its body does not.
+
+    The script is refused outright if it has what this reader cannot follow
+    or what would stop the lines after it from mattering: a heredoc, a line
+    continued with a backslash, a quote left open at the end of a line, a
+    brace or parenthesis group, a function, `exit` or `return` with anything
+    but 1, `exec`, `eval`, `alias`, `source`, `export`, a second `trap` or
+    one that does not end in the log dump. Those words are looked for where
+    a command starts: at the start of a line and after `;`, `&` or `|`. It
+    is not a shell parser: the same thing inside `$(...)`, or after `then`
+    on the line of an `if`, is not seen. What else it does not see is said
+    in the docstrings of the tests that use it.
+    """
+    depth = 0
+    lines = []
+    traps = []
+    for raw in script.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        assert "<<" not in line, f"a heredoc: {line}"
+        assert not line.endswith("\\"), f"a continued line: {line}"
+        try:
+            shlex.split(line)
+        except ValueError:
+            raise AssertionError(f"a quote left open: {line}") from None
+        assert not LEAVES_EARLY.search(line), f"leaves the script early: {line}"
+        assert not REDEFINES.search(line), f"changes what later lines mean: {line}"
+        assert not line.startswith(("{", "}", "(", ")", "!")), f"a group or a negation: {line}"
+        assert not line.endswith(("{", "(", "&")), f"a group or a background job: {line}"
+        if line.startswith("trap "):
+            traps.append(line)
+
+        if CLOSES_A_BLOCK.match(line):
+            depth -= 1
+            assert depth >= 0, f"closes a block that was not opened: {line}"
+        if depth == 0:
+            lines.append(line)
+        if OPENS_A_BLOCK.match(line) and not CLOSED_WHERE_IT_OPENED.search(line):
+            depth += 1
+    assert depth == 0, "a block is left open"
+    assert len(traps) == 1 and THE_TRAP.fullmatch(traps[0]), traps
+    assert "exit" not in traps[0]
+    return lines
+
+
+def test_the_probe_script_reader_knows_which_lines_always_run():
+    script = """
+        set -euo pipefail
+        trap 'docker logs x || true' ERR
+        # a comment
+        for attempt in $(seq 1 3); do
+          if curl -fsS "$base/"; then break; fi
+          sleep 1
+        done
+        probe one
+        if probe two; then
+          echo "no"; exit 1
+        fi
+        case "$script" in
+          /assets/*.js) ;;
+          *) echo "unexpected: '$script'"; exit 1 ;;
+        esac
+        probe three
+    """
+    assert reached(script) == [
+        "set -euo pipefail",
+        "trap 'docker logs x || true' ERR",
+        "for attempt in $(seq 1 3); do",
+        "done",
+        "probe one",
+        "if probe two; then",
+        "fi",
+        'case "$script" in',
+        "esac",
+        "probe three",
+    ]
+
+
+SKIPPED = "trap 'docker logs x || true' ERR\n{}\nprobe\n{}"
+
+
+@pytest.mark.parametrize("before, after", [
+    ("if false; then", "fi"),
+    ("if true; then true; else", "fi"),
+    ("for nothing in; do", "done"),
+    ("while false; do", "done"),
+    ("until true; do", "done"),
+    ("case x in y)", "esac"),
+])
+def test_a_probe_inside_a_block_is_not_one_that_always_runs(before, after):
+    assert "probe" not in reached(SKIPPED.format(before, after))
+    assert "probe" in reached(SKIPPED.format("true", "true"))
+
+
+@pytest.mark.parametrize("before, after", [
+    # stops, green, before the probe
+    ("exit 0", "true"),
+    ("exit", "true"),
+    ("true; exit 0", "true"),
+    ("true && exit 0", "true"),
+    ("return 0", "true"),
+    ("exec true", "true"),
+    # the probe is text, not a command
+    (": <<'SKIP'", "SKIP"),
+    (": '", "'"),
+    ("false && \\", "true"),
+    ("skip() {", "}"),
+    ("{", "}"),
+    ("(", ")"),
+    # the probe's command is something else
+    ("probe() { true; }", "true"),
+    ("function probe { true; }", "true"),
+    ("alias probe=true", "true"),
+    ("eval 'probe() { true; }'", "true"),
+    ("source ./elsewhere.sh", "true"),
+    (". ./elsewhere.sh", "true"),
+    ("export PATH=/elsewhere:$PATH", "true"),
+    ("PATH=/elsewhere:$PATH", "true"),
+    # ... and the same after another command on the line
+    ("true; probe() { true; }", "true"),
+    ("true; alias probe=true", "true"),
+    ("true && eval 'probe() { true; }'", "true"),
+    ("true; exec true", "true"),
+    ("true && . ./elsewhere.sh", "true"),
+    ("true | source ./elsewhere.sh", "true"),
+    # a failure no longer stops the script, or stops it green
+    ("trap 'exit 0' ERR", "true"),
+    ("trap - ERR", "true"),
+    ("shopt -u inherit_errexit", "true"),
+    # blocks that do not balance
+    ("if true; then", "true"),
+    ("true", "fi"),
+])
+def test_the_probe_script_reader_refuses_what_it_cannot_follow(before, after):
+    with pytest.raises(AssertionError):
+        reached(SKIPPED.format(before, after))
+
+
+def test_the_probe_script_reader_wants_the_one_trap():
+    with pytest.raises(AssertionError):
+        reached("set -euo pipefail\nprobe")
+    with pytest.raises(AssertionError):
+        reached("trap 'docker logs x || exit 0' ERR\nprobe")
+
+
 # --- The readers themselves --------------------------------------------------
 
 def test_the_stage_reader_understands_the_shapes_it_is_asked_about():
@@ -212,10 +382,14 @@ def test_the_image_is_nginx_and_holds_nothing_but_the_config_and_the_built_files
     assert image["base"].split(":")[0] == "nginx"
     # The whole stage, so that anything added to it is added on purpose: a RUN
     # that installs Node, an ENTRYPOINT that replaces the server, a COPY of
-    # the source, an ENV.
-    assert image["steps"] == [
+    # the source, an ENV. The RUN and the USER are INF-H4's: what the RUN
+    # must do and who the USER is are tests/test_container_users.py's to say.
+    assert [keyword for keyword, _ in image["steps"]] == [
+        "COPY", "COPY", "RUN", "USER", "EXPOSE", "CMD",
+    ]
+    assert [step for step in image["steps"] if step[0] not in ("RUN", "USER")] == [
         ("COPY", f"nginx.conf {NGINX_CONFIG_IN_IMAGE}"),
-        ("COPY", f"--from=build /app/dist {SERVED_FROM}"),
+        ("COPY", f"--chown=0:0 --from=build /app/dist {SERVED_FROM}"),
         ("EXPOSE", PORT),
         ("CMD", '["nginx", "-g", "daemon off;"]'),
     ]
@@ -254,8 +428,10 @@ def test_the_dependencies_are_installed_from_the_lockfile():
     # until they change; `npm ci`, which installs what the lockfile records
     # and fails when package.json disagrees with it; then the source. The
     # lockfile is named without a `*`, so a context that lacks it fails the
-    # build. And no CMD: the stage is not the image.
+    # build. And no CMD: the stage is not the image. The USER line is
+    # INF-H4's (tests/test_container_users.py).
     assert dev["steps"] == [
+        ("USER", "node"),
         ("WORKDIR", "/app"),
         ("COPY", "package.json package-lock.json ./"),
         ("RUN", "npm ci"),
@@ -448,12 +624,14 @@ def test_the_ci_job_still_makes_each_of_its_probes():
     # The probes are shell, and nothing here runs them. This holds each one
     # in the script as a line of its own, outside a comment, so that a
     # probe cannot be dropped or commented out with everything still
-    # green. It does not show that a line does what it says.
+    # green, and outside every `if`, loop and `case`, so that it cannot be
+    # stepped over either (`reached` above). It does not show that a line
+    # does what it says.
     build = shlex.split(step_running("docker build")["run"])
     address = build[build.index("--build-arg") + 1].partition("=")[2]
 
     script = step_running("docker run")["run"]
-    commands = [line.strip() for line in script.splitlines()]
+    commands = reached(script)
 
     for probe in (
         # the page is HTML, revalidated, and the built one
@@ -474,5 +652,11 @@ def test_the_ci_job_still_makes_each_of_its_probes():
         f"docker exec frontend-image grep -rlF '{address}' \"$html/assets\"",
         'test -z "$maps"',
         "if docker exec frontend-image sh -c 'command -v node'; then",
+        # INF-H4: who runs the processes in the container
+        "owners=$(docker exec frontend-image sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)",
+        # INF-H4: whose the served files are, and that nginx cannot add one
+        'served=$(docker exec frontend-image find "$html" ! -user 0)',
+        'test -z "$served"',
+        'if docker exec frontend-image touch "$html/written-from-the-container"; then',
     ):
         assert probe in commands, f"the probe script lost: {probe}"

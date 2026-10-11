@@ -353,8 +353,8 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
 | `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
-| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image. Compose mounts `backend/`, `alembic/` and `alembic.ini` from the host, read-only; the rest of `/app` is as built, and the host's `.env` is not in the container |
-| `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf` |
+| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image. Compose mounts `backend/`, `alembic/` and `alembic.ini` from the host, read-only; the rest of `/app` is as built, and the host's `.env` is not in the container. The server runs as the image's own account (uid 10001), not root, and cannot make a file in `/app` |
+| `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf`. Neither runs as root: the dev server is the node image's `node` account, nginx the nginx image's `nginx` |
 
 ### Database Connection
 - **Docker:** `DATABASE_URL=postgresql://user:password@db:5432/military_db` (from env)
@@ -415,7 +415,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
-19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
+19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` then `docker-compose up --build` (a container that is recreated keeps its volume; after `down` there is none to keep it, so the next `up` starts a new one. Plain `down` leaves the old volume on disk, `down -v` deletes it). The same applies to a frontend container made before the dev server stopped running as root (INF-H4): its old volume belongs to root, the dev server stops at start with `EACCES` on `node_modules/.vite-temp`, and `docker compose up --build -V` replaces the volume.
 
 20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. Fiber's own types declare its JSX elements (`mesh`, `group`, `torusGeometry`, etc.), so a new Three.js element in the globe needs no local declaration — see Module G. Don't remove these packages.
 

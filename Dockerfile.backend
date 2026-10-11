@@ -5,7 +5,36 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# INF-M6. What the server loads, by name: the migrations and their
+# configuration, and the application package. These are the three paths
+# docker-compose.yml mounts over, and tests/test_backend_mounts.py fails if
+# the two lists part.
+#
+# Not `COPY . .`. That took the whole repository, less what .dockerignore
+# listed, so the image held the frontend's source, the tests, and anything
+# that had turned up beside them since the list was written. A new module
+# beside backend/ now needs a line here before the image has it.
+#
+# .dockerignore still decides what comes along inside these directories:
+# bytecode, tool caches, a .env, a database file.
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY backend ./backend
+
+# INF-H4. The server does not run as root. The account is made here with a
+# fixed number, and USER names it by that number: a runtime that is told to
+# refuse root can check a number without reading the image's /etc/passwd.
+#
+# Everything above this line ran as root, so the installed packages and the
+# files under /app belong to root. The server can read them and cannot change
+# them or add to them. It needs to write nothing here: its data is in the
+# database.
+#
+# tests/test_container_users.py reads these two lines, and the `compose-stack`
+# job in .github/workflows/ci.yml asks the running container who it is.
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+USER 10001:10001
 
 # INF-H1. This is the production command: what the image runs when nothing
 # overrides it. It has no file watcher. The development stack asks for one
