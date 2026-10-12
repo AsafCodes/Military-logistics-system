@@ -21,6 +21,16 @@ from .routers import auth, users, equipment, maintenance, setup, reports, analyt
 
 # --- Database Initialization ---
 def wait_for_db():
+    """Try to connect to the database, up to 30 times, 2 s apart.
+
+    INF-H7. On `docker compose up`, docker-compose.yml starts the backend
+    when the database reports healthy, so there the first try is expected to
+    connect. The retries are for the starts nothing holds back: a reload,
+    the container's restart policy, the image run alone, uvicorn on a host.
+    The sleeps add up to 60 s; each try takes its own time on top.
+    tests/test_stack_readiness.py reads the two numbers below and compares
+    them with the start period of Dockerfile.backend's HEALTHCHECK.
+    """
     max_retries = 30
     retry_interval = 2
     for i in range(max_retries):

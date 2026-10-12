@@ -7,6 +7,29 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-military_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # INF-H7. Healthy when the server accepts connections over TCP. `$$` is
+    # for Compose: it passes one `$` on, so the shell in the container reads
+    # the container's own variables, set above.
+    #
+    # -h 127.0.0.1 is needed. On a new volume the image first runs a server
+    # that listens on the Unix socket only, to create the database, and
+    # stops it again. Without -h, pg_isready asks the socket and reports
+    # that server as ready.
+    #
+    # pg_isready does not log in. It answers the same for a user or a
+    # database that does not exist, so this does not show that the backend's
+    # DATABASE_URL works.
+    #
+    # start_interval, here and on the frontend, is the newest of these keys:
+    # Docker's documentation gives Engine 25 as the first to have it. Engine
+    # 29.7 with Compose 5.4 accepted it (2026-10-12).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
 
   backend:
     build:
@@ -14,8 +37,21 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+    # INF-H7. On `docker compose up` the backend is started when the database
+    # reports healthy, not when its container has been started. If the
+    # database never does, the backend is not started and the command ends
+    # with an error. A reload, or the restart policy below bringing the
+    # container back, is not held back like that: it starts the server
+    # whatever state the database is in, and the wait in backend/main.py is
+    # what it has then.
+    #
+    # This service has no `healthcheck:`. Its check is the HEALTHCHECK of
+    # Dockerfile.backend, which the container gets from the image. An
+    # unhealthy container is shown by `docker compose ps`; nothing restarts
+    # it.
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-military_db}
       - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env (see .env.example)}
@@ -87,8 +123,22 @@ services:
       target: dev
     ports:
       - "3000:3000"
+    # INF-H7. Started when the backend reports healthy. If the backend never
+    # does, the frontend is not started and the command ends with an error:
+    # seen with a backend that exits as soon as it starts (2026-10-12).
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    # INF-H7. Healthy when Vite's server answers a request for the page. The
+    # program is BusyBox's wget, which the node image has. It does not show
+    # that the page works in a browser, or that the browser reaches the API.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
     environment:
       - VITE_API_URL=http://localhost:8000
     volumes:

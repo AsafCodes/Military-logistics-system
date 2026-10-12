@@ -98,7 +98,7 @@ Marker_System/
 │       └── types/
 │           └── index.ts                     # TypeScript interfaces
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
-├── Dockerfile.backend          # Python 3.10 + uvicorn (production command; compose replaces it with a --reload one)
+├── Dockerfile.backend          # Python 3.10 + uvicorn (production command; compose replaces it with a --reload one); HEALTHCHECK on /health
 ├── frontend/Dockerfile         # Three stages: Node (`dev`, what compose runs), the build, then nginx serving it (the image)
 ├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
 ├── alembic/                    # Migration environment + versions/
@@ -361,9 +361,11 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
-| `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
-| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image. Compose mounts `backend/`, `alembic/` and `alembic.ini` from the host, read-only; the rest of `/app` is as built, and the host's `.env` is not in the container. The server runs as the image's own account (uid 10001), not root, and cannot make a file in `/app` |
-| `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf`. Neither runs as root: the dev server is the node image's `node` account, nginx the nginx image's `nginx` |
+| `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume. Healthcheck: `pg_isready` over TCP, which does not log in |
+| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image. Compose mounts `backend/`, `alembic/` and `alembic.ini` from the host, read-only; the rest of `/app` is as built, and the host's `.env` is not in the container. The server runs as the image's own account (uid 10001), not root, and cannot make a file in `/app`. Started when `db` is healthy. Healthcheck: the image's `HEALTHCHECK`, a `GET /health` |
+| `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf`. Neither runs as root: the dev server is the node image's `node` account, nginx the nginx image's `nginx`. Started when `backend` is healthy. Healthcheck (compose only; the nginx image has none): a request for the dev server's page |
+
+On `docker compose up` each service starts when the one it depends on is healthy (`depends_on` with `condition: service_healthy`), and `docker compose ps` shows the health of all three. An unhealthy container is reported, not restarted. If one never becomes healthy, the services after it are not started and the command ends with an error. A reload or the backend's restart policy is not ordered like that: either starts the server whatever state the database is in, and `wait_for_db()` in `backend/main.py` retries for those starts and for a server run outside the stack.
 
 ### Database Connection
 - **Docker:** `DATABASE_URL=postgresql://user:password@db:5432/military_db` (from env)

@@ -66,7 +66,9 @@ NODE_ACCOUNT, NODE_UID = "node", "1000"
 NGINX_ACCOUNT, NGINX_UID = "nginx", "101"
 
 # Every key of the frontend service in docker-compose.yml.
-FRONTEND_SERVICE_KEYS = {"build", "ports", "depends_on", "environment", "volumes", "command"}
+FRONTEND_SERVICE_KEYS = {
+    "build", "ports", "depends_on", "healthcheck", "environment", "volumes", "command",
+}
 
 OWNERS_OF_EVERY_PROCESS = "sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)"
 
@@ -250,8 +252,10 @@ def test_the_backend_account_owns_nothing_the_image_was_built_with():
 
     # Everything that puts files in the image comes before USER, so it is
     # root's, and the server's account can read it and not change it ...
+    # What follows it puts none: two variables (INF-M6), the healthcheck
+    # (INF-H7) and the command.
     after = instructions[keywords.index("USER") + 1:]
-    assert [keyword for keyword, _ in after] == ["CMD"]
+    assert [keyword for keyword, _ in after] == ["ENV", "ENV", "HEALTHCHECK", "CMD"]
     # ... and nothing hands any of it over.
     for keyword, arguments in instructions:
         assert "--chown" not in arguments, (keyword, arguments)
@@ -399,9 +403,25 @@ def test_the_compose_stack_job_expects_every_process_to_be_the_services_account(
     step = test_backend_mounts.step_named(test_backend_mounts.PROBE_STEP)
     commands = [line.strip() for line in step["run"].splitlines()]
 
+    # The read, a second time inside a loop, and then the comparison. Docker
+    # starts each healthcheck (INF-H7) as a process in the container, which
+    # is root's in /proc for a moment, so a read that shows anything but the
+    # account is made again. The loop only reads again: its line is the same
+    # listing, what ends it early is the comparison the script makes after
+    # it, and that comparison is still made, outside the loop.
     listing = f"owners=$(docker compose exec -T {service} {OWNERS_OF_EVERY_PROCESS}"
-    assert commands.count(listing) == 1
-    assert expected_owner(commands, listing) == uid
+    assert commands.count(listing) == 2
+    position = commands.index(listing)
+    assert commands[position:position + 8] == [
+        listing,
+        "for attempt in 1 2 3; do",
+        f'if test "$owners" = {uid}; then break; fi',
+        "sleep 1",
+        listing,
+        "done",
+        'echo "$owners"',
+        f'test "$owners" = {uid}',
+    ]
 
 
 def probe_scripts():

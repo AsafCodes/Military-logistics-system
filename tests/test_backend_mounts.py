@@ -542,7 +542,9 @@ def test_the_ci_job_starts_the_stack_as_docker_compose_yml_describes_it():
     steps = [step for step in ci_job()["steps"] if "docker compose up" in step.get("run", "")]
     assert len(steps) == 1
     # No `-f` naming another file, no service list, and a build of both images.
-    assert steps[0]["run"].strip() == "docker compose up -d --build"
+    # --wait (INF-H7): the step ends when every service reports healthy, and
+    # fails when one does not.
+    assert steps[0]["run"].strip() == "docker compose up -d --build --wait"
 
     # Nor anywhere else in the job: a second file would be a second
     # description of the service, mounts included. `-f`, `-p` and

@@ -49,6 +49,53 @@ RUN groupadd --system --gid 10001 app \
  && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 USER 10001:10001
 
+# INF-M6. Two settings for the Python that runs the server, and for any other
+# Python started in a container of this image.
+#
+# PYTHONUNBUFFERED: what the server prints goes to the container's log when it
+# is printed. Without it Python collects what is written to standard output
+# into blocks when that is not a terminal, so the "Database not ready" lines
+# of backend/main.py would reach `docker logs` late, or not at all from a
+# process that is killed first.
+#
+# PYTHONDONTWRITEBYTECODE: Python does not try to write a .pyc file beside a
+# module it imports. The account above cannot write under /app, so this stops
+# the attempts; no file was being written there before either.
+#
+# They are set down here, after the install, so the pip line above runs as it
+# did before them.
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# INF-H7. How Docker learns whether the server in a container is serving. It
+# runs this command in the container: a GET of /health, which backend/main.py
+# answers 200 when one query to the database returns and 503 when it raises.
+# urlopen raises on a 503, on a refused connection and after its timeout, so
+# the command ends with a failure in each case. It is written in Python
+# because the image is certain to have it, whatever the base image leaves out.
+# A GET, not a HEAD: the route answers a HEAD with 405.
+#
+# --start-period is longer than the 60 s backend/main.py sleeps between its
+# tries to reach a database (30 tries, 2 s apart). Until the first check that
+# succeeds, a failure inside the period is not counted, and the check runs
+# every 2 s (--start-interval), so a server that is ready early is reported
+# soon. From the first success, or from the end of the period: every 10 s,
+# and three failures in a row make the container `unhealthy`.
+#
+# The period is not longer than every wait. A try takes time as well, about
+# 4 s each where the database's name does not resolve (measured 2026-10-12),
+# and the migrations follow. A server still waiting after the period fails
+# its checks like any other, and is reported unhealthy after three.
+#
+# Unhealthy is a report. Neither `docker run` nor Compose restarts the
+# container for it.
+#
+# docker-compose.yml gives its backend service no check of its own, so this
+# is the one it has. tests/test_stack_readiness.py reads this line and runs
+# its command against a stand-in server.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=90s --start-interval=2s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+
 # INF-H1. This is the production command: what the image runs when nothing
 # overrides it. It has no file watcher. The development stack asks for one
 # itself, with its own `command:` in docker-compose.yml.

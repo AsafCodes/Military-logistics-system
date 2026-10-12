@@ -275,13 +275,17 @@ jobs:
   # whether a file created on the host reaches the running server. It also
   # asks the frontend service for its page. Since INF-H4 and INF-M6 it reads
   # who runs the processes in both containers, and what the backend image
-  # holds when nothing is mounted over it.
+  # holds when nothing is mounted over it. Since INF-H7 it starts the stack
+  # with `--wait`, reads the health of the three containers, and last stops
+  # the database to see the backend reported unhealthy.
   # tests/test_backend_mounts.py reads the compose file without Docker; that
   # test also fails if this job or a step in it is given `continue-on-error`
-  # or an `if:`.
+  # or an `if:`. tests/test_stack_readiness.py holds the INF-H7 probes.
   #
   # Not covered: the backend image run with its own command. Compose replaces
   # that command, and mounts host source over part of what the image holds.
+  # The image's HEALTHCHECK is covered: the backend service has no check of
+  # its own, so the health read below is that one's.
   compose-stack:
     runs-on: ubuntu-latest
 
@@ -313,8 +317,12 @@ jobs:
         echo PLANTED=1 > backend/.env
         echo planted > planted-beside-the-source.txt
 
+    # INF-H7. --wait returns when every service reports healthy, and fails
+    # this step when one reports unhealthy or stops. docker-compose.yml starts
+    # the backend after the database is healthy and the frontend after the
+    # backend is, so a green step is the three of them, in that order.
     - name: Build and start the stack
-      run: docker compose up -d --build
+      run: docker compose up -d --build --wait
 
     # As in the job above, each "must not" is an `if`: `set -e` ignores a
     # command with a `!` in front of it.
@@ -327,13 +335,25 @@ jobs:
         started='Started server process'
         notice="detected changes in 'backend/reload_probe.py'"
 
-        # The backend answers. It waits for Postgres itself, so this can take
-        # a while on a database that is being created.
+        health='{{.State.Health.Status}}'
+
+        # The backend answers. The step above waited until it was healthy,
+        # so the first request is expected to succeed; the loop is left from
+        # before that.
         for attempt in $(seq 1 60); do
           if curl -fsS -o /dev/null "$api/openapi.json"; then break; fi
           sleep 1
         done
         curl -fsS -o /dev/null "$api/openapi.json"
+
+        # INF-H7. Each container has a healthcheck and it reports healthy.
+        # A container without one has no such field, and the line fails.
+        # The backend's is the HEALTHCHECK of its image; the route it asks
+        # answers here too.
+        test "$(docker inspect --format "$health" "$(docker compose ps -q db)")" = healthy
+        test "$(docker inspect --format "$health" "$(docker compose ps -q backend)")" = healthy
+        test "$(docker inspect --format "$health" "$(docker compose ps -q frontend)")" = healthy
+        curl -fsS -o /dev/null "$api/health"
 
         # The two things looked for below exist on the host, and a command can
         # be run in the container at all. Without these a probe that expects
@@ -384,12 +404,28 @@ jobs:
         planted=$(docker run --rm "$image" find /app -name __pycache__ -o -name '*.pyc' -o -name '.env*' -o -name '*.db' -o -name 'planted*')
         echo "$planted"
         test -z "$planted"
+        # The two settings Dockerfile.backend gives Python.
+        test "$(docker run --rm "$image" printenv PYTHONUNBUFFERED)" = 1
+        test "$(docker run --rm "$image" printenv PYTHONDONTWRITEBYTECODE)" = 1
 
         # INF-H4. Every process in the container belongs to the account
         # Dockerfile.backend makes (uid 10001): the reloader and the server
         # it starts, read from /proc as in the job above. And that account,
         # which is who `exec` runs a command as, cannot make a file in /app.
+        #
+        # INF-H7. The read is repeated, up to three more times, when it shows
+        # anything else. Docker runs each healthcheck by starting a process
+        # in the container, and for a moment that process is root's in /proc
+        # before it becomes the account's. With a check every second, 12 of
+        # 400 reads caught one (2026-10-12); here it is every 10 s. A process
+        # that stays root's is in every read and still fails. One that is
+        # gone within a second or two can be missed, as it could before.
         owners=$(docker compose exec -T backend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        for attempt in 1 2 3; do
+          if test "$owners" = 10001; then break; fi
+          sleep 1
+          owners=$(docker compose exec -T backend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        done
         echo "$owners"
         test "$owners" = 10001
         if docker compose exec -T backend touch /app/written-from-the-container; then
@@ -424,7 +460,26 @@ jobs:
         # INF-H4. That server, and everything npm started to run it, belongs
         # to the node image's `node` account (uid 1000). The page above was
         # served by it from the runner's checkout, whichever account owns
-        # that.
+        # that. Read again when a healthcheck's process is caught, as for
+        # the backend above.
         owners=$(docker compose exec -T frontend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        for attempt in 1 2 3; do
+          if test "$owners" = 1000; then break; fi
+          sleep 1
+          owners=$(docker compose exec -T frontend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        done
         echo "$owners"
         test "$owners" = 1000
+
+        # INF-H7. Last, because it takes the database away. The server goes
+        # on running, /health answers 503, and after three failed checks
+        # Docker reports the backend unhealthy. On a developer's machine
+        # that took 43 s, and the 503 about 4 s to arrive (2026-10-12).
+        docker compose stop db
+        for attempt in $(seq 1 90); do
+          if test "$(docker inspect --format "$health" "$container")" = unhealthy; then break; fi
+          sleep 1
+        done
+        test "$(docker inspect --format "$health" "$container")" = unhealthy
+        status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$api/health")
+        test "$status" = 503
