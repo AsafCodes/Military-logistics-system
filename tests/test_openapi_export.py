@@ -2,8 +2,8 @@
 
 frontend/openapi.json was a tracked copy of the specification that nobody
 regenerated: it declared version "4.0 - Secured" against the app's 0.5.0, and
-listed ten paths -- two of them since removed -- where the app serves
-twenty-nine. It was the input the generated frontend client was built from,
+listed ten paths -- two of them since removed -- where the app then
+served twenty-nine. It was the input the generated frontend client was built from,
 until API-H2 deleted that client and its generator.
 
 The fix is to stop tracking it and generate it from the application on demand

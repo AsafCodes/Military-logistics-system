@@ -4,13 +4,16 @@ Modular Architecture v4.1
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.exc import OperationalError
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.orm import Session
 import time
 
 # Internal Modules - relative imports within backend package
-from .database import engine
+from .database import engine, get_db
 from .migrations import run_migrations
 
 # Routers
@@ -18,6 +21,16 @@ from .routers import auth, users, equipment, maintenance, setup, reports, analyt
 
 # --- Database Initialization ---
 def wait_for_db():
+    """Try to connect to the database, up to 30 times, 2 s apart.
+
+    INF-H7. On `docker compose up`, docker-compose.yml starts the backend
+    when the database reports healthy, so there the first try is expected to
+    connect. The retries are for the starts nothing holds back: a reload,
+    the container's restart policy, the image run alone, uvicorn on a host.
+    The sleeps add up to 60 s; each try takes its own time on top.
+    tests/test_stack_readiness.py reads the two numbers below and compares
+    them with the start period of Dockerfile.backend's HEALTHCHECK.
+    """
     max_retries = 30
     retry_interval = 2
     for i in range(max_retries):
@@ -47,9 +60,9 @@ async def lifespan(app: FastAPI):
     semantics, not an oversight.
 
     NOT a fix for the multi-worker race: lifespan runs once per worker process,
-    so N workers still run N migrations concurrently. Nothing in this repo runs
-    more than one worker today; a deployment that does needs the migration
-    hoisted out of the server entirely.
+    so N workers still run N migrations concurrently. Dockerfile.backend's
+    command names one worker for this reason (INF-H1); a deployment that wants
+    more needs the migration hoisted out of the server entirely.
     """
     wait_for_db()
     run_migrations()
@@ -103,3 +116,24 @@ app.include_router(verifications.history_router)
 @app.get("/")
 def read_root():
     return {"message": "Military Logistics System V4.1 (Modular) 🛡️"}
+
+
+# --- Health Endpoint ---
+@app.get("/health")
+def read_health(db: Session = Depends(get_db)):
+    """Whether one query to this server's database succeeds (INF-H7).
+
+    It executes `SELECT 1` on the session `get_db` gives it: 200 when that
+    returns, 503 when SQLAlchemy raises. It is for a container healthcheck,
+    so it takes no credentials. For the same reason the 503 says nothing
+    about the failure: the exception's text can name the database's host.
+
+    It sets no time limit of its own, so a request lasts as long as the
+    query does. It does not show that the schema is migrated or that any
+    other route works.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {"status": "ok"}

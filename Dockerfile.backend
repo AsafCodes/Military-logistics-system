@@ -2,9 +2,125 @@ FROM python:3.10
 
 WORKDIR /app
 
+# INF-H5. requirements.txt is a lock: every package the server runs on, at
+# one version, with the hashes of its files. pip stops on a download that
+# matches none of its hashes, on a package the lock does not name, and on a
+# line without a hash. It does that for any file with a hash in it.
+# --require-hashes is for a file with none: pip would install that one as
+# given, and with the flag it refuses. (Seen on pip 23.0.1, which the base
+# image carried on 2026-10-11.) The lock is compiled from requirements.in,
+# which says how.
+#
+# Not held here: the base image above is a moving tag, and pip itself is
+# whichever release that image carries.
+#
+# tests/test_dependency_pins.py reads the install line.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
-COPY . .
+# INF-M6. What the server loads, by name: the migrations and their
+# configuration, and the application package. These are the three paths
+# docker-compose.yml mounts over, and tests/test_backend_mounts.py fails if
+# the two lists part.
+#
+# Not `COPY . .`. That took the whole repository, less what .dockerignore
+# listed, so the image held the frontend's source, the tests, and anything
+# that had turned up beside them since the list was written. A new module
+# beside backend/ now needs a line here before the image has it.
+#
+# .dockerignore still decides what comes along inside these directories:
+# bytecode, tool caches, a .env, a database file.
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY backend ./backend
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# INF-H4. The server does not run as root. The account is made here with a
+# fixed number, and USER names it by that number: a runtime that is told to
+# refuse root can check a number without reading the image's /etc/passwd.
+#
+# Everything above this line ran as root, so the installed packages and the
+# files under /app belong to root. The server can read them and cannot change
+# them or add to them. It needs to write nothing here: its data is in the
+# database.
+#
+# tests/test_container_users.py reads these two lines, and the `compose-stack`
+# job in .github/workflows/ci.yml asks the running container who it is.
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+USER 10001:10001
+
+# INF-M6. Two settings for the Python that runs the server, and for any other
+# Python started in a container of this image.
+#
+# PYTHONUNBUFFERED: what the server prints goes to the container's log when it
+# is printed. Without it Python collects what is written to standard output
+# into blocks when that is not a terminal, so the "Database not ready" lines
+# of backend/main.py would reach `docker logs` late, or not at all from a
+# process that is killed first.
+#
+# PYTHONDONTWRITEBYTECODE: Python does not try to write a .pyc file beside a
+# module it imports. The account above cannot write under /app, so this stops
+# the attempts; no file was being written there before either.
+#
+# They are set down here, after the install, so the pip line above runs as it
+# did before them.
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# INF-H7. How Docker learns whether the server in a container is serving. It
+# runs this command in the container: a GET of /health, which backend/main.py
+# answers 200 when one query to the database returns and 503 when it raises.
+# urlopen raises on a 503, on a refused connection and after its timeout, so
+# the command ends with a failure in each case. It is written in Python
+# because the image is certain to have it, whatever the base image leaves out.
+# A GET, not a HEAD: the route answers a HEAD with 405.
+#
+# --start-period is longer than the 60 s backend/main.py sleeps between its
+# tries to reach a database (30 tries, 2 s apart). Until the first check that
+# succeeds, a failure inside the period is not counted, and the check runs
+# every 2 s (--start-interval), so a server that is ready early is reported
+# soon. From the first success, or from the end of the period: every 10 s,
+# and three failures in a row make the container `unhealthy`.
+#
+# The period is not longer than every wait. A try takes time as well, about
+# 4 s each where the database's name does not resolve (measured 2026-10-12),
+# and the migrations follow. A server still waiting after the period fails
+# its checks like any other, and is reported unhealthy after three.
+#
+# Unhealthy is a report. Neither `docker run` nor Compose restarts the
+# container for it.
+#
+# docker-compose.yml gives its backend service no check of its own, so this
+# is the one it has. tests/test_stack_readiness.py reads this line and runs
+# its command against a stand-in server.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=90s --start-interval=2s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+
+# INF-H1. This is the production command: what the image runs when nothing
+# overrides it. It has no file watcher. The development stack asks for one
+# itself, with its own `command:` in docker-compose.yml.
+#
+# --workers 1 is a decision, not a leftover. backend/main.py migrates the
+# database in its lifespan handler, which runs once per worker process, so
+# more than one worker would run the migrations concurrently. The flag is
+# written out because without it uvicorn takes the count from the environment
+# (WEB_CONCURRENCY). Raising it needs the migration race closed first
+# (DATA-M24).
+#
+# --proxy-headers: a trusted proxy supplies the client address and scheme
+# (X-Forwarded-For, X-Forwarded-Proto). This is uvicorn's default as well, so
+# the flag changes no behaviour; it is here so the setting is written down.
+# Which peers are trusted comes from the FORWARDED_ALLOW_IPS environment
+# variable, read by uvicorn when it starts; unset, only loopback is trusted.
+# A proxy in another container connects from a different address, so its
+# headers are ignored until the variable names it. Do not add
+# --forwarded-allow-ips here: a trust-everything value would let any client
+# choose the address the server believes it has.
+#
+# Do not set UVICORN_* variables in this file either. uvicorn takes any option
+# from a UVICORN_<OPTION> variable, so one would change this command without
+# appearing in it.
+#
+# tests/test_container_entrypoint.py reads this line and starts a server with
+# its flags.
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers"]

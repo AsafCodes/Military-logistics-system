@@ -98,11 +98,14 @@ Marker_System/
 │       └── types/
 │           └── index.ts                     # TypeScript interfaces
 ├── docker-compose.yml          # 3-service orchestration (db + backend + frontend)
-├── Dockerfile.backend          # Python 3.10 + uvicorn
-├── frontend/Dockerfile         # Node frontend container
+├── Dockerfile.backend          # Python 3.10 + uvicorn (production command; compose replaces it with a --reload one); HEALTHCHECK on /health
+├── frontend/Dockerfile         # Three stages: Node (`dev`, what compose runs), the build, then nginx serving it (the image)
 ├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
 ├── alembic/                    # Migration environment + versions/
-├── requirements.txt            # Python dependencies
+├── requirements.in             # The server's Python packages, one version each (hand-written)
+├── requirements.txt            # The lock compiled from it: every package, with hashes (generated; what the image installs)
+├── requirements-dev.in         # pytest, ruff and what the tests import (hand-written)
+├── requirements-dev.txt        # The lock compiled from it (generated; CI installs both locks)
 ├── .env / .env.example         # SECRET_KEY + DATABASE_URL configuration
 └── SYSTEM_MAP.md               # ← You are here
 ```
@@ -196,6 +199,12 @@ Marker_System/
 ---
 
 ## 4. 🔌 Backend API Endpoints (Complete Reference)
+
+### Server (`main.py`)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | A fixed greeting. Reads nothing |
+| `GET` | `/health` | Runs `SELECT 1`: 200 `{"status": "ok"}`, or 503 `{"status": "unavailable"}` when SQLAlchemy raises. Unauthenticated by design: it is for a container healthcheck (INF-H7) |
 
 ### Auth (`routers/auth.py`)
 | Method | Path | Description |
@@ -352,9 +361,11 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
-| `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume |
-| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn with hot-reload |
-| `frontend` | `frontend/Dockerfile` (Node) | `3000` | React dev server |
+| `db` | `postgres:15-alpine` | `5432` (internal only) | PostgreSQL database with persistent volume. Healthcheck: `pg_isready` over TCP, which does not log in |
+| `backend` | `Dockerfile.backend` (Python 3.10) | `8000` | FastAPI + uvicorn; hot-reload comes from `docker-compose.yml`'s `command:`, not from the image. Compose mounts `backend/`, `alembic/` and `alembic.ini` from the host, read-only; the rest of `/app` is as built, and the host's `.env` is not in the container. The server runs as the image's own account (uid 10001), not root, and cannot make a file in `/app`. Started when `db` is healthy. Healthcheck: the image's `HEALTHCHECK`, a `GET /health` |
+| `frontend` | `frontend/Dockerfile`, stage `dev` (Node 24) | `3000` | Vite dev server, named by `docker-compose.yml`'s `command:`. The image itself (the last stage) is nginx serving a production build on the same port, configured by `frontend/nginx.conf`. Neither runs as root: the dev server is the node image's `node` account, nginx the nginx image's `nginx`. Started when `backend` is healthy. Healthcheck (compose only; the nginx image has none): a request for the dev server's page |
+
+On `docker compose up` each service starts when the one it depends on is healthy (`depends_on` with `condition: service_healthy`), and `docker compose ps` shows the health of all three. An unhealthy container is reported, not restarted. If one never becomes healthy, the services after it are not started and the command ends with an error. A reload or the backend's restart policy is not ordered like that: either starts the server whatever state the database is in, and `wait_for_db()` in `backend/main.py` retries for those starts and for a server run outside the stack.
 
 ### Database Connection
 - **Docker:** `DATABASE_URL=postgresql://user:password@db:5432/military_db` (from env)
@@ -366,7 +377,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 |----------|-------|-------------|
 | `SECRET_KEY` | `.env` | JWT signing key (required, crashes if missing) |
 | `DATABASE_URL` | `docker-compose.yml` (containers); `.env` or shell (host) | Connection string (required, crashes if missing) |
-| `VITE_API_URL` | `docker-compose.yml` | Backend URL for frontend Axios |
+| `VITE_API_URL` | `docker-compose.yml` (dev server); `--build-arg` (image) | Backend URL for frontend Axios. Read when the JavaScript is built: the dev server reads it at start, the image has it fixed at `docker build` |
 | `SEED_ENABLED` | shell, per-run | Must be `1` for `seed_data.py` to run at all |
 | `BOOTSTRAP_ADMIN_ENABLED` | shell, per-run | Must be `1` for `bootstrap_admin.py` to create the first MASTER |
 
@@ -415,7 +426,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
-19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` (removes anonymous volumes) then `docker-compose up --build`.
+19. **Stale Docker anonymous volumes can cause missing `node_modules` packages.** The `docker-compose.yml` uses `/app/node_modules` as an anonymous volume to preserve container deps. But this volume persists across rebuilds — if a new dependency (e.g., `tailwindcss-animate`) is added to `package.json`, the old volume won't have it. Fix: `docker-compose down` then `docker-compose up --build` (a container that is recreated keeps its volume; after `down` there is none to keep it, so the next `up` starts a new one. Plain `down` leaves the old volume on disk, `down -v` deletes it). The same applies to a frontend container made before the dev server stopped running as root (INF-H4): its old volume belongs to root, the dev server stops at start with `EACCES` on `node_modules/.vite-temp`, and `docker compose up --build -V` replaces the volume.
 
 20. **The 3D globe requires `three`, `@react-three/fiber`, `@react-three/drei`, and `@types/three`.** These are the rendering stack for `NetworkGlobe.tsx`. Fiber's own types declare its JSX elements (`mesh`, `group`, `torusGeometry`, etc.), so a new Three.js element in the globe needs no local declaration — see Module G. Don't remove these packages.
 

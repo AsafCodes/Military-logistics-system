@@ -1,14 +1,21 @@
-# Python
-venv/
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.ruff_cache/
-*.egg-info/
+# What the backend image is built without. Dockerfile.backend copies
+# requirements.txt, alembic.ini, alembic/ and backend/ by name, so nothing
+# else in the repository reaches the image whatever this file says. The
+# patterns that still decide something are the ones for what can sit INSIDE
+# those two directories; they start with `**/`, because a pattern without it
+# is matched at the top of the build context and nowhere below.
 
-# Database
-*.db
+# Python: what the interpreter and its tools leave beside a module.
+venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.egg-info/
+
+# Database files, wherever one was made.
+**/*.db
 sql_app.db
 
 # IDE / Editor
@@ -21,8 +28,11 @@ sql_app.db
 .github/
 .gitignore
 
-# Environment
-.env
+# Environment files, wherever one was left. backend/.env is the one that
+# matters most: python-dotenv looks beside backend/database.py before it
+# looks in /app, so the server would read a copy that got into the image.
+**/.env
+**/.env.*
 
 # Docs
 *.md

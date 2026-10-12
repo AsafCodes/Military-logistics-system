@@ -55,11 +55,18 @@ jobs:
       with:
         python-version: '3.10'
 
+    # INF-H5. Both files are locks with hashes: requirements.txt is what the
+    # image installs, requirements-dev.txt adds pytest, ruff and what the
+    # tests import. They are installed with --require-hashes, as in
+    # Dockerfile.backend, which says what that refuses. No package is named
+    # on a command line here; a new one goes in requirements.in or
+    # requirements-dev.in. pip itself is the one thing upgraded by name, and
+    # is not locked.
+    # tests/test_dependency_pins.py reads this step.
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install ruff pytest httpx
+        pip install --require-hashes -r requirements.txt -r requirements-dev.txt
 
     # WAIVER (DATA-L4): backend/ carries 42 pre-existing ruff findings. They
     # still surface as inline annotations; they just do not fail the build yet.
@@ -166,3 +173,313 @@ jobs:
     # regression.
     - name: Run tests
       run: npm run test
+
+  # INF-H2. The only place the frontend image is built and run. It builds
+  # frontend/Dockerfile to its last stage, starts the result, and requests
+  # pages from it. tests/test_frontend_image.py reads the Dockerfile and
+  # nginx.conf without Docker; whether the image builds, and what nginx makes
+  # of that configuration, is shown here and nowhere else. That test also
+  # fails if this job or a step in it is given `continue-on-error` or an `if:`.
+  #
+  # Not covered here: the backend image and the stack docker-compose.yml
+  # starts. The `compose-stack` job below builds and starts both.
+  frontend-image:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # The address is a made-up one. The probe below looks for it in the built
+    # JavaScript, which shows that the build argument reaches the bundle.
+    - name: Build the frontend image
+      run: docker build --build-arg VITE_API_URL=https://api.example.test -t vector-frontend:ci ./frontend
+
+    # A `!` in front of a command would not stop this script (`set -e` ignores
+    # a negated command), so each "must not" is written as an `if`.
+    - name: Start the image and probe what it serves
+      run: |
+        set -euo pipefail
+        trap 'docker logs frontend-image || true' ERR
+        base=http://localhost:3000
+        html=/usr/share/nginx/html
+
+        docker run -d --name frontend-image -p 3000:3000 vector-frontend:ci
+        for attempt in $(seq 1 30); do
+          if curl -fsS -o /dev/null "$base/"; then break; fi
+          sleep 1
+        done
+
+        # The page: HTML, the built one, and told to be revalidated.
+        curl -fsS -D root.headers -o root.html "$base/"
+        grep -qi '^content-type: text/html' root.headers
+        grep -qi '^cache-control: no-cache' root.headers
+        grep -q '<div id="root">' root.html
+        if grep -q '/src/main.tsx' root.html; then
+          echo "index.html still loads the source entry: this is not a build"; exit 1
+        fi
+
+        # A route the browser handles gets the same page.
+        curl -fsS -o deep.html "$base/dashboard"
+        cmp root.html deep.html
+
+        # The script the page names: served as JavaScript, cacheable for good,
+        # and compressed for a client that asks.
+        script=$(sed -n 's/.*<script[^>]*src="\([^"]*\)".*/\1/p' root.html)
+        case "$script" in
+          /assets/*.js) ;;
+          *) echo "unexpected script reference: '$script'"; exit 1 ;;
+        esac
+        curl -fsS -H 'Accept-Encoding: gzip' -D script.headers -o /dev/null "$base$script"
+        grep -qi '^content-type: .*javascript' script.headers
+        grep -qi '^cache-control: .*immutable' script.headers
+        grep -qi '^content-encoding: gzip' script.headers
+
+        # An asset that does not exist is a 404, not the page.
+        status=$(curl -s -o /dev/null -w '%{http_code}' "$base/assets/nope.js")
+        test "$status" = 404
+
+        # The build argument is in the bundle.
+        docker exec frontend-image grep -rlF 'https://api.example.test' "$html/assets"
+
+        # No source maps, and no Node in the image.
+        maps=$(docker exec frontend-image find "$html" -name '*.map')
+        test -z "$maps"
+        if docker exec frontend-image sh -c 'command -v node'; then
+          echo "the image contains node"; exit 1
+        fi
+
+        # INF-H4. Every process in the container belongs to the image's
+        # `nginx` account (uid 101), the master process too. /proc has one
+        # directory per process, and its owner is the account the process
+        # runs as (or root, for one the kernel does not let others inspect,
+        # which fails this too). A process that ends between the listing and
+        # the look at it is an error to `stat` and nothing to this probe:
+        # the errors are dropped and the owners it did read are compared.
+        # With nothing read at all the comparison fails.
+        owners=$(docker exec frontend-image sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        echo "$owners"
+        test "$owners" = 101
+
+        # And what it serves is root's, which that account can read and
+        # cannot add to.
+        served=$(docker exec frontend-image find "$html" ! -user 0)
+        test -z "$served"
+        if docker exec frontend-image touch "$html/written-from-the-container"; then
+          echo "nginx's account can write where the page is served from"; exit 1
+        fi
+
+  # INF-H3. The only place the stack docker-compose.yml describes is started.
+  # It builds both services' images (so this is also the only place
+  # Dockerfile.backend is built), starts the three containers, and looks at
+  # the backend one: what is in /app, what is mounted there and how, and
+  # whether a file created on the host reaches the running server. It also
+  # asks the frontend service for its page. Since INF-H4 and INF-M6 it reads
+  # who runs the processes in both containers, and what the backend image
+  # holds when nothing is mounted over it. Since INF-H7 it starts the stack
+  # with `--wait`, reads the health of the three containers, and last stops
+  # the database to see the backend reported unhealthy.
+  # tests/test_backend_mounts.py reads the compose file without Docker; that
+  # test also fails if this job or a step in it is given `continue-on-error`
+  # or an `if:`. tests/test_stack_readiness.py holds the INF-H7 probes.
+  #
+  # Not covered: the backend image run with its own command. Compose replaces
+  # that command, and mounts host source over part of what the image holds.
+  # The image's HEALTHCHECK is covered: the backend service has no check of
+  # its own, so the health read below is that one's.
+  compose-stack:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # docker-compose.yml refuses to start without these. They are throwaway
+    # values for containers that live as long as this job. The file is also
+    # what the first probe below is about: a checkout has no .env, and with
+    # none on the host "there is no .env in the container" would show nothing.
+    - name: Write a throwaway .env
+      run: |
+        cat > .env <<'EOF'
+        SECRET_KEY=compose-stack-job-throwaway-secret
+        POSTGRES_USER=stack
+        POSTGRES_PASSWORD=stack-job-throwaway
+        EOF
+
+    # INF-M6. The same for what a developer's tree has and a checkout has
+    # not: a bytecode cache, a bytecode file outside one and a .env, each
+    # inside a directory the image copies, which only .dockerignore keeps
+    # out; and a file beside the source, which only the COPY lines of
+    # Dockerfile.backend keep out.
+    - name: Plant what the image must not take
+      run: |
+        mkdir -p backend/__pycache__
+        echo planted > backend/__pycache__/planted.cpython-310.pyc
+        echo planted > backend/planted.pyc
+        echo PLANTED=1 > backend/.env
+        echo planted > planted-beside-the-source.txt
+
+    # INF-H7. --wait returns when every service reports healthy, and fails
+    # this step when one reports unhealthy or stops. docker-compose.yml starts
+    # the backend after the database is healthy and the frontend after the
+    # backend is, so a green step is the three of them, in that order.
+    - name: Build and start the stack
+      run: docker compose up -d --build --wait
+
+    # As in the job above, each "must not" is an `if`: `set -e` ignores a
+    # command with a `!` in front of it.
+    - name: Probe the backend container
+      run: |
+        set -euo pipefail
+        trap 'docker compose logs || true' ERR
+        api=http://localhost:8000
+        ui=http://localhost:3000
+        started='Started server process'
+        notice="detected changes in 'backend/reload_probe.py'"
+
+        health='{{.State.Health.Status}}'
+
+        # The backend answers. The step above waited until it was healthy,
+        # so the first request is expected to succeed; the loop is left from
+        # before that.
+        for attempt in $(seq 1 60); do
+          if curl -fsS -o /dev/null "$api/openapi.json"; then break; fi
+          sleep 1
+        done
+        curl -fsS -o /dev/null "$api/openapi.json"
+
+        # INF-H7. Each container has a healthcheck and it reports healthy.
+        # A container without one has no such field, and the line fails.
+        # The backend's is the HEALTHCHECK of its image; the route it asks
+        # answers here too.
+        test "$(docker inspect --format "$health" "$(docker compose ps -q db)")" = healthy
+        test "$(docker inspect --format "$health" "$(docker compose ps -q backend)")" = healthy
+        test "$(docker inspect --format "$health" "$(docker compose ps -q frontend)")" = healthy
+        curl -fsS -o /dev/null "$api/health"
+
+        # The two things looked for below exist on the host, and a command can
+        # be run in the container at all. Without these a probe that expects
+        # a failure would pass for the wrong reason.
+        test -f .env
+        test -e .git
+        test -f backend/__pycache__/planted.cpython-310.pyc
+        test -f backend/planted.pyc
+        test -f backend/.env
+        test -f planted-beside-the-source.txt
+        docker compose exec -T backend test -f /app/backend/main.py
+
+        # The .env, the .git and any database file at the top of the
+        # checkout are not in the container: no mount covers them. (What is
+        # inside backend/ is another matter. The mount shows that directory
+        # as the checkout has it, the planted .env included.)
+        if docker compose exec -T backend test -e /app/.env; then
+          echo "the host's .env is inside the container"; exit 1
+        fi
+        if docker compose exec -T backend test -e /app/.git; then
+          echo "the host's .git is inside the container"; exit 1
+        fi
+        databases=$(docker compose exec -T backend find /app -name '*.db')
+        test -z "$databases"
+
+        # Exactly the three mounts, each read-only. `grep .` drops the empty
+        # line docker prints after the last one.
+        container=$(docker compose ps -q backend)
+        mounts=$(docker inspect --format '{{range .Mounts}}{{.Type}} {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' "$container" | grep . | LC_ALL=C sort)
+        echo "$mounts"
+        test "$mounts" = "$(printf '%s\n' 'bind /app/alembic rw=false' 'bind /app/alembic.ini rw=false' 'bind /app/backend rw=false')"
+        # As root, which only a read-only mount stops: the server's own
+        # account (INF-H4) may be refused by the checkout's permissions alone.
+        if docker compose exec -T --user 0 backend touch /app/backend/written-from-the-container; then
+          echo "the container wrote to the host's source tree"; exit 1
+        fi
+
+        # INF-M6. What the image holds, read from the image with nothing
+        # mounted over it; the container above shows backend/ and alembic/
+        # as the checkout has them. At the top of /app, the four paths
+        # Dockerfile.backend names and no other. Below it, none of what was
+        # planted and nothing else of those kinds.
+        image=$(docker inspect --format '{{.Image}}' "$container")
+        docker run --rm "$image" test -f /app/backend/main.py
+        built=$(docker run --rm "$image" ls -A /app | LC_ALL=C sort)
+        echo "$built"
+        test "$built" = "$(printf '%s\n' alembic alembic.ini backend requirements.txt)"
+        planted=$(docker run --rm "$image" find /app -name __pycache__ -o -name '*.pyc' -o -name '.env*' -o -name '*.db' -o -name 'planted*')
+        echo "$planted"
+        test -z "$planted"
+        # The two settings Dockerfile.backend gives Python.
+        test "$(docker run --rm "$image" printenv PYTHONUNBUFFERED)" = 1
+        test "$(docker run --rm "$image" printenv PYTHONDONTWRITEBYTECODE)" = 1
+
+        # INF-H4. Every process in the container belongs to the account
+        # Dockerfile.backend makes (uid 10001): the reloader and the server
+        # it starts, read from /proc as in the job above. And that account,
+        # which is who `exec` runs a command as, cannot make a file in /app.
+        #
+        # INF-H7. The read is repeated, up to three more times, when it shows
+        # anything else. Docker runs each healthcheck by starting a process
+        # in the container, and for a moment that process is root's in /proc
+        # before it becomes the account's. With a check every second, 12 of
+        # 400 reads caught one (2026-10-12); here it is every 10 s. A process
+        # that stays root's is in every read and still fails. One that is
+        # gone within a second or two can be missed, as it could before.
+        owners=$(docker compose exec -T backend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        for attempt in 1 2 3; do
+          if test "$owners" = 10001; then break; fi
+          sleep 1
+          owners=$(docker compose exec -T backend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        done
+        echo "$owners"
+        test "$owners" = 10001
+        if docker compose exec -T backend touch /app/written-from-the-container; then
+          echo "the server's account can write to /app"; exit 1
+        fi
+
+        # A file written on the host is in the container, and the reloader
+        # restarts the server for it. A new file, not an edit, so that no
+        # file git tracks is changed.
+        docker compose logs backend > backend.log 2>&1
+        before=$(grep -c "$started" backend.log)
+        echo '# Written by the compose-stack CI job.' > backend/reload_probe.py
+        docker compose exec -T backend test -f /app/backend/reload_probe.py
+        for attempt in $(seq 1 60); do
+          docker compose logs backend > backend.log 2>&1
+          if grep -qF "$notice" backend.log && test "$(grep -c "$started" backend.log)" -gt "$before" && curl -fsS -o /dev/null "$api/openapi.json"; then break; fi
+          sleep 1
+        done
+        grep -qF "$notice" backend.log
+        test "$(grep -c "$started" backend.log)" -gt "$before"
+        curl -fsS -o /dev/null "$api/openapi.json"
+
+        # The frontend service is Vite's development server: the page it
+        # serves loads the source entry, which the built image's page must not.
+        for attempt in $(seq 1 60); do
+          if curl -fsS -o /dev/null "$ui/"; then break; fi
+          sleep 1
+        done
+        curl -fsS -o ui.html "$ui/"
+        grep -q '/src/main.tsx' ui.html
+
+        # INF-H4. That server, and everything npm started to run it, belongs
+        # to the node image's `node` account (uid 1000). The page above was
+        # served by it from the runner's checkout, whichever account owns
+        # that. Read again when a healthcheck's process is caught, as for
+        # the backend above.
+        owners=$(docker compose exec -T frontend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        for attempt in 1 2 3; do
+          if test "$owners" = 1000; then break; fi
+          sleep 1
+          owners=$(docker compose exec -T frontend sh -c 'stat -c %u /proc/[0-9]* 2>/dev/null; true' | sort -u)
+        done
+        echo "$owners"
+        test "$owners" = 1000
+
+        # INF-H7. Last, because it takes the database away. The server goes
+        # on running, /health answers 503, and after three failed checks
+        # Docker reports the backend unhealthy. On a developer's machine
+        # that took 43 s, and the 503 about 4 s to arrive (2026-10-12).
+        docker compose stop db
+        for attempt in $(seq 1 90); do
+          if test "$(docker inspect --format "$health" "$container")" = unhealthy; then break; fi
+          sleep 1
+        done
+        test "$(docker inspect --format "$health" "$container")" = unhealthy
+        status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$api/health")
+        test "$status" = 503

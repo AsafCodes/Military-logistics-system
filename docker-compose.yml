@@ -7,6 +7,29 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-military_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # INF-H7. Healthy when the server accepts connections over TCP. `$$` is
+    # for Compose: it passes one `$` on, so the shell in the container reads
+    # the container's own variables, set above.
+    #
+    # -h 127.0.0.1 is needed. On a new volume the image first runs a server
+    # that listens on the Unix socket only, to create the database, and
+    # stops it again. Without -h, pg_isready asks the socket and reports
+    # that server as ready.
+    #
+    # pg_isready does not log in. It answers the same for a user or a
+    # database that does not exist, so this does not show that the backend's
+    # DATABASE_URL works.
+    #
+    # start_interval, here and on the frontend, is the newest of these keys:
+    # Docker's documentation gives Engine 25 as the first to have it. Engine
+    # 29.7 with Compose 5.4 accepted it (2026-10-12).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
 
   backend:
     build:
@@ -14,8 +37,21 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+    # INF-H7. On `docker compose up` the backend is started when the database
+    # reports healthy, not when its container has been started. If the
+    # database never does, the backend is not started and the command ends
+    # with an error. A reload, or the restart policy below bringing the
+    # container back, is not held back like that: it starts the server
+    # whatever state the database is in, and the wait in backend/main.py is
+    # what it has then.
+    #
+    # This service has no `healthcheck:`. Its check is the HEALTHCHECK of
+    # Dockerfile.backend, which the container gets from the image. An
+    # unhealthy container is shown by `docker compose ps`; nothing restarts
+    # it.
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-military_db}
       - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env (see .env.example)}
@@ -25,29 +61,93 @@ services:
       # Note what this line does: it INVERTS security.py's fail-secure default
       # for anything started from this file, so here "unset" means insecure.
       # That is correct for what this file is -- the local http development
-      # stack, with hardcoded localhost CORS origins and the repository bind-
-      # mounted over /app (SEC-M15) -- and it is wrong for anything else. A real
-      # deployment must not be derived from this compose file; if one ever is,
-      # this default is the first line to delete.
+      # stack, with hardcoded localhost CORS origins and host source
+      # bind-mounted into /app (INF-H3) -- and it is wrong for anything else. A
+      # real deployment must not be derived from this compose file; if one ever
+      # is, this default is the first line to delete.
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
+    # INF-H3. Development only: the paths the server loads from /app, taken
+    # from the host so that the container runs the working tree's code. The
+    # rest of /app is what the image was built with, which is
+    # requirements.txt and nothing else (INF-M6). A change to
+    # requirements.txt needs `docker compose up --build`. A new module
+    # beside backend/ needs a COPY line in Dockerfile.backend and a mount
+    # here.
+    #
+    # The repository as a whole is not mounted. That put .env, .git and the
+    # local database file inside the container, which .dockerignore keeps out
+    # of the image (SEC-M15). The server does not need .env: DATABASE_URL,
+    # SECRET_KEY and COOKIE_SECURE are in `environment:` above. A line in
+    # .env no longer reaches a command run in the container either, so
+    # SEED_ENABLED and BOOTSTRAP_ADMIN_ENABLED are given per run:
+    # `docker compose exec -e SEED_ENABLED=1 backend python -m backend.seed_data`.
+    #
+    # Read-only: nothing in the container writes to the host tree. A command
+    # that writes into these paths, `alembic revision` for one, fails here
+    # and is run on the host, against the host's own DATABASE_URL.
+    #
+    # tests/test_backend_mounts.py holds this list, and the `compose-stack`
+    # CI job starts the stack and looks inside the container.
     volumes:
-      - ./:/app
+      - ./backend:/app/backend:ro
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
     # Ensure hot reload works well by overriding default restart policy if needed
     restart: unless-stopped
+    # INF-H1. Development only: restart the server when a source file under
+    # the bind mounts changes. This replaces the image's own command
+    # (Dockerfile.backend), which has no watcher. No --workers: the reloader
+    # runs one server process whatever the count says.
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # INF-H2. The first stage of that file: Node, the installed
+      # dependencies and the source. The image itself, its last stage, is
+      # nginx serving a production build, and this stack does not run it.
+      #
+      # A frontend container that already exists keeps its anonymous
+      # /app/node_modules volume when it is recreated, so a rebuild alone
+      # does not replace what was installed before (INF-M5).
+      # `docker compose up --build -V` does.
+      #
+      # INF-H4. That stage runs as the node image's `node` account (uid
+      # 1000), not as root, and so does everything this service starts. A
+      # container made before that change has a node_modules volume that
+      # belongs to root. Vite writes its compiled configuration there, so
+      # with that volume the server stops at start with EACCES; the same
+      # `-V` replaces it. The server reads the source under the bind
+      # mount below and does not write to it.
+      target: dev
     ports:
       - "3000:3000"
+    # INF-H7. Started when the backend reports healthy. If the backend never
+    # does, the frontend is not started and the command ends with an error:
+    # seen with a backend that exits as soon as it starts (2026-10-12).
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    # INF-H7. Healthy when Vite's server answers a request for the page. The
+    # program is BusyBox's wget, which the node image has. It does not show
+    # that the page works in a browser, or that the browser reaches the API.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
     environment:
       - VITE_API_URL=http://localhost:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules # Avoid overwriting container node_modules with host's if host does not have them or OS mismatch
+    # INF-H2. Development only: Vite's development server, which rebuilds on
+    # a change under the bind mount. The `dev` stage sets no command, so
+    # without this line it would start the node image's `node`.
+    command: ["npm", "run", "dev"]
 
 volumes:
   postgres_data:

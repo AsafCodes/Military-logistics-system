@@ -7,7 +7,7 @@ With a path, the specification is written there; without one, to stdout. Either
 way the output is the exact `app.openapi()` of the code on disk, so it cannot
 fall behind the routes the way the tracked frontend/openapi.json did -- that
 file declared a version the application had long since left, and ten paths,
-two of them since removed, where the application serves twenty-nine.
+two of them since removed, where the application then served twenty-nine.
 
 The specification is deliberately not tracked. Generate it when something needs
 it; frontend/openapi.json is the conventional, git-ignored path:
@@ -20,7 +20,8 @@ DATABASE_URL and SECRET_KEY set (DATA-H11), as any other import of it does.
 The output is LF-terminated on every platform, including stdout on Windows,
 so that line endings never make two exports differ: the same code on the same
 dependencies gives the same bytes anywhere. Not across dependency versions --
-the schema text is FastAPI's and Pydantic's, and requirements.txt pins neither.
+the schema text is FastAPI's and Pydantic's, so it can change when
+requirements.in moves either of them.
 """
 import json
 import sys
