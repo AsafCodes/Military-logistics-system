@@ -55,11 +55,18 @@ jobs:
       with:
         python-version: '3.10'
 
+    # INF-H5. Both files are locks with hashes: requirements.txt is what the
+    # image installs, requirements-dev.txt adds pytest, ruff and what the
+    # tests import. They are installed with --require-hashes, as in
+    # Dockerfile.backend, which says what that refuses. No package is named
+    # on a command line here; a new one goes in requirements.in or
+    # requirements-dev.in. pip itself is the one thing upgraded by name, and
+    # is not locked.
+    # tests/test_dependency_pins.py reads this step.
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install ruff pytest httpx
+        pip install --require-hashes -r requirements.txt -r requirements-dev.txt
 
     # WAIVER (DATA-L4): backend/ carries 42 pre-existing ruff findings. They
     # still surface as inline annotations; they just do not fail the build yet.

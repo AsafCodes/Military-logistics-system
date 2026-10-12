@@ -19,8 +19,8 @@ What is NOT covered:
   - an ENTRYPOINT inherited from the base image;
   - FORWARDED_ALLOW_IPS set in docker-compose.yml's `environment:`.
 
-PyYAML is imported here and is not named in requirements.txt; it arrives
-through `uvicorn[standard]`.
+PyYAML is imported here. requirements-dev.in names it, so the tests do not
+depend on `uvicorn[standard]` bringing it.
 """
 import http.client
 import ipaddress

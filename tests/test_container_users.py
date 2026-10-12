@@ -42,8 +42,8 @@ What is NOT covered here:
   - what an unprivileged process can still do: no capability is dropped and
     no service sets `no-new-privileges` or a read-only root filesystem.
 
-PyYAML is imported here and is not named in requirements.txt; it arrives
-through `uvicorn[standard]`.
+PyYAML is imported here. requirements-dev.in names it, so the tests do not
+depend on `uvicorn[standard]` bringing it.
 """
 import re
 import shlex

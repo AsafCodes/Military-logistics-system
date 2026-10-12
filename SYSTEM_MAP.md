@@ -102,7 +102,10 @@ Marker_System/
 ├── frontend/Dockerfile         # Three stages: Node (`dev`, what compose runs), the build, then nginx serving it (the image)
 ├── alembic.ini                 # Migration config (URL comes from DATABASE_URL)
 ├── alembic/                    # Migration environment + versions/
-├── requirements.txt            # Python dependencies
+├── requirements.in             # The server's Python packages, one version each (hand-written)
+├── requirements.txt            # The lock compiled from it: every package, with hashes (generated; what the image installs)
+├── requirements-dev.in         # pytest, ruff and what the tests import (hand-written)
+├── requirements-dev.txt        # The lock compiled from it (generated; CI installs both locks)
 ├── .env / .env.example         # SECRET_KEY + DATABASE_URL configuration
 └── SYSTEM_MAP.md               # ← You are here
 ```

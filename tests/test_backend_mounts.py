@@ -39,8 +39,8 @@ What is NOT covered here:
     mounted over it. That is the check against a real build, and it covers
     those four plants and the top of /app, not every pattern.
 
-PyYAML is imported here and is not named in requirements.txt; it arrives
-through `uvicorn[standard]`.
+PyYAML is imported here. requirements-dev.in names it, so the tests do not
+depend on `uvicorn[standard]` bringing it.
 """
 import fnmatch
 import os

@@ -2,8 +2,21 @@ FROM python:3.10
 
 WORKDIR /app
 
+# INF-H5. requirements.txt is a lock: every package the server runs on, at
+# one version, with the hashes of its files. pip stops on a download that
+# matches none of its hashes, on a package the lock does not name, and on a
+# line without a hash. It does that for any file with a hash in it.
+# --require-hashes is for a file with none: pip would install that one as
+# given, and with the flag it refuses. (Seen on pip 23.0.1, which the base
+# image carried on 2026-10-11.) The lock is compiled from requirements.in,
+# which says how.
+#
+# Not held here: the base image above is a moving tag, and pip itself is
+# whichever release that image carries.
+#
+# tests/test_dependency_pins.py reads the install line.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # INF-M6. What the server loads, by name: the migrations and their
 # configuration, and the application package. These are the three paths

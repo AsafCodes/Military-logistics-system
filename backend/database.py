@@ -3,8 +3,7 @@ import sqlite3
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, event
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 # Load .env here rather than relying on another module importing security first:
 # the alembic CLI reaches this module without importing the app.

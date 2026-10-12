@@ -1,0 +1,41 @@
+# INF-H5. The packages the server needs by name, each at one version: the
+# ones it imports, uvicorn, which runs it, and two it never imports itself.
+# fastapi loads python-multipart to read the login form, and sqlalchemy loads
+# psycopg2-binary to reach Postgres. This file is written by hand.
+# requirements.txt is compiled from it and is what gets installed: it holds
+# these, everything they bring with them, and a hash for every file of each.
+#
+# To change a version, edit the line here, then run both commands from the
+# repository root (uv is needed for this step only; installing needs pip):
+#
+#   uv pip compile requirements.in --universal --python-version 3.10 --fork-strategy fewest --generate-hashes -o requirements.txt
+#   uv pip compile requirements-dev.in --universal --python-version 3.10 --fork-strategy fewest --generate-hashes -o requirements-dev.txt
+#
+# --universal makes one lock for Linux (the image, CI) and Windows.
+# --python-version 3.10 is the oldest interpreter the lock is for, the one
+# Dockerfile.backend and CI run.
+# --fork-strategy fewest keeps one version of each package for every Python
+# from 3.10 up. Without it a newer interpreter gets a newer release wherever
+# one exists that 3.10 cannot run. When this was written that was websockets,
+# and sqlalchemy too until the line below held it.
+#
+# A compile over an existing lock keeps the versions it has where the edit
+# allows. Add --upgrade to a command to take the newest of everything the .in
+# file does not hold.
+#
+# tests/test_dependency_pins.py reads this file and both locks.
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+python-dotenv==1.2.4
+python-jose[cryptography]==3.5.0
+python-multipart==0.0.32
+psycopg2-binary==2.9.13
+# The last line that runs on Python 3.10; 2.1 needs 3.11.
+sqlalchemy==2.0.54
+alembic==1.20.0
+bcrypt==5.0.0
+# Named although fastapi brings it: backend/schemas.py imports it. This line
+# is also what keeps it at version 2. The schemas configure themselves in
+# `class Config` blocks, and version 2 warns that version 3 will not read
+# them.
+pydantic==2.14.0

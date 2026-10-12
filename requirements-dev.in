@@ -1,0 +1,14 @@
+# INF-H5. What the tests and the linter need beyond the server's own
+# packages, each at one version. Written by hand; requirements-dev.txt is
+# compiled from it. requirements.in gives the commands.
+#
+# The first line holds every package that is in both locks to the version
+# requirements.txt has, so the tests run on what the image runs.
+-c requirements.txt
+pytest==9.1.1
+ruff==0.17.0
+httpx==0.28.1
+# Imported by the tests that read docker-compose.yml and the CI workflow.
+pyyaml==6.0.3
+# Imported by the tests that read these requirements files.
+packaging==26.3

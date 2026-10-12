@@ -34,8 +34,8 @@ What is NOT covered here:
   - an ENTRYPOINT inherited from a base image. The nginx image has one, and
     it runs the CMD it is given.
 
-PyYAML is imported here and is not named in requirements.txt; it arrives
-through `uvicorn[standard]`.
+PyYAML is imported here. requirements-dev.in names it, so the tests do not
+depend on `uvicorn[standard]` bringing it.
 """
 import json
 import os

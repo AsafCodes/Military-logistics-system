@@ -20,7 +20,8 @@ DATABASE_URL and SECRET_KEY set (DATA-H11), as any other import of it does.
 The output is LF-terminated on every platform, including stdout on Windows,
 so that line endings never make two exports differ: the same code on the same
 dependencies gives the same bytes anywhere. Not across dependency versions --
-the schema text is FastAPI's and Pydantic's, and requirements.txt pins neither.
+the schema text is FastAPI's and Pydantic's, so it can change when
+requirements.in moves either of them.
 """
 import json
 import sys
