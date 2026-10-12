@@ -18,7 +18,9 @@ What is NOT covered here:
     and `compose-stack` jobs in .github/workflows/ci.yml build both
     Dockerfiles and start the compose stack, and the `backend` job starts
     its service. Docker does not compare the tag with the digest, so a tag
-    that says one release beside the digest of another passes there too;
+    that says one release beside the digest of another passes there too.
+    One such case is looked for: the `compose-stack` job fails when the
+    backend image, whose tag says `slim`, has gcc in it;
   - an image named on a command line or in a `uses: docker://...` step. The
     `docker run` lines ci.yml has today start images the job has just built,
     and no workflow has a `docker://` step;
@@ -43,8 +45,9 @@ import subprocess
 import pytest
 import yaml
 
+from tests.test_backend_mounts import PROBE_STEP, step_named
 from tests.test_container_entrypoint import dockerfile_instructions
-from tests.test_frontend_image import PROJECT_ROOT, build_stages, read
+from tests.test_frontend_image import PROJECT_ROOT, build_stages, reached, read
 
 # Where an image is named, and the images each file names, in order. Names
 # only: a tag or a digest is expected to change, and a sixth image, or one
@@ -311,6 +314,35 @@ def test_each_file_names_the_images_listed_for_it_and_no_other(path, read_images
     # Split at the first `:` or `@`, so that this still names the image when
     # it has lost its tag or its digest; the test above says which.
     assert [re.split(r"[:@]", image)[0] for image in read_images(read(path))] == expected
+
+
+def test_the_backend_builds_on_a_slim_python():
+    # The tag's parts after the version: `3.10-slim-trixie` has `slim` and
+    # `trixie`. The full image, `3.10`, has gcc and some 380 Debian packages
+    # that the slim one does without; Dockerfile.backend gives the
+    # numbers. Docker does not read the tag beside a digest, so
+    # this holds what the line says and not which image the digest names;
+    # the next test holds the probe that asks the image.
+    (reference,) = images_from_elsewhere(read("Dockerfile.backend"))
+    name, tag, _ = pinned(reference)
+    assert name == "python"
+    assert "slim" in tag.split("-")[1:], f"`{tag}` does not name a slim build"
+
+
+def test_the_ci_job_asks_the_built_backend_image_for_a_compiler():
+    # The probe is shell and nothing here runs it. This holds it in the
+    # `compose-stack` job's script, on a line that always runs. It also
+    # holds, before it, the run that fails when no command can be run in
+    # the image: an `if` reads that failure the same as "no gcc". That
+    # finding gcc ends the script is held with the script's other `if`
+    # probes, in tests/test_backend_mounts.py.
+    always_run = reached(step_named(PROBE_STEP)["run"])
+    probe = "if docker run --rm \"$image\" sh -c 'command -v gcc'; then"
+    runs_at_all = 'docker run --rm "$image" test -f /app/backend/main.py'
+
+    assert always_run.count(probe) == 1, "the probe script lost, or may skip, the gcc probe"
+    assert always_run.count(runs_at_all) == 1
+    assert always_run.index(runs_at_all) < always_run.index(probe)
 
 
 @pytest.mark.parametrize("path", DOCKERFILES)

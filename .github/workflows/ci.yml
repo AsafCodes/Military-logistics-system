@@ -282,10 +282,12 @@ jobs:
   # who runs the processes in both containers, and what the backend image
   # holds when nothing is mounted over it. Since INF-H7 it starts the stack
   # with `--wait`, reads the health of the three containers, and last stops
-  # the database to see the backend reported unhealthy.
+  # the database to see the backend reported unhealthy. Since INF-H8 it looks
+  # for gcc in the backend image, which the slim base has none of.
   # tests/test_backend_mounts.py reads the compose file without Docker; that
   # test also fails if this job or a step in it is given `continue-on-error`
-  # or an `if:`. tests/test_stack_readiness.py holds the INF-H7 probes.
+  # or an `if:`. tests/test_stack_readiness.py holds the INF-H7 probes, and
+  # tests/test_image_pins.py the INF-H8 one.
   #
   # Not covered: the backend image run with its own command. Compose replaces
   # that command, and mounts host source over part of what the image holds.
@@ -412,6 +414,17 @@ jobs:
         # The two settings Dockerfile.backend gives Python.
         test "$(docker run --rm "$image" printenv PYTHONUNBUFFERED)" = 1
         test "$(docker run --rm "$image" printenv PYTHONDONTWRITEBYTECODE)" = 1
+
+        # INF-H8. The image is built on the `slim` Python image, which has
+        # no gcc; the full one has. The tag in Dockerfile.backend says
+        # `slim`, and Docker does not read a tag that stands beside a
+        # digest, so this asks the image. It reads what the image holds and
+        # not where that came from: gcc installed by a later line of
+        # Dockerfile.backend fails it too. The `test -f` run above is what
+        # shows the image can be run at all.
+        if docker run --rm "$image" sh -c 'command -v gcc'; then
+          echo "the backend image has gcc, which the slim base does not bring"; exit 1
+        fi
 
         # INF-H4. Every process in the container belongs to the account
         # Dockerfile.backend makes (uid 10001): the reloader and the server

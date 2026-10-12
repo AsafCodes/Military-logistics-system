@@ -8,7 +8,27 @@
 #
 # The pin is moved by a change to this line. .github/dependabot.yml asks
 # Dependabot to propose one. tests/test_image_pins.py reads the line.
-FROM python:3.10@sha256:c10791e6f69086d5216f7b5d3b839929c454e24305867ed9bc5152f0355b5423
+#
+# The `slim` build of the image: Python 3.10.22 and pip 23.0.1 on Debian 13,
+# the releases the full image this file named before has, with 87 Debian
+# packages where that has 469. It has no compiler, no make, no git and no
+# curl or wget, and of Python's own modules tkinter and turtle do not import
+# in it. Nothing in this file, backend/ or alembic/ uses any of those: on
+# 2026-10-12 every package in requirements.txt, 38 of them, installed from a
+# wheel, and `pip check` found nothing missing. A package added to the lock
+# that comes only as source, and cannot be installed without compiling C,
+# fails the pip line below (seen with the source of greenlet 3.0.3); the
+# full image had gcc to compile it with. One whose C part is optional
+# installs without that part (markupsafe 2.0.1). groupadd and useradd, which
+# the account further down is made with, are in it. The `compose-stack` job
+# in .github/workflows/ci.yml looks for gcc in the image built from this
+# file, and fails if it finds it.
+#
+# The image built from this file is 77 MB as `docker image inspect` gives
+# its size and 325 MB as `docker images` lists it; on the full base it was
+# 439 MB and 1.73 GB (linux/amd64, Docker 29.7 on the containerd image
+# store).
+FROM python:3.10-slim-trixie@sha256:6ff506466f8b1e981719b468cc0023b8ef000b983cdec0eafe119d01f379e31d
 
 WORKDIR /app
 

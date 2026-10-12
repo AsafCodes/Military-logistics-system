@@ -642,9 +642,13 @@ def test_the_probe_script_still_makes_each_of_its_probes():
     assert commands.count('curl -fsS -o /dev/null "$api/openapi.json"') == 2
 
     # Each `if` probe ends the script when its condition holds.
-    conditions = [line for line in commands if line.startswith("if docker compose exec ")]
-    assert len(conditions) == 4
-    # Every `if` that spans lines is one of those four: there is no other
+    # Four ask the container, and one asks the image for gcc (INF-H8).
+    conditions = [
+        line for line in commands
+        if line.startswith(("if docker compose exec ", 'if docker run --rm "$image" '))
+    ]
+    assert len(conditions) == 5
+    # Every `if` that spans lines is one of those five: there is no other
     # block in the script for a probe to be put inside. The loops are
     # `for`, and `reached` keeps their bodies out of what always runs.
     assert [line for line in always_run if line.startswith("if ")] == conditions
