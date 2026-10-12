@@ -376,6 +376,8 @@ def test_no_get_route_changes_state(client):
         "/equipment/accessible",
         "/equipment/{equipment_id}/history",
         "/groups",
+        # INF-H7. Executes `SELECT 1` and writes nothing.
+        "/health",
         "/reports/daily_movement",
         "/reports/query",
         "/setup/fault_types",

@@ -200,6 +200,12 @@ Marker_System/
 
 ## 4. 🔌 Backend API Endpoints (Complete Reference)
 
+### Server (`main.py`)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | A fixed greeting. Reads nothing |
+| `GET` | `/health` | Runs `SELECT 1`: 200 `{"status": "ok"}`, or 503 `{"status": "unavailable"}` when SQLAlchemy raises. Unauthenticated by design: it is for a container healthcheck (INF-H7) |
+
 ### Auth (`routers/auth.py`)
 | Method | Path | Description |
 |--------|------|-------------|

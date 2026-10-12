@@ -4,13 +4,16 @@ Modular Architecture v4.1
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.exc import OperationalError
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.orm import Session
 import time
 
 # Internal Modules - relative imports within backend package
-from .database import engine
+from .database import engine, get_db
 from .migrations import run_migrations
 
 # Routers
@@ -103,3 +106,24 @@ app.include_router(verifications.history_router)
 @app.get("/")
 def read_root():
     return {"message": "Military Logistics System V4.1 (Modular) 🛡️"}
+
+
+# --- Health Endpoint ---
+@app.get("/health")
+def read_health(db: Session = Depends(get_db)):
+    """Whether one query to this server's database succeeds (INF-H7).
+
+    It executes `SELECT 1` on the session `get_db` gives it: 200 when that
+    returns, 503 when SQLAlchemy raises. It is for a container healthcheck,
+    so it takes no credentials. For the same reason the 503 says nothing
+    about the failure: the exception's text can name the database's host.
+
+    It sets no time limit of its own, so a request lasts as long as the
+    query does. It does not show that the schema is migrated or that any
+    other route works.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {"status": "ok"}

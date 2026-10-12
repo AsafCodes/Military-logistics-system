@@ -7,7 +7,7 @@ With a path, the specification is written there; without one, to stdout. Either
 way the output is the exact `app.openapi()` of the code on disk, so it cannot
 fall behind the routes the way the tracked frontend/openapi.json did -- that
 file declared a version the application had long since left, and ten paths,
-two of them since removed, where the application serves twenty-nine.
+two of them since removed, where the application then served twenty-nine.
 
 The specification is deliberately not tracked. Generate it when something needs
 it; frontend/openapi.json is the conventional, git-ignored path:
