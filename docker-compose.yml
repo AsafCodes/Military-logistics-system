@@ -1,6 +1,9 @@
 services:
   db:
-    image: postgres:15-alpine
+    # INF-H8. Named by digest, as the base images of the two Dockerfiles are;
+    # Dockerfile.backend says what that does. The digest is the one the tag
+    # had on 2026-10-12. tests/test_image_pins.py reads the line.
+    image: postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
     environment:
       - POSTGRES_USER=${POSTGRES_USER:?set POSTGRES_USER in .env (see .env.example)}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}

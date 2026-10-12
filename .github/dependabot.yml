@@ -1,0 +1,66 @@
+# INF-H8. The images this repository builds on and runs are named by digest,
+# so none of them changes until its line does. This file asks Dependabot to
+# look once a week and propose those changes as pull requests.
+#
+# What follows about Dependabot is read from the source of dependabot-core on
+# 2026-10-12; it was not found in GitHub's page on the ecosystems Dependabot
+# supports. None of it has been seen to run: Dependabot reads this file from
+# the default branch, and it is not there yet.
+#   - `docker` reads the files in its directory whose name contains
+#     "dockerfile" or "containerfile", in any case. That takes in
+#     Dockerfile.backend.
+#   - `docker-compose` reads docker-compose.yml.
+#   - For a line of the form `name:tag@sha256:<digest>` it looks for the
+#     newest tag of the same form, which may be the one written, and
+#     proposes that tag with the digest it has then. When the tag is the
+#     one written and only its digest is new, a check of which platforms
+#     changed and an experiment flag can hold the proposal back; so can a
+#     `cooldown`, which this file does not set.
+#
+# The `ignore` entries are there to keep three images on the release they
+# are on, so that what is proposed for them is a newer digest of the same
+# tag. Without them the newest tag is the proposal, and the tag written is
+# not refreshed.
+#   - python stays on 3.10: the lock in requirements.txt is compiled for it.
+#   - postgres stays on 15: a newer major does not start on the data
+#     directory an older one made.
+#   - node stays on 24: tests/test_frontend_image.py ties the major to the
+#     `@types/node` entry in frontend/package.json, and the two move together.
+# nginx has none: a newer release of it is proposed.
+#
+# Not asked about: the `postgres` service of the `backend` job in
+# workflows/ci.yml. No reader for the image of a workflow's service was found
+# in that source, and this file has no entry for workflows. That line is
+# moved by hand.
+#
+# tests/test_image_pins.py fails if a directory holding a pinned Dockerfile
+# or compose file has no entry here. It does not read the `ignore` entries.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types:
+          - version-update:semver-major

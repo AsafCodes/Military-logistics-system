@@ -17,7 +17,12 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        # INF-H8. Named by digest, the one the tag had on 2026-10-12. It is
+        # not the image docker-compose.yml runs: that one is the alpine
+        # build. The line is moved by hand: .github/dependabot.yml has no
+        # entry that covers it, and says why.
+        # tests/test_image_pins.py reads the line.
+        image: postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           # Throwaway credentials for a per-run container on the runner's
           # loopback. Deliberately literal -- this is not a deployment, so the

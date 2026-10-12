@@ -1,4 +1,14 @@
-FROM python:3.10
+# INF-H8. The base image is named by its digest, so a build takes the same
+# image whenever it runs. Docker takes the image the digest names and does
+# not use the tag: a pull with a tag that does not exist beside a real digest
+# succeeded (2026-10-12). The tag is kept for the reader and for Dependabot,
+# which starts from it. The digest is the one the tag had on 2026-10-12, and
+# it names the list of the image's builds for each platform, so the line is
+# the same on any of them.
+#
+# The pin is moved by a change to this line. .github/dependabot.yml asks
+# Dependabot to propose one. tests/test_image_pins.py reads the line.
+FROM python:3.10@sha256:c10791e6f69086d5216f7b5d3b839929c454e24305867ed9bc5152f0355b5423
 
 WORKDIR /app
 
@@ -11,8 +21,8 @@ WORKDIR /app
 # image carried on 2026-10-11.) The lock is compiled from requirements.in,
 # which says how.
 #
-# Not held here: the base image above is a moving tag, and pip itself is
-# whichever release that image carries.
+# Not held here: pip itself. It is the release the base image above carries,
+# and changes when that line does.
 #
 # tests/test_dependency_pins.py reads the install line.
 COPY requirements.txt .
