@@ -107,6 +107,8 @@ Marker_System/
 ├── requirements-dev.in         # pytest, ruff and what the tests import (hand-written)
 ├── requirements-dev.txt        # The lock compiled from it (generated; CI installs both locks)
 ├── .env / .env.example         # SECRET_KEY + DATABASE_URL configuration
+├── README.md                   # The entry point: what this is, the quick start, where the other documents are
+├── LICENSE                     # The copyright notice: all rights reserved
 └── SYSTEM_MAP.md               # ← You are here
 ```
 
