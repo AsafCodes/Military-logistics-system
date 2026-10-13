@@ -2,7 +2,7 @@
 
 > **Version:** 0.5.0
 > **Last Updated:** 2026-08-28
-> **Solo Dev Reference.** Read this before touching anything.
+> **Solo Dev Reference.** Read this before touching anything. **Keeping it true:** a commit that moves, renames or deletes a file or a function this map names changes the map too — see [CONTRIBUTING.md](CONTRIBUTING.md#documentation).
 
 ---
 
@@ -115,9 +115,9 @@ Marker_System/
 ## 3. 🧠 Core Logic Modules (The "Brains")
 
 ### Module A: Matrix Security Engine
-- **Files:** `dependencies.py` → `scope_equipment_query()` (the cascade itself), `equipment.py` → `get_accessible_equipment()` (caller)
+- **Files:** `dependencies.py` → `scope_equipment_query()` (the filter), `equipment.py` → `get_accessible_equipment()` (one caller)
 - **Responsibility:** Decides **who sees what** from the group algebra — `extent(user, VIEW)`, the set of groups reachable downward from the user's `VIEW` grants.
-- **How it works:** Two arms, OR'd: the item's `group_id` is in your extent, **or** you personally hold it. A grant on a battalion reaches its companies; a grant on a company reaches nothing above it.
+- **How it works:** Two arms, OR'd: the item's `group_id` is in your extent, **or** you personally hold it. A grant on a battalion reaches its companies; a grant on a company reaches nothing above it. The first arm carries one condition (DATA-H3, which `TODO-SEC-H1.md` does not cover): a `CLASSIFIED` item passes it only when the item's group is also in `extent(user, VIEW_CLASSIFIED)`. The holder arm carries none, so whoever holds a classified item still sees it.
 - **⚠️ Non-Obvious Detail:** There is no cascade and no first-match-wins any more. The path strings this used to compare (`unit_hierarchy`, `unit_path`) were **dropped in H1-11**; the profile-flag ladder (`can_view_all` → `can_view_battalion` → `can_view_company`) stopped being read at H1-10 and the MASTER bypass was deleted there. This section is a summary — `TODO-SEC-H1.md` is the specification.
 
 ### Module B: Compliance Engine
