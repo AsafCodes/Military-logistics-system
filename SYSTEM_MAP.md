@@ -2,7 +2,7 @@
 
 > **Version:** 0.5.0
 > **Last Updated:** 2026-08-28
-> **Solo Dev Reference.** Read this before touching anything.
+> **Solo Dev Reference.** Read this before touching anything. **Keeping it true:** a commit that moves, renames or deletes a file or a function this map names changes the map too — see [CONTRIBUTING.md](CONTRIBUTING.md#documentation).
 
 ---
 
@@ -107,6 +107,8 @@ Marker_System/
 ├── requirements-dev.in         # pytest, ruff and what the tests import (hand-written)
 ├── requirements-dev.txt        # The lock compiled from it (generated; CI installs both locks)
 ├── .env / .env.example         # SECRET_KEY + DATABASE_URL configuration
+├── README.md                   # The entry point: what this is, the quick start, where the other documents are
+├── LICENSE                     # The copyright notice: all rights reserved
 └── SYSTEM_MAP.md               # ← You are here
 ```
 
@@ -115,9 +117,9 @@ Marker_System/
 ## 3. 🧠 Core Logic Modules (The "Brains")
 
 ### Module A: Matrix Security Engine
-- **Files:** `dependencies.py` → `scope_equipment_query()` (the cascade itself), `equipment.py` → `get_accessible_equipment()` (caller)
+- **Files:** `dependencies.py` → `scope_equipment_query()` (the filter), `equipment.py` → `get_accessible_equipment()` (one caller)
 - **Responsibility:** Decides **who sees what** from the group algebra — `extent(user, VIEW)`, the set of groups reachable downward from the user's `VIEW` grants.
-- **How it works:** Two arms, OR'd: the item's `group_id` is in your extent, **or** you personally hold it. A grant on a battalion reaches its companies; a grant on a company reaches nothing above it.
+- **How it works:** Two arms, OR'd: the item's `group_id` is in your extent, **or** you personally hold it. A grant on a battalion reaches its companies; a grant on a company reaches nothing above it. The first arm carries one condition (DATA-H3, which `TODO-SEC-H1.md` does not cover): a `CLASSIFIED` item passes it only when the item's group is also in `extent(user, VIEW_CLASSIFIED)`. The holder arm carries none, so whoever holds a classified item still sees it.
 - **⚠️ Non-Obvious Detail:** There is no cascade and no first-match-wins any more. The path strings this used to compare (`unit_hierarchy`, `unit_path`) were **dropped in H1-11**; the profile-flag ladder (`can_view_all` → `can_view_battalion` → `can_view_company`) stopped being read at H1-10 and the MASTER bypass was deleted there. This section is a summary — `TODO-SEC-H1.md` is the specification.
 
 ### Module B: Compliance Engine
@@ -225,25 +227,26 @@ Marker_System/
 ### Equipment (`routers/equipment.py`)
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/equipment` | **Matrix-filtered** equipment list |
-| `POST` | `/equipment` | Add new equipment (by catalog name) |
-| `PUT` | `/equipment/assign_owner` | Assign permanent owner |
+| `GET` | `/equipment/accessible` | **Matrix-filtered** equipment list |
+| `POST` | `/equipment/` | Add new equipment (by catalog name) |
+| `PATCH` | `/equipment/{equipment_id}/sensitivity` | Classify or declassify one item (`SET_SENSITIVITY` over the item's group; holding the item is not enough) |
+| `POST` | `/equipment/assign_owner/` | Assign permanent owner |
 | `POST` | `/equipment/transfer` | Transfer possession (person XOR location) |
-| `POST` | `/equipment/{id}/verify` | Daily verification stamp |
+| `POST` | `/equipment/{equipment_id}/verify` | Daily verification stamp |
 
 ### Maintenance (`routers/maintenance.py`)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/tickets/` | List tickets (optional status filter) |
 | `POST` | `/maintenance/report` | Report fault → create ticket |
-| `POST` | `/maintenance/fix/{id}` | Fix equipment → close tickets |
+| `POST` | `/maintenance/fix/{equipment_id}` | Fix equipment → close tickets |
 
 ### Verifications (`routers/verifications.py`)
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/verifications/` | Submit detailed condition report |
-| `GET` | `/verifications/equipment/{id}` | Verification history for equipment |
-| `GET` | `/equipment/{id}/history` | Status change audit trail |
+| `GET` | `/verifications/equipment/{equipment_id}` | Verification history for equipment |
+| `GET` | `/equipment/{equipment_id}/history` | Status change audit trail |
 
 ### Setup (`routers/setup.py`)
 | Method | Path | Description |
@@ -252,8 +255,8 @@ Marker_System/
 | `GET` | `/setup/fault_types` | List all fault types, pending included |
 | `GET` | `/setup/fault_types/pending` | List pending fault types (`MANAGE_CATALOG`) |
 | `POST` | `/setup/fault_types` | Create fault type (any user; pending without `MANAGE_CATALOG`) |
-| `PUT` | `/setup/fault_types/{id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
-| `DELETE` | `/setup/fault_types/{id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
+| `PUT` | `/setup/fault_types/{fault_id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
+| `DELETE` | `/setup/fault_types/{fault_id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
 
 ### Reports (`routers/reports.py`)
 | Method | Path | Description |
