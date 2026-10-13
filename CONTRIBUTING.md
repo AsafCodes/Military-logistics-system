@@ -42,7 +42,7 @@ git push -u origin feat/login-page
 1. Go to your GitHub repository URL.
 2. Click **"Compare & pull request"**.
 3. Create the PR.
-4. Wait for the green checkmark ✅ (CI/CD passed).
+4. Wait for the `CI` run on the pull request to pass (a green checkmark ✅). GitHub does not hold the merge for it: `main` has no required checks.
 5. Click **"Squash and merge"** or **"Merge pull request"**.
 
 ### 6. Cleanup
@@ -67,8 +67,16 @@ git branch -d feat/login-page
 
 ## Testing
 
-- Run backend tests: `pytest`
-- Run frontend linting: `npm run lint`
-- Run the frontend typecheck: `npm run typecheck`
-- Run frontend tests: `npm run test`
-- Audit the frontend's runtime dependencies: `npm run audit:prod`
+Backend, from the top of the repository, on Python 3.10:
+
+- Install both locks: `pip install --require-hashes -r requirements.txt -r requirements-dev.txt`
+- Run the tests: `python -m pytest`. A bare `pytest` stops with `No module named 'backend'`, since it does not put the directory it is run from on Python's path; `python -m pytest` does.
+
+Frontend, in `frontend/`, after `npm ci`:
+
+- Run the linter: `npm run lint`
+- Run the typecheck: `npm run typecheck`
+- Run the tests: `npm run test`
+- Audit the runtime dependencies: `npm run audit:prod`
+
+The `CI` workflow, `.github/workflows/ci.yml`, runs each of these commands on a pull request to `main`. `tests/test_contributing_commands.py` compares the six commands in the lists above, and the Python version, with the workflow and with `frontend/package.json`. It does not check the `npm ci`, the directories, or that a command passes.
