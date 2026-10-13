@@ -225,25 +225,26 @@ Marker_System/
 ### Equipment (`routers/equipment.py`)
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/equipment` | **Matrix-filtered** equipment list |
-| `POST` | `/equipment` | Add new equipment (by catalog name) |
-| `PUT` | `/equipment/assign_owner` | Assign permanent owner |
+| `GET` | `/equipment/accessible` | **Matrix-filtered** equipment list |
+| `POST` | `/equipment/` | Add new equipment (by catalog name) |
+| `PATCH` | `/equipment/{equipment_id}/sensitivity` | Classify or declassify one item (`SET_SENSITIVITY` over the item's group; holding the item is not enough) |
+| `POST` | `/equipment/assign_owner/` | Assign permanent owner |
 | `POST` | `/equipment/transfer` | Transfer possession (person XOR location) |
-| `POST` | `/equipment/{id}/verify` | Daily verification stamp |
+| `POST` | `/equipment/{equipment_id}/verify` | Daily verification stamp |
 
 ### Maintenance (`routers/maintenance.py`)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/tickets/` | List tickets (optional status filter) |
 | `POST` | `/maintenance/report` | Report fault → create ticket |
-| `POST` | `/maintenance/fix/{id}` | Fix equipment → close tickets |
+| `POST` | `/maintenance/fix/{equipment_id}` | Fix equipment → close tickets |
 
 ### Verifications (`routers/verifications.py`)
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/verifications/` | Submit detailed condition report |
-| `GET` | `/verifications/equipment/{id}` | Verification history for equipment |
-| `GET` | `/equipment/{id}/history` | Status change audit trail |
+| `GET` | `/verifications/equipment/{equipment_id}` | Verification history for equipment |
+| `GET` | `/equipment/{equipment_id}/history` | Status change audit trail |
 
 ### Setup (`routers/setup.py`)
 | Method | Path | Description |
@@ -252,8 +253,8 @@ Marker_System/
 | `GET` | `/setup/fault_types` | List all fault types, pending included |
 | `GET` | `/setup/fault_types/pending` | List pending fault types (`MANAGE_CATALOG`) |
 | `POST` | `/setup/fault_types` | Create fault type (any user; pending without `MANAGE_CATALOG`) |
-| `PUT` | `/setup/fault_types/{id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
-| `DELETE` | `/setup/fault_types/{id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
+| `PUT` | `/setup/fault_types/{fault_id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
+| `DELETE` | `/setup/fault_types/{fault_id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
 
 ### Reports (`routers/reports.py`)
 | Method | Path | Description |
