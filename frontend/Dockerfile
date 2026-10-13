@@ -6,10 +6,21 @@
 # tests/test_frontend_image.py reads this file, nginx.conf, .dockerignore and
 # the compose service, among others. The `frontend-image` job in
 # .github/workflows/ci.yml builds the image and requests pages from it.
+#
+# INF-H8. Both base images are named by digest, so a build takes the same two
+# images whenever it runs. Docker takes the image a digest names and does not
+# use the tag (../Dockerfile.backend says how that was seen). The tag is kept
+# for the reader and for Dependabot, which starts from it. Each digest is the
+# one its tag had on 2026-10-12, and names the list of the image's builds for
+# each platform. A pin is moved by a change to its line;
+# ../.github/dependabot.yml asks Dependabot to propose one.
+# tests/test_image_pins.py reads both lines.
 
 # --- dev: the dependencies and the source ------------------------------------
 # The major version is the one the `@types/node` entry in package.json targets.
-FROM node:24-alpine AS dev
+# tests/test_frontend_image.py compares the two, and reads the major from the
+# tag: nothing here checks that the digest is an image of that major.
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS dev
 
 # INF-H4. `node` is the unprivileged account the node image ships (uid 1000).
 # Everything from here on runs as it: the install, the development server
@@ -52,7 +63,9 @@ ARG VITE_API_URL
 RUN npm run build
 
 # --- the image ---------------------------------------------------------------
-FROM nginx:alpine
+# The tag names a release. This was `nginx:alpine`, which names none; on
+# 2026-10-12 the two tags had this one digest, and the image reported 1.31.6.
+FROM nginx:1.31.6-alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # INF-H4. --chown because a COPY from another stage keeps the owner the files

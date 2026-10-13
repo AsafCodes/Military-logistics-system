@@ -24,7 +24,9 @@ Not seen from here:
     taken off an entry that keeps another, leaves every test here green;
   - an install made some other way: a `pip` reached through a variable or a
     script file, another installer, a PIP_* environment variable;
-  - the base image of Dockerfile.backend, and pip itself. Neither is locked.
+  - the base image of Dockerfile.backend, which is named by digest and is
+    tests/test_image_pins.py's to check, and pip itself. The image's pip is
+    the one that base image carries; CI's is upgraded by name and not locked.
 """
 
 import ast

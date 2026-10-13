@@ -457,10 +457,13 @@ def test_the_node_version_is_the_one_the_type_definitions_target():
     # The audit found Node 18 under type definitions for a runtime six majors
     # newer. Whichever moves, the other has to follow.
     base = stage_named("dev")["base"]
-    # `node:<major>` with an optional variant. A full version
-    # (node:24.1.0-alpine) or a digest is not understood here, so pinning
-    # the tag further (INF-H8) means widening this pattern.
-    found = re.fullmatch(r"node:(\d+)(-[a-z0-9.]+)?", base)
+    # `node:<major>` with an optional variant, and the digest INF-H8 added
+    # (tests/test_image_pins.py is what requires one). A full version
+    # (node:24.1.0-alpine) is not understood here, so a tag that names one
+    # means widening this pattern. The major is read from the tag, which
+    # Docker does not use once there is a digest: a digest of another major
+    # beside this tag passes here.
+    found = re.fullmatch(r"node:(\d+)(-[a-z0-9.]+)?(@sha256:[0-9a-f]{64})?", base)
     assert found, f"the dev stage is not built on a numbered node image: {base}"
 
     types = package_json()["devDependencies"]["@types/node"]
