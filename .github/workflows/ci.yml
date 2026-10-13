@@ -85,20 +85,14 @@ jobs:
     - name: Apply migrations
       run: alembic upgrade head
 
-    # WAIVER (INF-C3): no tests exist yet, and bare pytest exits 5 on an empty
-    # collection. Forgive *only* exit 5 -- a genuine test failure must fail the
-    # build from the day the first test lands. Delete this guard with INF-C3.
+    # Hard gate (INF-H10). The command and nothing around it, so the step
+    # ends with pytest's own exit code. That includes 5, which pytest gives
+    # when it collected no tests. This step used to forgive that code, from
+    # the time there were none to collect.
+    # tests/test_ci_test_gate.py reads this step and its job, and looks in
+    # every other step of the workflow for the word pytest.
     - name: Run tests
-      run: |
-        set +e
-        python -m pytest
-        code=$?
-        set -e
-        if [ "$code" -eq 5 ]; then
-          echo "::notice::No tests collected yet - see INF-C3"
-          exit 0
-        fi
-        exit $code
+      run: python -m pytest
 
     # Hard gate (API-H1). The specification is no longer tracked, so this is
     # where it comes from: generated from the code under test, never stale.
