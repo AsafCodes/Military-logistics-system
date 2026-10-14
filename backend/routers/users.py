@@ -40,7 +40,10 @@ def create_user(user: schemas.UserCreate, current_user: models.User = Depends(ge
         personal_number=user.personal_number,
         full_name=user.full_name,
         password_hash=security.get_password_hash(user.password),
-        is_active_duty=user.is_active_duty,
+        # SEC-M2: always on duty. No route changes the flag afterwards and
+        # login refuses an inactive account, so the caller choosing False made
+        # an account that could never log in or be activated over HTTP.
+        is_active_duty=True,
     )
     db.add(new_user)
     db.flush()

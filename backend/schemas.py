@@ -33,13 +33,19 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
-    is_active_duty: bool = True
     # Where the account sits, and required rather than derived: unlike
     # equipment creation, MANAGE_PERSONNEL is global (the personnel table
     # belongs to no unit), so there is no creator group to fall back to. H1-6
     # left create_user issuing no GroupMembership at all; this closes that gap
     # rather than carrying it forward again.
     group_id: int
+
+    class Config:
+        # SEC-M2. This body writes an account, so a field it does not name is
+        # refused (422) rather than dropped: `is_active_duty` is the server's
+        # to set, and a caller still sending it should be told, not ignored.
+        # Here only -- UserBase is also UserResponse's parent.
+        extra = "forbid"
 
 class UserResponse(UserBase):
     id: int
