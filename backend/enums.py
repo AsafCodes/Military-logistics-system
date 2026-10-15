@@ -344,6 +344,11 @@ class Capability(str, enum.Enum):
     bootstrapped database, since no route issues grants -- can approve
     everyone's proposals but its holder's own.
 
+    DATA-M6 adds one more thing the verb gates: a new catalog item name.
+    equipment.create_equipment asks for it only when the name it is given is
+    not already in the catalog. Unlike a fault type, the new name goes in with
+    no review step: it is in use as soon as the holder's request commits.
+
     The trigger once written here -- split the moment some profile holds one
     without the other -- died with profiles.py at H1-12, and SEC-M12 closed on
     that as a deliberate no-op. What stands in for it: grant rows are written
@@ -400,7 +405,8 @@ class Capability(str, enum.Enum):
     # dependencies.scope_equipment_query, as a widening of its VIEW arm rather
     # than a verb of its own. On the group the item belongs to.
     MANAGE_CATALOG = "MANAGE_CATALOG"
-    # setup.py's fault-type routes. Global vocabulary: held over every root.
+    # setup.py's fault-type routes, and equipment.create_equipment when the
+    # catalog name is new (DATA-M6). Global vocabulary: held over every root.
     MANAGE_PERSONNEL = "MANAGE_PERSONNEL"
     # users.create_user, update_user_group, setup.list_groups. Also every root.
 

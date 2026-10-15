@@ -3,6 +3,8 @@ Equipment Router - Equipment CRUD and transfer endpoints
 Scoping lives in dependencies.scope_equipment_query()
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -63,6 +65,31 @@ def _creation_group_id(db: Session, requested: Optional[int], creator: models.Us
     if requested is not None:
         return requested
     return authz.primary_group_id(db, creator.id)
+
+
+def _find_catalog_item(db: Session, name: str) -> Optional[models.CatalogItem]:
+    """The catalog row for an already-normalized name, matched without case.
+
+    DATA-M6. The unique constraint on catalog_items.name is case-sensitive, so
+    rows that differ only in case may already exist (they were created before
+    this match was). Ordering by id makes the pick deterministic: the oldest one.
+
+    Both sides are folded by the database's lower(), never one by Python's.
+    SQLite folds ASCII only, so there an accented Latin capital does not match
+    its small letter; Postgres folds by its locale, which is all of Unicode
+    under a UTF-8 one and ASCII only under C. Folding the request with
+    str.lower() instead would be worse wherever the database folds less than
+    Python: "É" would fold on one side and not the other, so a name already in
+    the catalog, posted exactly, would miss, and the insert would then meet
+    the unique constraint. Hebrew has no case, so it is unaffected either way.
+    """
+    return (
+        db.query(models.CatalogItem)
+        .filter(func.lower(models.CatalogItem.name) == func.lower(name))
+        .order_by(models.CatalogItem.id)
+        .first()
+    )
+
 
 @router.get("/equipment/accessible", response_model=List[schemas.EquipmentResponse])
 def get_accessible_equipment(
@@ -127,8 +154,9 @@ def create_equipment(
 ):
     # Both resolved BEFORE the catalog block, because either can raise 403 and
     # the block below commits. Resolving them after would let a rejected
-    # creation leave a permanent CatalogItem behind under an attacker-chosen
-    # name -- a write performed by a request the route answered "denied".
+    # creation leave a permanent CatalogItem behind -- a write performed by a
+    # request the route answered "denied". Since DATA-M6 a new name also needs
+    # MANAGE_CATALOG; that third gate sits inside the block, before its commit.
     #
     # No resolver runs first here and there is no 404 to order against: nothing
     # is addressed by id, so nothing can be probed for. The group is an outcome
@@ -143,16 +171,57 @@ def create_equipment(
     #
     # Inside the same pre-catalog block and for the identical reason given
     # above -- a 403 raised after that block would leave a permanent
-    # CatalogItem behind under an attacker-chosen name, a write performed by a
-    # request the route answered "denied".
+    # CatalogItem behind, a write performed by a request the route answered
+    # "denied".
     if item.sensitivity is not None:
         authz.require(db, current_user.id, Capability.SET_SENSITIVITY, group_id)
 
-    cat_item = db.query(models.CatalogItem).filter(models.CatalogItem.name == item.catalog_name).first()
+    # DATA-M6. The name arrives normalized (schemas.EquipmentCreate) and is
+    # matched without regard to case, so a creator naming an item that is
+    # already in the catalog needs nothing beyond the gates above. A name the
+    # catalog does not hold is a change to global vocabulary, and that is
+    # MANAGE_CATALOG's, asked over every root like setup.py's catalog routes.
+    # Refused here, before the commit below, for the same reason the two gates
+    # above come first: a 403 must not leave a row behind.
+    #
+    # The detail says which half failed, because CREATE_EQUIPMENT was granted
+    # and a bare "you do not hold MANAGE_CATALOG" would read as if the creation
+    # itself were refused. The detail is not what tells a creator whether a
+    # name is in the catalog -- 200 against 403 does that whatever the text --
+    # and no route lists the catalog, so this is a way to learn names beyond
+    # the ones a creator already sees on the items in their view. It is a
+    # noisy one: a hit creates an item in a group the creator answers for and
+    # writes an audit row (below).
+    cat_item = _find_catalog_item(db, item.catalog_name)
     if not cat_item:
+        if not authz.may_global(db, current_user.id, Capability.MANAGE_CATALOG):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"'{item.catalog_name}' is not in the catalog, and adding "
+                    f"to the catalog needs {Capability.MANAGE_CATALOG.value}."
+                ),
+            )
         cat_item = models.CatalogItem(name=item.catalog_name)
         db.add(cat_item)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Another request added the same name between the lookup above and
+            # this commit, and the unique constraint refused the second row.
+            # Use the row that won rather than answer 500. The rollback is
+            # safe: the gates above only read, so this CatalogItem is the one
+            # pending write in the session. If the re-read still finds nothing,
+            # the IntegrityError was not that race, so it is raised as it is.
+            #
+            # The constraint is case-sensitive, so two case variants of a new
+            # name committed at the same moment both land. The app-level match
+            # cannot close that; a normalized key column with its own unique
+            # index could.
+            db.rollback()
+            cat_item = _find_catalog_item(db, item.catalog_name)
+            if cat_item is None:
+                raise
 
     # group_id is the whole of where this item belongs -- H1-11 dropped the
     # unit_hierarchy string that used to be written beside it, and made the

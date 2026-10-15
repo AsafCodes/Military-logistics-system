@@ -603,6 +603,10 @@ def test_creating_a_classified_item_needs_the_verb_and_writes_nothing_without_it
     block would answer 403 and still leave a permanent row behind under an
     attacker-chosen catalog name -- which is why the check sits with the
     CREATE_EQUIPMENT one, above the commit.
+
+    Since DATA-M6 the name, which is not in the catalog, also needs
+    MANAGE_CATALOG, and company_tech_a lacks it. That 403 would hide a missing
+    or misplaced SET_SENSITIVITY gate, so the detail must name SET_SENSITIVITY.
     """
     before = db_session.query(models.Equipment).count()
 
@@ -620,6 +624,7 @@ def test_creating_a_classified_item_needs_the_verb_and_writes_nothing_without_it
         f"got {response.status_code}: CREATE_EQUIPMENT alone created a "
         "CLASSIFIED item -- the conditional gate is not being asked"
     )
+    assert "SET_SENSITIVITY" in response.json()["detail"], response.text
 
     db_session.expire_all()
     assert db_session.query(models.Equipment).count() == before, "a refused creation wrote a row"

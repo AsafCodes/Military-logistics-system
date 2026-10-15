@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -102,6 +102,11 @@ class CapabilitiesResponse(BaseModel):
     anywhere: List[str]
 
 # --- Equipment ---
+# DATA-M6. The longest catalog name a creation request may carry, counted
+# after normalization. The column itself is unbounded (models.CatalogItem).
+CATALOG_NAME_MAX = 100
+
+
 class EquipmentCreate(BaseModel):
     catalog_name: str # e.g. "M4"
     serial_number: Optional[str] = None
@@ -126,6 +131,23 @@ class EquipmentCreate(BaseModel):
     # None at flush time, so this does NOT write NULL. Stated because the
     # opposite is the natural assumption and an earlier draft acted on it.
     sensitivity: Optional[Sensitivity] = None
+
+    # DATA-M6. Normalized here, before the route runs, so "Radio  710 " and
+    # "Radio 710" reach the catalog lookup as one name, and a refused name is a
+    # 422 that writes nothing. str.split() with no argument splits on every
+    # whitespace run -- tabs, newlines and Unicode spaces included -- so the
+    # join leaves single ASCII spaces and no leading or trailing ones. Case is
+    # left alone: create_equipment matches case-insensitively, and a new row
+    # keeps the caller's casing.
+    @field_validator("catalog_name")
+    @classmethod
+    def _normalize_catalog_name(cls, v: str) -> str:
+        name = " ".join(v.split())
+        if not name:
+            raise ValueError("catalog_name must not be blank")
+        if len(name) > CATALOG_NAME_MAX:
+            raise ValueError(f"catalog_name must be at most {CATALOG_NAME_MAX} characters")
+        return name
 
 class EquipmentResponse(BaseModel):
     id: int

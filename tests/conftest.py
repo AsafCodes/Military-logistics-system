@@ -620,8 +620,15 @@ def mock_matrix_db(db_session, group_graph):
     db_session.commit()
 
     # --- CATALOG ---
+    # "M4" is here for the creation helpers in test_equipment_authority,
+    # test_equipment_write_scoping and test_sensitivity_contract, which post
+    # it as CREATE_EQUIPMENT holders without MANAGE_CATALOG. Since DATA-M6 a
+    # name not in the catalog needs MANAGE_CATALOG too, and those tests are
+    # about the other gates, not about adding names
+    # (tests/test_catalog_names.py).
     cat = models.CatalogItem(name="Standard Radio")
     db_session.add(cat)
+    db_session.add(models.CatalogItem(name="M4"))
     db_session.commit()
     
     # --- ITEMS ---
