@@ -70,10 +70,11 @@ def get_fault_types(db: Session = Depends(get_db), current_user: models.User = D
 @router.get("/setup/fault_types/pending")
 def get_pending_fault_types(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     """Get fault types that are pending manager approval."""
-    # can_add_category and can_remove_category become one verb: they name the
-    # identical set today, so two verbs would differ in name only -- see
-    # Capability's note, which also records that this file is where the claim
-    # that a catalog verb was UNENFORCEABLE turned out to be wrong.
+    # can_add_category and can_remove_category became one verb: they named
+    # the identical set, so two verbs would have differed in name only -- see
+    # Capability's note, which says when that changes and also records that
+    # this file is where the claim that a catalog verb was UNENFORCEABLE
+    # turned out to be wrong.
     #
     # require_global because a FaultType belongs to the whole force. The
     # approval queue is one shared list, not one per unit, so the authority to
@@ -137,10 +138,12 @@ def delete_fault_type(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
-    # can_remove_category, folded into the same verb. Its holders are exactly
-    # can_add_category's, so the split would be a declaration rather than a
-    # difference. Deletion being destructive is the argument for separating
-    # them the day some profile holds one without the other.
+    # can_remove_category, folded into the same verb. Its holders were exactly
+    # can_add_category's, so the split would have been a declaration rather
+    # than a difference. Deletion being destructive is the argument for
+    # gating this on a narrower verb the day someone must be able to approve
+    # fault types without deleting them -- Capability's note says how that day
+    # shows up.
     authz.require_global(db, current_user.id, Capability.MANAGE_CATALOG)
     
     fault = db.query(models.FaultType).filter(models.FaultType.id == fault_id).first()

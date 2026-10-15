@@ -325,12 +325,28 @@ class Capability(str, enum.Enum):
     an expressiveness problem, only a missing call.
 
     One catalog verb rather than two, and the contrast with the pair above is
-    deliberate. can_add_category and can_remove_category name the IDENTICAL
+    deliberate. can_add_category and can_remove_category named the IDENTICAL
     set -- Master and Brigade Tech Commander. H1-9 split one column into two
     verbs because the split fell along a real difference; splitting these
     would produce two tables that differ only in name, which is the SEC-H4
-    shape this docstring opens by warning about. Split them the moment some
-    profile holds one without the other, and not before.
+    shape this docstring opens by warning about.
+
+    The verb's share of adding is narrower than the word: proposing a fault
+    type is open to every user (setup.create_fault_type, SEC-M14). What
+    MANAGE_CATALOG gates is adding one unreviewed, approving a proposal,
+    reading the queue -- and deleting.
+
+    The trigger once written here -- split the moment some profile holds one
+    without the other -- died with profiles.py at H1-12, and SEC-M12 closed on
+    that as a deliberate no-op. What stands in for it: grant rows are written
+    by bootstrap_admin.py and seed_data.py and nowhere else, and both are
+    fixed tables that change only by a code edit. A request to grant the
+    review rights without deletion would most likely arrive as a new way of
+    issuing grants -- a route that lets an operator choose verbs -- and
+    tests/test_grant_writers.py fails on one. That is the moment to split,
+    with deletion taking the narrower verb, since removing vocabulary is
+    destructive and adding it is not. The other place the decision can land is
+    SEC-M14, which redesigns these routes.
 
     SET_SENSITIVITY (DATA-H3-2) is the second judgement, and unlike
     RESOLVE_FAULT it did not come from splitting a column -- profiles.py has no
