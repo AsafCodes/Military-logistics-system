@@ -36,6 +36,11 @@ export interface Session {
 }
 
 // ============ EQUIPMENT ============
+// enums.ComplianceLevel in the backend, value for value; held to it by
+// tests/test_compliance_vocabulary.py. Equipment.compliance_level and
+// InventoryReportItem.reporting_status both carry it (DATA-M7).
+export type ComplianceLevel = 'GOOD' | 'WARNING' | 'SEVERE';
+
 export interface Equipment {
     id: number;
     type: string;
@@ -44,7 +49,8 @@ export interface Equipment {
     current_state_description: string;
     compliance_check: string;
     report_status: string;
-    compliance_level: 'GOOD' | 'WARNING' | 'SEVERE' | 'NEUTRAL';
+    // NEUTRAL is the frontend's own: no backend route sends it.
+    compliance_level: ComplianceLevel | 'NEUTRAL';
     holder_user_id?: number;
     custom_location?: string;
     actual_location_id?: number;
@@ -68,16 +74,17 @@ export interface AssignOwnerRequest {
 }
 
 // ============ REPORTS ============
-// One row of GET /reports/query, key for key (API-H4). The route builds a
-// plain dict with no response model, so nothing generates this -- it is
-// held to the route by tests/test_report_item_contract.py, which reads this
-// block. Every key is always sent, and last_verified_at alone is null by
-// design, for an item never verified. reporting_status is always computed;
-// the other string fields fall back when the item's own column is NULL or a
-// related row is missing -- but not when a related owner or holder EXISTS
-// with a NULL full_name: that column is nullable, and designated_owner or
-// last_reporter would forward its null. No write path creates such a user;
-// the column, not this type, is where that gets fixed.
+// One row of GET /reports/query, key for key (API-H4). Nothing generates
+// this from the route's response model (schemas.InventoryReportItem, since
+// DATA-M7); it is held to the route by tests/test_report_item_contract.py,
+// which reads this block. Every key is always sent, and last_verified_at
+// alone is null by design, for an item never verified. reporting_status is
+// always computed; the other string fields fall back when the item's own
+// column is NULL or a related row is missing -- but not when a related owner
+// or holder EXISTS with a NULL full_name. That column is nullable, and since
+// DATA-M7 such a row fails the response model, so the whole report answers
+// 500 rather than sending a null. No write path creates such a user; the
+// column, not this type, is where that gets fixed (DATA-L11).
 export interface InventoryReportItem {
     id: number;
     item_type: string;
@@ -85,9 +92,9 @@ export interface InventoryReportItem {
     designated_owner: string;
     actual_location: string;
     serial_number: string;
-    // "Reported", or get_daily_status's "WARNING" / "SEVERE". Left a plain
-    // string: the vocabulary itself is DATA-M7's to settle.
-    reporting_status: string;
+    // The item's compliance level, the same value /equipment/ sends; the
+    // report page shows a Hebrew label for it.
+    reporting_status: ComplianceLevel;
     last_reporter: string;
     last_verified_at: string | null; // ISO-8601, Z-suffixed
 }

@@ -7,13 +7,11 @@ from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
 from typing import Optional
 
 from .database import get_db
 from .enums import Capability, Sensitivity
 from . import authz
-from . import clock
 from . import models
 from . import schemas
 from . import security
@@ -407,16 +405,3 @@ def require_status_authority(db: Session, user: models.User, item: models.Equipm
     if item.holder_user_id == user.id:
         return
     authz.require(db, user.id, Capability.REPORT_STATUS, item.group_id)
-
-
-def get_daily_status(last_verified_at: Optional[datetime]) -> str:
-    now_utc = clock.utcnow()
-    if not last_verified_at:
-        return "SEVERE"
-    diff = now_utc - last_verified_at
-    if diff < timedelta(hours=24):
-        return "GOOD"
-    elif diff < timedelta(hours=48):
-        return "WARNING"
-    else:
-        return "SEVERE"

@@ -41,6 +41,32 @@ class EquipmentStatus(str, enum.Enum):
     MISSING = "Missing"
 
 
+class ComplianceLevel(str, enum.Enum):
+    """How recently an equipment record was verified.
+
+    Computed, never stored: models.Equipment.compliance_level derives it from
+    last_verified_at on every read, and that property is the only place these
+    three levels are computed. Under 24 hours is GOOD, 24 up to 48 is WARNING,
+    and 48 or more -- or never verified -- is SEVERE. Equipment.report_status
+    is a separate Hebrew text with a 24-hour rule of its own (DATA-L16).
+
+    DATA-M7 and DATA-M11. The report used to rename GOOD to "Reported" while
+    every other route sent GOOD, a schema comment promised a third vocabulary
+    ("Reported", "Late", "Missing") and the report page tested for the first.
+    And a helper in dependencies.py repeated the property's rules, with some
+    routes calling one and some the other. Now one vocabulary: this type is
+    EquipmentResponse.compliance_level and InventoryReportItem.reporting_status,
+    and ComplianceLevel in frontend/src/types/index.ts repeats its values,
+    held to this by tests/test_compliance_vocabulary.py.
+
+    The frontend's Equipment.compliance_level also admits "NEUTRAL", which no
+    backend code sends; it is not a member here.
+    """
+    GOOD = "GOOD"
+    WARNING = "WARNING"
+    SEVERE = "SEVERE"
+
+
 class Sensitivity(str, enum.Enum):
     """How restricted an equipment record is.
 

@@ -2,7 +2,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 
-from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, Sensitivity, TicketStatus
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -213,7 +213,7 @@ class EquipmentResponse(BaseModel):
     # Smart fields
     item_name: str
     current_state_description: str
-    compliance_level: str
+    compliance_level: ComplianceLevel
     report_status: str
     compliance_check: str 
 
@@ -313,18 +313,19 @@ class DailyActivityItem(BaseModel):
         from_attributes = True
 
 class InventoryReportItem(BaseModel):
+    # One row of /reports/query, its response_model since DATA-M7. Every key
+    # is always sent; last_verified_at alone is null, for an item never
+    # verified. Mirrored by InventoryReportItem in frontend/src/types/index.ts
+    # (tests/test_report_item_contract.py).
     id: int
     item_type: str
-    serial_number: Optional[str]
-    unit_association: Optional[str]
+    serial_number: str
+    unit_association: str
     designated_owner: str
     actual_location: str
-    reporting_status: str  # "Reported", "Late", "Missing"
+    reporting_status: ComplianceLevel
     last_reporter: str
     last_verified_at: Optional[datetime]
-
-    class Config:
-        from_attributes = True
 
 
 # --- Verification & Status History ---

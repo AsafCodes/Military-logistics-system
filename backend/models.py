@@ -15,7 +15,7 @@ from . import (
     clock,
 )
 from .database import Base  # Use shared Base from backend package
-from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, Sensitivity, TicketStatus
 
 
 def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
@@ -266,17 +266,20 @@ class Equipment(Base):
         return f"במלאי ללא בעלים (יתום), כרגע: {location_desc}"
 
     @property
-    def compliance_level(self):
+    def compliance_level(self) -> ComplianceLevel:
+        # The only implementation of the three levels (DATA-M11): every route
+        # that sends a ComplianceLevel reads this property. report_status
+        # below is a separate text with its own 24-hour rule (DATA-L16).
         if not self.last_verified_at:
-            return "SEVERE"
-        
+            return ComplianceLevel.SEVERE
+
         diff = clock.utcnow() - self.last_verified_at
         if diff < timedelta(hours=24):
-            return "GOOD"
+            return ComplianceLevel.GOOD
         elif diff < timedelta(hours=48):
-            return "WARNING"
+            return ComplianceLevel.WARNING
         else:
-            return "SEVERE"
+            return ComplianceLevel.SEVERE
 
     @property
     def report_status(self):

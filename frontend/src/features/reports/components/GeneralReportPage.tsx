@@ -3,7 +3,7 @@ import api from '@/lib/axios';
 import { useLatestRequest } from '@/lib/useLatestRequest';
 import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
-import type { InventoryReportItem } from '@/types';
+import type { ComplianceLevel, InventoryReportItem } from '@/types';
 
 // ==========================================
 // Interfaces
@@ -14,9 +14,19 @@ interface FilterState {
     owner: string;
     location: string;
     serial: string;
-    status: string; // 'All' | 'Reported' | 'Issues'
+    // 'All' | 'Reported' | 'Issues'. The page's own keys, not wire values:
+    // Reported is GOOD, Issues is WARNING or SEVERE.
+    status: string;
     reporter: string;
 }
+
+// DATA-M7. What the status cell and the CSV show for each reporting_status;
+// the wire carries the code. A Record, so tsc refuses a code with no label.
+const REPORTING_LABELS: Record<ComplianceLevel, string> = {
+    GOOD: '✓ דווח',
+    WARNING: '⚠ דיווח באיחור',
+    SEVERE: '✕ חריגת דיווח',
+};
 
 // ==========================================
 // Main Component
@@ -97,7 +107,7 @@ export default function GeneralReportPage() {
             if (filters.serial && !item.serial_number.toLowerCase().includes(filters.serial.toLowerCase())) return false;
             if (filters.reporter && !item.last_reporter.toLowerCase().includes(filters.reporter.toLowerCase())) return false;
             if (filters.status !== "All") {
-                const isReported = item.reporting_status === 'Reported';
+                const isReported = item.reporting_status === 'GOOD';
                 if (filters.status === "Reported" && !isReported) return false;
                 if (filters.status === "Issues" && isReported) return false;
             }
@@ -128,7 +138,7 @@ export default function GeneralReportPage() {
             item.unit_association,
             item.designated_owner,
             item.actual_location,
-            item.reporting_status,
+            REPORTING_LABELS[item.reporting_status],
             item.serial_number
         ]);
         const csvContent = [headers, ...rows]
@@ -290,7 +300,7 @@ export default function GeneralReportPage() {
                         <tbody className="divide-y divide-border/20 text-sm">
                             {filteredItems.length > 0 ? (
                                 filteredItems.map((item, idx) => {
-                                    const isReported = item.reporting_status === 'Reported';
+                                    const isReported = item.reporting_status === 'GOOD';
                                     const delayTime = calculateDelay(item.last_verified_at);
 
                                     return (
@@ -308,7 +318,7 @@ export default function GeneralReportPage() {
                                                                      text-emerald-700 dark:text-emerald-400
                                                                      bg-emerald-100 dark:bg-emerald-500/10
                                                                      border border-emerald-200 dark:border-emerald-500/20">
-                                                        ✓ דווח
+                                                        {REPORTING_LABELS.GOOD}
                                                     </span>
                                                 ) : (
                                                     <div className="flex flex-col items-start gap-1">
@@ -316,7 +326,7 @@ export default function GeneralReportPage() {
                                                                          text-red-700 dark:text-red-400
                                                                          bg-red-100 dark:bg-red-500/10
                                                                          border border-red-200 dark:border-red-500/20">
-                                                            ⚠ {item.reporting_status}
+                                                            {REPORTING_LABELS[item.reporting_status]}
                                                         </span>
                                                         <span className="text-[10px] text-red-600 dark:text-red-400 font-medium pr-1">
                                                             {delayTime}

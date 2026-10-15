@@ -7,17 +7,17 @@ from typing import List, Optional
 from ..database import get_db
 from ..dependencies import (
     get_current_active_user,
-    get_daily_status,
     scope_equipment_derived_query,
     scope_equipment_query,
 )
 from ..enums import EquipmentStatus
 from .. import clock
 from .. import models
+from .. import schemas
 
 router = APIRouter(tags=["reports"])
 
-@router.get("/reports/query")
+@router.get("/reports/query", response_model=List[schemas.InventoryReportItem])
 def get_inventory_report(
     equipment_type: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -75,13 +75,11 @@ def get_inventory_report(
 
     items = q.order_by(models.Equipment.id.asc()).all()
 
-    # Each row is InventoryReportItem in frontend/src/types/index.ts, key for
-    # key; tests/test_report_item_contract.py holds the two together.
+    # Each row is schemas.InventoryReportItem, which the response_model holds
+    # it to, and InventoryReportItem in frontend/src/types/index.ts, key for
+    # key; tests/test_report_item_contract.py holds the frontend type to it.
     result = []
     for item in items:
-        compliance = get_daily_status(item.last_verified_at)
-        reporting_status = "Reported" if compliance == "GOOD" else compliance
-        
         result.append({
             "id": item.id,
             "item_type": item.catalog_item.name if item.catalog_item else "Unknown",
@@ -98,9 +96,14 @@ def get_inventory_report(
             "designated_owner": item.owner.full_name if item.owner else (item.holder.full_name if item.holder else "Unassigned"),
             "actual_location": item.custom_location or "",
             "serial_number": item.serial_number or "",
-            "reporting_status": reporting_status,
+            # The item's compliance level, as every other route sends it
+            # (DATA-M7). This used to rename GOOD to "Reported" and pass the
+            # other two through, a vocabulary of its own.
+            "reporting_status": item.compliance_level,
             "last_reporter": item.holder.full_name if item.holder else "",
-            "last_verified_at": clock.iso_z(item.last_verified_at),
+            # Aware UTC from clock.UtcDateTime, so the response model writes
+            # the same '...Z' that clock.iso_z used to produce here.
+            "last_verified_at": item.last_verified_at,
         })
     
     return result

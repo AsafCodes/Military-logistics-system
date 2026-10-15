@@ -189,7 +189,7 @@ def test_a_created_item_starts_never_reported_everywhere_it_is_read(
     assert report.status_code == 200, report.text
     [rep] = [r for r in report.json() if r["serial_number"] == "H5-NEW"]
     assert rep["last_verified_at"] is None, rep
-    assert rep["reporting_status"] != "Reported", rep
+    assert rep["reporting_status"] == "SEVERE", rep
 
 
 def test_a_row_built_without_a_clock_is_null(db_session, mock_matrix_db):

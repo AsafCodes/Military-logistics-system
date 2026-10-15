@@ -123,10 +123,10 @@ Marker_System/
 - **⚠️ Non-Obvious Detail:** There is no cascade and no first-match-wins any more. The path strings this used to compare (`unit_hierarchy`, `unit_path`) were **dropped in H1-11**; the profile-flag ladder (`can_view_all` → `can_view_battalion` → `can_view_company`) stopped being read at H1-10 and the MASTER bypass was deleted there. This section is a summary — `TODO-SEC-H1.md` is the specification.
 
 ### Module B: Compliance Engine
-- **Files:** `dependencies.py` → `get_daily_status()`, `models.py` → `Equipment.compliance_level`
-- **Responsibility:** Flags equipment as "GOOD" / "WARNING" / "SEVERE" based on time since last verification.
-- **Rules:** <24h = GOOD, 24-48h = WARNING, >48h = SEVERE.
-- **⚠️ Non-Obvious Detail:** `compliance_level` is a **computed property**, not stored in the DB. It recalculates on every read using `datetime.utcnow()`. You cannot query or filter by it in SQL.
+- **Files:** `enums.py` → `ComplianceLevel`, `models.py` → `Equipment.compliance_level`
+- **Responsibility:** Flags equipment as "GOOD" / "WARNING" / "SEVERE" based on time since last verification. The property is the only implementation of these three levels (DATA-M11), and the inventory report's `reporting_status` is the same value (DATA-M7). `Equipment.report_status`, a Hebrew text sent as `report_status` and `compliance_check`, has a 24-hour rule of its own (DATA-L16).
+- **Rules:** <24h = GOOD, 24h up to 48h = WARNING, 48h or more (or never verified) = SEVERE.
+- **⚠️ Non-Obvious Detail:** `compliance_level` is a **computed property**, not stored in the DB. It recalculates on every read using `clock.utcnow()`. You cannot query or filter by it in SQL.
 
 ### Module C: Ownership vs. Possession Model
 - **Files:** `models.py` → `Equipment` (fields: `owner_user_id`, `holder_user_id`, `custom_location`, `actual_location_id`)
@@ -428,7 +428,7 @@ Every image the repository pulls is named by tag and digest (`name:tag@sha256:�
 
 16. **`FaultTypeQueuePage.tsx` (`/catalog`) is the only frontend caller of `GET /setup/fault_types/pending` and `PUT /setup/fault_types/{id}/approve`** (API-H6). `DashboardPage.tsx` does not call either route, whatever older notes say. `DELETE /setup/fault_types/{id}` still has no frontend caller.
 
-17. **The `reports.py` endpoint returns a plain dict** matching the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
+17. **The `reports.py` endpoint declares `response_model=List[InventoryReportItem]`** (since DATA-M7), mirrored by the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). `reporting_status` is a `ComplianceLevel` (GOOD / WARNING / SEVERE), and the report page shows Hebrew labels for it. Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 

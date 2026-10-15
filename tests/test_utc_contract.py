@@ -285,20 +285,12 @@ def test_compliance_level_at_the_exact_24_and_48_hour_boundaries(db_session):
     assert at_48h.compliance_level == "SEVERE"
 
 
-def test_get_daily_status_agrees_with_compliance_level(db_session):
-    """dependencies.get_daily_status is a second implementation of the same
-    boundaries (models.Equipment.compliance_level); both must still agree
-    now that both go through clock.utcnow() instead of datetime.utcnow().
+def test_a_never_verified_item_is_severe(db_session):
+    """The None arm of compliance_level. This was pinned on
+    dependencies.get_daily_status, a second implementation of the same rules,
+    until DATA-M11 deleted it; the property is the only one now.
     """
-    from backend.dependencies import get_daily_status
-
-    now = clock.utcnow()
-    assert get_daily_status(now - timedelta(hours=1)) == "GOOD"
-    assert get_daily_status(now - timedelta(hours=30)) == "WARNING"
-    assert get_daily_status(now - timedelta(hours=72)) == "SEVERE"
-    assert get_daily_status(now - timedelta(hours=24)) == "WARNING"
-    assert get_daily_status(now - timedelta(hours=48)) == "SEVERE"
-    assert get_daily_status(None) == "SEVERE"
+    assert _make_equipment(db_session, None).compliance_level == "SEVERE"
 
 
 def test_iso_z_handles_none_naive_and_non_utc_input():
@@ -491,10 +483,11 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         _parse_and_check_aware_utc(value)
 
     # Every collected string must use the same ZONE DESIGNATOR ('Z' vs
-    # '+00:00'), proving the un-modelled reports.py dicts (clock.iso_z) and
-    # the Pydantic response_model routes agree on one wire format rather than
-    # shipping two. Extracted with a regex rather than a fixed slice, since
-    # fractional-second digits legitimately differ per timestamp.
+    # '+00:00'), proving the un-modelled daily movement report (clock.iso_z)
+    # and the Pydantic response_model routes, /reports/query among them since
+    # DATA-M7, agree on one wire format rather than shipping two. Extracted
+    # with a regex rather than a fixed slice, since fractional-second digits
+    # legitimately differ per timestamp.
     designators = {
         re.search(r"(Z|[+-]\d{2}:\d{2})$", value).group(1) for value in collected
     }

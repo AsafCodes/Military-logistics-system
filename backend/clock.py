@@ -118,10 +118,11 @@ class UtcDateTime(TypeDecorator):
 def iso_z(value: Optional[datetime]) -> Optional[str]:
     """Serialize an aware (or naive-assumed-UTC) datetime as '...Z'.
 
-    For the two hand-built dicts in routers/reports.py only, which have no
-    response_model and so bypass Pydantic's own '...Z' serialization -- this
-    makes their output match every other endpoint's wire format instead of
-    emitting '+00:00' via jsonable_encoder.
+    For the hand-built dict of routers/reports.py's daily movement report
+    only, which has no response_model and so bypasses Pydantic's own '...Z'
+    serialization -- this makes its output match every other endpoint's wire
+    format instead of emitting '+00:00' via jsonable_encoder. The inventory
+    report used it too until DATA-M7 gave that route a response_model.
     """
     if value is None:
         return None

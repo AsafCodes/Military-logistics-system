@@ -12,7 +12,6 @@ from ..database import get_db
 from ..dependencies import (
     EQUIPMENT_RESPONSE_LOADS,
     get_current_active_user,
-    get_daily_status,
     get_scoped_equipment_or_404,
     scope_equipment_query,
 )
@@ -128,7 +127,6 @@ def get_accessible_equipment(
     
     results = []
     for item in items:
-        compliance = get_daily_status(item.last_verified_at)
         results.append(schemas.EquipmentResponse(
             id=item.id,
             type=item.item_name,
@@ -137,7 +135,7 @@ def get_accessible_equipment(
             current_state_description=item.current_state_description,
             compliance_check=item.report_status,
             report_status=item.report_status,
-            compliance_level=compliance,
+            compliance_level=item.compliance_level,
             holder_user_id=item.holder_user_id,
             custom_location=item.custom_location,
             actual_location_id=item.actual_location_id,
@@ -619,5 +617,4 @@ def verify_equipment_daily(
 
     db.commit()
     
-    new_status = get_daily_status(item.last_verified_at)
-    return {"status": "Verified", "compliance": new_status}
+    return {"status": "Verified", "compliance": item.compliance_level}
