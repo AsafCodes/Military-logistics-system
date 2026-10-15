@@ -90,19 +90,24 @@ def create_fault_type(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
+    # SEC-M14. A gate, and before the lookup for approve's reason: the names
+    # are enumerable through GET /setup/fault_types, so the 400 below discloses
+    # nothing a refused caller could not read anyway. This route was open to
+    # every authenticated user, which let any of them insert rows without
+    # limit; it has no frontend caller, and the way an ordinary user proposes a
+    # fault type is report_fault, which mints one when a report names it.
+    authz.require_global(db, current_user.id, Capability.MANAGE_CATALOG)
+
     if db.query(models.FaultType).filter(models.FaultType.name == name).first():
         raise HTTPException(status_code=400, detail="Fault type already exists")
-    
-    # A question rather than a gate, exactly as report_fault's is_pending is:
-    # anyone may PROPOSE vocabulary, and holding the verb is what lets it skip
-    # review. may_global, so a no narrows the write instead of refusing it.
-    # Note this route stays open to every authenticated user by design -- it
-    # is a front door of the approval workflow, whose other end the frontend's
-    # /catalog page drives (API-H6). This route itself has no frontend caller.
-    is_manager = authz.may_global(db, current_user.id, Capability.MANAGE_CATALOG)
+
+    # Pending whoever asks, the holder included. Holding the verb used to let a
+    # proposal skip review, and the same verb approves, so one account both
+    # proposed and approved. Now every new type waits, and approve_fault_type
+    # refuses the account named here: review always takes a second person.
     fault = models.FaultType(
         name=name,
-        is_pending=not is_manager,
+        is_pending=True,
         requested_by_id=current_user.id
     )
     db.add(fault)
@@ -126,7 +131,20 @@ def approve_fault_type(
     fault = db.query(models.FaultType).filter(models.FaultType.id == fault_id).first()
     if not fault:
         raise HTTPException(status_code=404, detail="Fault type not found")
-    
+
+    # SEC-M14, the two-person rule. The proposer never approves, whether the
+    # type came from create_fault_type or from report_fault, and whether or not
+    # it is still pending: one rule with no exceptions is easier to trust than
+    # one that is right only for the rows it was thought about for. A type
+    # with no proposer (requested_by_id NULL: the seeded vocabulary) is
+    # approvable by any holder, as before. After the 404, because a missing
+    # row has no proposer to compare.
+    if fault.requested_by_id == current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="A fault type cannot be approved by the account that proposed it.",
+        )
+
     fault.is_pending = False
     db.commit()
     
@@ -140,9 +158,11 @@ def delete_fault_type(
 ):
     # can_remove_category, folded into the same verb. Its holders were exactly
     # can_add_category's, so the split would have been a declaration rather
-    # than a difference. Deletion being destructive is the argument for
-    # gating this on a narrower verb the day someone must be able to approve
-    # fault types without deleting them -- Capability's note says how that day
+    # than a difference. SEC-M14 kept it here on purpose: the 409 below
+    # already limits deletion to a type no ticket has ever used, and a
+    # narrower verb would be held by the same two seeded accounts. The day
+    # someone must be able to approve fault types without deleting them,
+    # gate this on a verb of its own -- Capability's note says how that day
     # shows up.
     authz.require_global(db, current_user.id, Capability.MANAGE_CATALOG)
     

@@ -6,17 +6,20 @@ Two claims in the code rest on that fact, and this file is what holds them:
     the backend issues a Grant ... Grants come from this script and seed_data
     and nowhere else."
   - SEC-M12's closure. MANAGE_CATALOG folds can_add_category and
-    can_remove_category into one verb: whoever may add vocabulary unreviewed,
-    approve a proposal or read the queue may also delete a fault type.
-    (Proposing one is open to everyone and needs no verb -- SEC-M14.) The
-    ticket's trigger for splitting it -- "the moment any profile holds one
-    without the other" -- died with profiles.py at H1-12 (aa69b0f). What
-    replaces it is this file. Both writers are fixed tables that change only
-    by a code edit, so a request to grant the review rights without deletion
-    would most likely arrive as a new way of issuing grants, and this file
-    fails on one. Adding one is the moment to decide the split (Capability's
-    docstring in backend/enums.py, and SEC-M14, which redesigns the same
-    routes).
+    can_remove_category into one verb: whoever may propose through the setup
+    route, approve someone else's proposal or read the queue may also delete a
+    fault type. (Proposing one through a fault report needs no catalog verb,
+    and nothing skips review -- SEC-M14.) The ticket's trigger for splitting
+    it -- "the moment any profile holds one without the other" -- died with
+    profiles.py at H1-12 (aa69b0f). What replaces it is this file. Both
+    writers are fixed tables that change only by a code edit, so a request to
+    grant the review rights without deletion would most likely arrive as a new
+    way of issuing grants, and this file fails on one. Adding one is the
+    moment to decide the split again (Capability's docstring in
+    backend/enums.py). SEC-M14, which redesigned the same routes, decided it
+    once: deletion stays on the one verb, and proposing is separated from
+    approving by the proposer check in setup.approve_fault_type, not by a
+    verb.
 
 So a failure here is not a style complaint. Before allowlisting a new writer,
 decide whether MANAGE_CATALOG should split, and correct both claims above.

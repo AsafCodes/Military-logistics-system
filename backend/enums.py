@@ -331,10 +331,18 @@ class Capability(str, enum.Enum):
     would produce two tables that differ only in name, which is the SEC-H4
     shape this docstring opens by warning about.
 
-    The verb's share of adding is narrower than the word: proposing a fault
-    type is open to every user (setup.create_fault_type, SEC-M14). What
-    MANAGE_CATALOG gates is adding one unreviewed, approving a proposal,
-    reading the queue -- and deleting.
+    What the verb gates (SEC-M14): proposing a fault type through
+    setup.create_fault_type, reading the approval queue, approving someone
+    else's proposal, and deleting a type no ticket uses. It no longer lets
+    anything skip review. Every new fault type is pending, whether it came
+    from that route or from a fault report (maintenance.report_fault, open to
+    any reporter), and setup.approve_fault_type refuses the account that
+    proposed it. So proposing and approving are separated by that check on
+    requested_by_id, not by a second verb: both seeded holders would hold
+    both verbs, and a split that changes no answer is the SEC-H4 shape again.
+    The cost of that choice: an org chart with a single holder -- a
+    bootstrapped database, since no route issues grants -- can approve
+    everyone's proposals but its holder's own.
 
     The trigger once written here -- split the moment some profile holds one
     without the other -- died with profiles.py at H1-12, and SEC-M12 closed on
@@ -345,8 +353,10 @@ class Capability(str, enum.Enum):
     issuing grants -- a route that lets an operator choose verbs -- and
     tests/test_grant_writers.py fails on one. That is the moment to split,
     with deletion taking the narrower verb, since removing vocabulary is
-    destructive and adding it is not. The other place the decision can land is
-    SEC-M14, which redesigns these routes.
+    destructive and adding it is not. SEC-M14, which redesigned these routes,
+    kept deletion on this verb: DATA-H7's 409 already confines it to a type no
+    ticket has ever used, and the same two seeded accounts would hold a
+    narrower verb.
 
     SET_SENSITIVITY (DATA-H3-2) is the second judgement, and unlike
     RESOLVE_FAULT it did not come from splitting a column -- profiles.py has no
@@ -380,8 +390,7 @@ class Capability(str, enum.Enum):
     CREATE_EQUIPMENT = "CREATE_EQUIPMENT"
     # equipment.create_equipment, on the group the item will belong to.
     REPORT_STATUS = "REPORT_STATUS"
-    # maintenance.report_fault, verifications.create_verification -- and, as a
-    # question rather than a gate, report_fault's is_pending decision.
+    # maintenance.report_fault, verifications.create_verification.
     RESOLVE_FAULT = "RESOLVE_FAULT"
     # maintenance.fix_equipment, on the group the item belongs to.
     SET_SENSITIVITY = "SET_SENSITIVITY"

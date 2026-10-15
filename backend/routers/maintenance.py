@@ -100,27 +100,21 @@ def report_fault(
     # Find or create fault type
     fault_type = db.query(models.FaultType).filter(models.FaultType.name == report.fault_name).first()
     if not fault_type:
-        # This was the last profile read in the file, and it is a question
-        # rather than a gate: may this reporter mint global vocabulary without
-        # review, or does their fault type wait for approval?
-        # can_change_maintenance_status answered it before and REPORT_STATUS is
-        # where that column went, so every seeded profile gets the answer it
-        # got before. may() rather than require() because a no here is not a
-        # refusal -- the report is accepted either way.
+        # Pending, whoever reports (SEC-M14). This used to ask may(REPORT_STATUS)
+        # over the item's group and let a yes skip review, which handed a
+        # company commander's authority over one company's kit a say over the
+        # vocabulary every unit shares -- FaultType has no group of its own
+        # (see Capability's note on MANAGE_CATALOG). A report's authority is
+        # over the item. The fault type it names waits in the approval queue
+        # (/catalog, API-H6) for a MANAGE_CATALOG holder other than the
+        # reporter, which is setup.approve_fault_type's two-person rule.
         #
-        # What is new is the possession-only reporter, who passes the gate above
-        # by holding the item and holds no grant at all: their novel fault type
-        # is now pending, which is what an approval queue is for.
-        #
-        # Deliberately not RESOLVE_FAULT. That would newly send a company
-        # commander's fault types to review -- the approval queue (/catalog,
-        # API-H6) -- when the column this replaced let them skip it.
-        # FaultType has no group of its own -- see Capability's note on
-        # MANAGE_CATALOG -- so the item's group is the only scope available.
-        is_manager = authz.may(db, current_user.id, Capability.REPORT_STATUS, item.group_id)
+        # The report itself is accepted either way, and a pending type is not
+        # a dead one: the next report naming it reuses it by name. Only the
+        # Report Fault dropdown hides it until someone approves it.
         fault_type = models.FaultType(
             name=report.fault_name,
-            is_pending=not is_manager,
+            is_pending=True,
             requested_by_id=current_user.id
         )
         db.add(fault_type)

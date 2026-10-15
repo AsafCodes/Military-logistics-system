@@ -360,33 +360,39 @@ def test_a_refused_write_leaves_no_row_in_any_table(
     assert item_b.status == before_status
 
 
-# --- is_pending: the last profile read in maintenance.py --------------------
+# --- is_pending: no reporter skips review (SEC-M14) -------------------------
 
 
-def test_a_novel_fault_type_is_pending_only_for_a_possession_only_reporter(
-    client, db_session, mock_matrix_db
+@pytest.mark.parametrize(
+    "who",
+    ["u_soldier_a", "u_cmdr_a", "u_master"],
+    ids=["possession_only", "status_reporter", "catalog_holder"],
+)
+def test_a_novel_fault_type_is_pending_whoever_reports_it(
+    client, db_session, mock_matrix_db, who
 ):
-    """is_manager stopped being a profile column and became a grant question.
+    """Reporting is authority over an item, not over the shared vocabulary.
 
-    can_change_maintenance_status decided this before; REPORT_STATUS is where
-    that column went, so every seeded profile gets the answer it got before. The
-    case that is genuinely new is the reporter who passed the gate on possession
-    alone and holds no grant at all: their novel vocabulary now waits for
-    approval, which is what a pending flag is for.
+    report_fault used to ask may(REPORT_STATUS) over the item's group and let
+    a yes skip review, so a company commander (u_cmdr_a) put types straight
+    into the list every unit reads. Since SEC-M14 every reporter's novel type
+    waits, the soldier who passed the gate on possession alone and the master
+    who holds MANAGE_CATALOG alike: the holder of the verb that approves may
+    not approve their own proposal, so letting them skip review here would be
+    the self-approval that rule forbids, by a side door.
 
-    Switch the query to RESOLVE_FAULT and the commander's fault type joins the
-    queue too, newly needing an approval it never needed before.
-    test_fault_type_approval_loop.py walks that queue to its end.
+    The report is accepted either way; the flag is the whole difference, which
+    is why a test of status codes alone would see nothing.
+    test_fault_type_approval_loop.py walks the queue to its end.
     """
     item = item_named(db_session, "SA100")
+    novel = f"NOVEL-{who}"
 
-    assert report(client, "u_soldier_a", item.id, fault="HOLDER-NOVEL").status_code == 200
-    holder_fault = db_session.query(models.FaultType).filter_by(name="HOLDER-NOVEL").one()
-    assert holder_fault.is_pending is True
-
-    assert report(client, "u_cmdr_a", item.id, fault="COMMANDER-NOVEL").status_code == 200
-    granted_fault = db_session.query(models.FaultType).filter_by(name="COMMANDER-NOVEL").one()
-    assert granted_fault.is_pending is False
+    assert report(client, who, item.id, fault=novel).status_code == 200
+    fault = db_session.query(models.FaultType).filter_by(name=novel).one()
+    assert fault.is_pending is True
+    assert fault.requested_by_id == db_session.query(models.User).filter_by(
+        personal_number=who).one().id
 
 
 def test_a_maintenance_verb_now_comes_with_the_sight_to_use_it(

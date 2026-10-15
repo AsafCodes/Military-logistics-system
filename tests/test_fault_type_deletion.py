@@ -238,7 +238,7 @@ def test_a_pending_fault_type_in_use_is_refused_too(
 ):
     """Approval state is orthogonal to the reference, and easy to conflate.
 
-    report_fault MINTS pending types for reporters who cannot skip review, so
+    report_fault MINTS pending types for every reporter (SEC-M14), so
     "pending" and "in use" arrive together constantly -- and a check that
     treated an unapproved type as disposable would crash on the commonest row
     in the table.
