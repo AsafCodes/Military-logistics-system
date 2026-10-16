@@ -15,7 +15,7 @@ from . import (
     clock,
 )
 from .database import Base  # Use shared Base from backend package
-from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, Sensitivity, TicketStatus
+from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus
 
 
 def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
@@ -292,31 +292,74 @@ class Equipment(Base):
         return "דיווח תקין"
 
 # --- Logs & History ---
+def _custody_column(column: str, referred: str) -> Column:
+    """One of TransactionLog's from_/to_ id columns. DATA-M8-1."""
+    return Column(
+        Integer,
+        _restrict('transaction_logs', column, referred),
+        nullable=True,
+        index=True,
+    )
+
+
 class TransactionLog(Base):
     __tablename__ = 'transaction_logs'
+
+    # DATA-M8-1. Every member of EventType, and nothing else. NOT NULL as well
+    # (below), so NULL is refused too: a log row that does not say what
+    # happened says nothing. The one writer, audit_trail.record_event, passes
+    # a member; the root main.py that predated it did not always (see the
+    # revision b7e3d91c4f2a).
+    __table_args__ = (
+        _one_of('event_type', EventType, 'ck_transaction_logs_event_type'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     equipment_id = Column(Integer, _restrict('transaction_logs', 'equipment_id', 'equipment'), index=True)
+    # The ACTOR: whoever made the change, not whoever received the item.
     involved_user_id = Column(
         Integer,
         _restrict('transaction_logs', 'involved_user_id', 'users'),
         nullable=True,
         index=True,
     )
-    involved_location_id = Column(
-        Integer,
-        _restrict('transaction_logs', 'involved_location_id', 'locations'),
-        nullable=True,
-        index=True,
-    )
     timestamp = Column(clock.UtcDateTime, default=clock.utcnow, index=True)
     user_status_at_time = Column(Boolean, nullable=True)
-    event_type = Column(String) 
-    
+    event_type = Column(String, nullable=False)
+
     # Faults
     is_returned_broken = Column(Boolean, default=False)
     broken_description = Column(String, nullable=True)
-    
-    # Location Traceability (CRITICAL)
+
+    # --- Custody before and after (DATA-M8-1) ---
+    #
+    # The item's custody as the event found it (from_) and as it left it
+    # (to_), written by audit_trail.record_event for the events in its
+    # CUSTODY_EVENTS and left NULL by every other event. The four parts are
+    # Equipment's own: holder_user_id, owner_user_id, group_id, custom_location.
+    #
+    # NULL in a row written before this revision, for every event: names are
+    # not unique, so the old "User:<name>" strings in `location` cannot be
+    # turned back into ids, and a guessed before state is worse in an audit
+    # trail than an empty one.
+    from_holder_user_id = _custody_column('from_holder_user_id', 'users')
+    to_holder_user_id = _custody_column('to_holder_user_id', 'users')
+    from_owner_user_id = _custody_column('from_owner_user_id', 'users')
+    to_owner_user_id = _custody_column('to_owner_user_id', 'users')
+    from_group_id = _custody_column('from_group_id', 'groups')
+    to_group_id = _custody_column('to_group_id', 'groups')
+    from_location = Column(String, nullable=True)
+    to_location = Column(String, nullable=True)
+
+    # Free text the actor gave for a transfer, an assignment or a
+    # reclassification. Optional; schemas.normalize_reason trims it, turns a
+    # blank into NULL and caps its length.
+    reason = Column(String, nullable=True)
+
+    # The after state as one string: a place, or "User:<name>" for a person.
+    # Every row before DATA-M8-1 has only this. record_event still writes it
+    # for a custody event, derived from the to_ columns, because the movement
+    # report reads nothing else until DATA-M8-2 moves it onto them.
     location = Column(String, nullable=True)
 
     equipment = relationship("Equipment")

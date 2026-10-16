@@ -77,7 +77,7 @@ def test_round_trip_is_aware_and_storage_format_is_unchanged(db_session):
     # TransactionLog.timestamp carries the same UtcDateTime column type as
     # every other converted column and has no NOT NULL FKs to satisfy, so it
     # is the simplest fixture for a pure round-trip check.
-    log = models.TransactionLog(event_type="TEST")
+    log = models.TransactionLog(event_type="HANDOVER")
     db_session.add(log)
     db_session.commit()
     log_id = log.id
@@ -102,7 +102,7 @@ def test_naive_legacy_rows_read_back_aware(db_session):
     naive-UTC text, and the decorator must keep interpreting them as UTC
     rather than, say, refusing them or treating them as local time.
     """
-    log = models.TransactionLog(event_type="LEGACY")
+    log = models.TransactionLog(event_type="HANDOVER")
     db_session.add(log)
     db_session.commit()
     log_id = log.id
@@ -186,7 +186,7 @@ def test_bind_param_converts_a_non_utc_offset_rather_than_stripping_it(db_sessio
     plus_three = timezone(timedelta(hours=3))
     local_noon = datetime(2026, 6, 15, 12, 0, 0, tzinfo=plus_three)  # == 09:00 UTC
 
-    log = models.TransactionLog(event_type="OFFSET_TEST", timestamp=local_noon)
+    log = models.TransactionLog(event_type="HANDOVER", timestamp=local_noon)
     db_session.add(log)
     db_session.commit()
     log_id = log.id
@@ -354,11 +354,11 @@ def test_cutoff_comparison_selects_the_right_side_of_the_boundary(
     item = db_session.query(models.Equipment).filter_by(serial_number="SA100").one()
 
     inside = models.TransactionLog(
-        equipment_id=item.id, event_type="INSIDE_WINDOW",
+        equipment_id=item.id, event_type="HANDOVER",
         timestamp=clock.utcnow() - timedelta(hours=1),
     )
     outside = models.TransactionLog(
-        equipment_id=item.id, event_type="OUTSIDE_WINDOW",
+        equipment_id=item.id, event_type="HANDOVER",
         timestamp=clock.utcnow() - timedelta(hours=48),
     )
     db_session.add_all([inside, outside])
@@ -366,9 +366,11 @@ def test_cutoff_comparison_selects_the_right_side_of_the_boundary(
 
     res = client.get("/reports/daily_movement", headers=token_master)
     assert res.status_code == 200, res.text
-    event_types = {row["event_type"] for row in res.json()}
-    assert "INSIDE_WINDOW" in event_types
-    assert "OUTSIDE_WINDOW" not in event_types
+    # Told apart by id: event_type holds the EventType vocabulary only
+    # (DATA-M8-1), so it can no longer carry a marker.
+    ids = {row["id"] for row in res.json()}
+    assert inside.id in ids
+    assert outside.id not in ids
 
 
 def test_jwt_exp_claim_is_byte_identical_before_and_after(monkeypatch):

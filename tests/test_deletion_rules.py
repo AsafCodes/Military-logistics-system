@@ -75,6 +75,25 @@ def _ruled(rule="RESTRICT"):
     }
 
 
+# b7e3d91c4f2a (DATA-M8-1) drops this column, with its key, on the way to head,
+# and adds keys of its own to transaction_logs; tests/test_movement_history.py
+# holds that revision.
+DROPPED_AT_HEAD = ("transaction_logs", "involved_location_id")
+
+
+def _ruled_at_head():
+    """What _foreign_keys returns at head: _ruled(), less DROPPED_AT_HEAD, plus
+    b7e3d91c4f2a's own keys, read off that revision. Exact, so a stray key or a
+    custody key without its rule is caught here too."""
+    history = _script().get_revision("b7e3d91c4f2a").module
+    ruled = {key: value for key, value in _ruled().items() if key != DROPPED_AT_HEAD}
+    ruled.update({
+        ("transaction_logs", column): (f"fk_transaction_logs_{column}", referred, "RESTRICT")
+        for column, referred in history.ID_COLUMNS
+    })
+    return ruled
+
+
 def _foreign_keys(engine):
     """(table, column) -> (name, referenced table, ondelete), for the tables the revision touches.
 
@@ -121,8 +140,8 @@ def _seed(conn):
         "VALUES (1, 1, 1, 'Open', 1)"
     )
     conn.exec_driver_sql(
-        "INSERT INTO transaction_logs (id, equipment_id, involved_user_id, involved_location_id) "
-        "VALUES (1, 1, 1, 1)"
+        "INSERT INTO transaction_logs (id, equipment_id, involved_user_id, involved_location_id, event_type) "
+        "VALUES (1, 1, 1, 1, 'HANDOVER')"
     )
     conn.exec_driver_sql(
         "INSERT INTO verifications (id, equipment_id, verification_type, reported_status, created_by) "
@@ -142,6 +161,22 @@ def _rows(engine):
             table: conn.execute(text(f"SELECT * FROM {table} ORDER BY id")).all()
             for table in TABLES
         }
+
+
+def _without_dropped_column(rows):
+    """_rows' result with transaction_logs cut to the columns head still has.
+
+    Rows come back as tuples in table order, so the surviving columns are
+    picked by name: id, equipment_id, involved_user_id, event_type.
+    """
+    kept = ("id", "equipment_id", "involved_user_id", "event_type")
+    return {
+        table: (
+            [tuple(row._mapping[c] for c in kept) for row in table_rows]
+            if table == "transaction_logs" else table_rows
+        )
+        for table, table_rows in rows.items()
+    }
 
 
 def _replace_foreign_keys(engine, table, columns, *, name, ondelete):
@@ -264,8 +299,10 @@ def test_a_pre_alembic_database_is_carried_to_the_rules_with_its_rows(tmp_path, 
     engine.dispose()
 
     assert version == _script().get_current_head()
-    assert keys == _ruled()
-    assert after == before
+    # Head is past b7e3d91c4f2a: see DROPPED_AT_HEAD. What this test holds is
+    # every other key and every row.
+    assert keys == _ruled_at_head()
+    assert _without_dropped_column(after) == _without_dropped_column(before)
 
 
 # --- the states a real database can already be in ---------------------------

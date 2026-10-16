@@ -154,6 +154,13 @@ def upgrade():
     conflicts = []
     for table, column in INDEXES:
         name = _index_name(table, column)
+        # A column a LATER revision dropped: b7e3d91c4f2a removes
+        # transaction_logs.involved_location_id. Migrating from base, every
+        # column here still exists when this runs; it is absent only when this
+        # re-runs against a create_all database built after that drop, which
+        # the baseline path does (backend.migrations.IDEMPOTENT_SCHEMA_REVISIONS).
+        if column not in {c['name'] for c in inspector.get_columns(table)}:
+            continue
         if name not in present:
             missing.append((name, table, column))
             continue

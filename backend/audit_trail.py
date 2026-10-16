@@ -51,6 +51,8 @@ time, the patch would sail past it, and the test that proves
 transfer_equipment's `except HTTPException: raise` still works would pass
 while proving nothing.
 """
+from typing import NamedTuple
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -72,14 +74,46 @@ from .enums import ChangeReason, EquipmentStatus, EventType, Sensitivity
 OWNED_COLUMNS = ("status", "sensitivity", "last_verified_at")
 
 
+class Custody(NamedTuple):
+    """Who and where an item is with, as transaction_logs records it. DATA-M8-1.
+
+    Equipment's own four custody columns, under their own names except
+    `location`, which is custom_location.
+    """
+    holder_user_id: int | None
+    owner_user_id: int | None
+    group_id: int | None
+    location: str | None
+
+
+def custody_of(equipment: models.Equipment) -> Custody:
+    """The item's custody as it stands now.
+
+    `location` is custom_location, the place a transfer to a location writes.
+    actual_location_id is not part of it: nothing in the application sets
+    that column, and the two move routes only ever clear it.
+    """
+    return Custody(
+        holder_user_id=equipment.holder_user_id,
+        owner_user_id=equipment.owner_user_id,
+        group_id=equipment.group_id,
+        location=equipment.custom_location,
+    )
+
+
+# The events that move an item from one custodian to another. record_event
+# demands the custody before the move for these and refuses it for the rest.
+CUSTODY_EVENTS = frozenset({EventType.HANDOVER, EventType.HANDOVER_LOC, EventType.ASSIGN})
+
+
 def record_event(
     db: Session,
     *,
     equipment: models.Equipment,
     actor: models.User,
     event_type: EventType,
-    location: str | None = None,
-    recipient: models.User | None = None,
+    before: Custody | None = None,
+    reason: str | None = None,
 ) -> None:
     """Append a transaction_logs row. Adds; never commits, and never flushes.
 
@@ -97,32 +131,37 @@ def record_event(
     former yet; it is written because a log that carries it for three events out
     of four answers no question about the fourth.
 
-    `location` is a place and `recipient` is a person, and they are mutually
-    exclusive because the column holds one string. A recipient is written as
-    "User:{name}" -- transfer_equipment's inherited convention, which encodes a
-    person in a column named for a place, and which this function now spells
-    rather than each caller.
+    CUSTODY, BEFORE AND AFTER (DATA-M8-1). For an event in CUSTODY_EVENTS the
+    caller passes `before`, taken with custody_of() BEFORE it changes the item,
+    and the after state is read off the item here, so the caller must have
+    made the change by the time it calls. The row gets both, in the from_ and
+    to_ columns. `before` is required for those events and refused for every
+    other: a fault or a creation moves nobody, and a row that claimed a move
+    would be the audit trail lying.
 
-    That one-line move is the point: the AST guards next door check that rows
-    are CONSTRUCTED here, and cannot check that they are FORMATTED alike, so a
-    "user:" or "User: " from a later caller would pass every test and quietly
-    split the movement report's only record of who received the item.
+    involved_user_id is the ACTOR, not the recipient, which is why the
+    recipient needs columns of its own.
 
-    DATA-H4-2 and -3 added four callers between them, and not one passes either
-    argument: a fault, a creation, a condition report and a reclassification
-    each involve one item and one actor and no second party. So the convention
-    is still spelled in exactly one place and has had no chance to drift.
+    `location` still gets the after state as one string for a custody event,
+    "User:<name>" for a person and the place otherwise. The movement report
+    reads nothing else until DATA-M8-2 moves it onto the to_ columns, and a
+    row written now without it would show no destination there. The string
+    is spelled here only, so the format cannot split between callers.
 
-    The repair's FIX row is not among those four. It is one of the original
-    sites, migrated here by DATA-H4-1.
-
-    Inherited, not endorsed. involved_location_id, which would carry a place
-    properly, is dead (DATA-M18); involved_user_id records the ACTOR, not the
-    recipient. So this string is the only place the other party appears at all,
-    and DATA-M8 is where that gets fixed structurally.
+    `reason` is stored as given; schemas.normalize_reason has already trimmed
+    it and turned a blank into None.
     """
-    if location is not None and recipient is not None:
-        raise ValueError("record_event takes a location or a recipient, not both")
+    is_custody_event = event_type in CUSTODY_EVENTS
+    if is_custody_event and before is None:
+        raise ValueError(
+            f"record_event needs the custody before a {event_type!r} event; "
+            "pass before=custody_of(equipment), taken before the item changes"
+        )
+    if not is_custody_event and before is not None:
+        raise ValueError(
+            f"record_event takes no before state for a {event_type!r} event: "
+            "it moves no custody"
+        )
 
     if equipment.id is None:
         # DATA-H4-3. The equipment has not been INSERTed yet, so reading .id
@@ -154,12 +193,20 @@ def record_event(
             "the session before calling."
         )
 
-    if recipient is not None:
-        # full_name is nullable (models.py), so the naive f-string writes the
-        # literal "User:None" into the audit column. Equipment.
-        # current_state_description guards the same nullability with "Unknown";
-        # matching it keeps one vocabulary for an unnamed person.
-        location = f"User:{recipient.full_name or 'Unknown'}"
+    custody = {}
+    if is_custody_event:
+        after = custody_of(equipment)
+        custody = dict(
+            from_holder_user_id=before.holder_user_id,
+            to_holder_user_id=after.holder_user_id,
+            from_owner_user_id=before.owner_user_id,
+            to_owner_user_id=after.owner_user_id,
+            from_group_id=before.group_id,
+            to_group_id=after.group_id,
+            from_location=before.location,
+            to_location=after.location,
+            location=_legacy_location(db, after),
+        )
 
     log = models.TransactionLog(
         equipment_id=equipment.id,
@@ -167,9 +214,32 @@ def record_event(
         event_type=event_type.value,
         user_status_at_time=actor.is_active_duty,
         timestamp=clock.utcnow(),
-        location=location,
+        reason=reason,
+        **custody,
     )
     db.add(log)
+
+
+def _legacy_location(db: Session, after: Custody) -> str | None:
+    """The after state as the `location` column has always spelled it.
+
+    A person is "User:<name>", the format transfer_equipment used before
+    DATA-H4 moved it here; otherwise the place. Read by db.get, not by the
+    item's `holder` relationship: once loaded, that keeps pointing at the
+    previous holder after holder_user_id changes, a flush included, until
+    the item is expired. Both routes that move an item to a person have
+    just loaded the recipient, so the identity map answers and no query
+    runs. A caller that had not would get a query here, and with it an
+    autoflush, which record_event otherwise never does.
+    """
+    if after.holder_user_id is None:
+        return after.location
+    holder = db.get(models.User, after.holder_user_id)
+    # full_name is nullable (models.py), so the naive f-string would write
+    # "User:None". Equipment.current_state_description guards the same
+    # nullability with "Unknown"; matching it keeps one word for an unnamed
+    # person.
+    return f"User:{(holder.full_name if holder else None) or 'Unknown'}"
 
 
 def set_status(
@@ -304,6 +374,7 @@ def set_sensitivity(
     equipment: models.Equipment,
     actor: models.User,
     new_sensitivity: Sensitivity,
+    reason: str | None = None,
 ) -> None:
     """Assign equipment.sensitivity and log that somebody decided it.
 
@@ -328,10 +399,12 @@ def set_sensitivity(
     classification is the same case with only one of the two tables involved.
 
     THE ROW DOES NOT SAY WHAT IT CHANGED TO. See EventType.RECLASSIFY for why
-    (there is nowhere honest to put it) and DATA-M8 for where that gets fixed.
-    Worth noticing that this is a real limit and not a small one: a RECLASSIFY
-    row cannot distinguish classifying from declassifying, so the log answers
-    "who touched the classification of this item" and not "what is it now".
+    (there is nowhere honest to put it). DATA-M8-1 gave the log custody
+    columns and a reason, not a classification column, so it can now carry the
+    reason the actor gave and still not the value. Worth noticing that this is
+    a real limit and not a small one: a RECLASSIFY row cannot distinguish
+    classifying from declassifying, so the log answers "who touched the
+    classification of this item, and why" and not "what is it now".
 
     A one-caller helper, which normally is not worth writing. What makes this
     one worth it is stated in the module docstring: the guard in
@@ -370,6 +443,7 @@ def set_sensitivity(
         equipment=equipment,
         actor=actor,
         event_type=EventType.RECLASSIFY,
+        reason=reason,
     )
 
 

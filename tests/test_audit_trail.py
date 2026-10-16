@@ -524,7 +524,8 @@ def test_assigning_ownership_writes_a_log_that_reaches_the_movement_report(
     assert rows[0]["event_type"] == "ASSIGN"
     assert rows[0]["location"] == f"User:{target.full_name}", (
         "the new owner must be recoverable from the row; involved_user_id "
-        "records the ACTOR, so this column is the only place they appear"
+        "records the ACTOR, and until DATA-M8-2 this column is the only one "
+        "the movement report sends"
     )
     assert rows[0]["timestamp"] is not None
 
@@ -756,17 +757,18 @@ def test_a_rolled_back_change_takes_its_audit_row_with_it(db_session, mock_matri
     what makes that handler safe.
     """
     item = item_named(db_session, "SA100")
-    before = db_session.query(models.TransactionLog).count()
+    logs_before = db_session.query(models.TransactionLog).count()
 
     audit_trail.record_event(
         db_session,
         equipment=item,
         actor=mock_matrix_db["master"],
         event_type=EventType.ASSIGN,
+        before=audit_trail.custody_of(item),
     )
     db_session.rollback()
 
-    assert db_session.query(models.TransactionLog).count() == before
+    assert db_session.query(models.TransactionLog).count() == logs_before
 
 
 def test_every_event_type_has_a_writer():
@@ -1108,29 +1110,6 @@ def test_set_status_refuses_an_empty_new_status(db_session, mock_matrix_db, empt
 
     assert db_session.query(models.EquipmentStatusHistory).count() == before
     assert item.status == "Functional", "the status moved despite the refusal"
-
-
-def test_record_event_refuses_a_location_and_a_recipient_together(
-    db_session, mock_matrix_db
-):
-    """One column, one meaning.
-
-    location is a place and recipient is a person, and transaction_logs has a
-    single string to hold whichever it is. Accepting both would silently drop
-    one -- and which one it dropped would be an implementation detail of the
-    order two lines happen to run in.
-    """
-    item = item_named(db_session, "SA100")
-
-    with pytest.raises(ValueError, match="not both"):
-        audit_trail.record_event(
-            db_session,
-            equipment=item,
-            actor=mock_matrix_db["master"],
-            event_type=EventType.ASSIGN,
-            location="Armory",
-            recipient=mock_matrix_db["soldier_a"],
-        )
 
 
 # --- 7. Fault and repair (DATA-H4-2) -----------------------------------------

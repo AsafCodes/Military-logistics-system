@@ -1130,7 +1130,7 @@ def test_derived_listings_inherit_the_rule(
         status="Open",
     ))
     db_session.add(models.TransactionLog(
-        equipment_id=item.id, event_type="TEST_EVENT",
+        equipment_id=item.id, event_type="HANDOVER",
     ))
     db_session.commit()
 

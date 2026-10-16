@@ -338,6 +338,7 @@ def set_sensitivity(
         equipment=item,
         actor=current_user,
         new_sensitivity=req.sensitivity,
+        reason=req.reason,
     )
 
     db.commit()
@@ -405,6 +406,10 @@ def assign_owner(
     if destination is not None:
         authz.require(db, current_user.id, Capability.TRANSFER, destination)
 
+    # DATA-M8-1. Taken before the first assignment below: the log row records
+    # the custody the item left as well as the one it went to.
+    before = audit_trail.custody_of(item)
+
     item.owner_user_id = target.id
     item.holder_user_id = target.id
     # Ownership moves the item to the new owner's unit, so their commanders see
@@ -424,10 +429,6 @@ def assign_owner(
     # and inside the same commit as the mutation, so the row cannot outlive a
     # rollback of what it describes.
     #
-    # recipient=, not a hand-spelled location string: record_event owns the
-    # "User:{name}" convention so this event and HANDOVER cannot drift apart
-    # in the one column that records who received the item.
-    #
     # last_verified_at is NOT touched (DATA-H5): signing an item over to
     # someone is paperwork, not laying eyes on it.
     audit_trail.record_event(
@@ -435,7 +436,8 @@ def assign_owner(
         equipment=item,
         actor=current_user,
         event_type=EventType.ASSIGN,
-        recipient=target,
+        before=before,
+        reason=req.reason,
     )
 
     db.commit()
@@ -524,6 +526,10 @@ def transfer_equipment(
         if destination is not None:
             authz.require(db, current_user.id, Capability.TRANSFER, destination)
 
+    # DATA-M8-1. Taken before either branch changes the item, for the log
+    # row's from_ columns. A read, so it sits with the other reads above the try.
+    before = audit_trail.custody_of(item)
+
     try:
         if target is not None:
             item.holder_user_id = target.id
@@ -538,7 +544,8 @@ def transfer_equipment(
                 equipment=item,
                 actor=current_user,
                 event_type=EventType.HANDOVER,
-                recipient=target,
+                before=before,
+                reason=req.reason,
             )
             result_msg = {"status": "Transferred", "new_holder": target.full_name}
 
@@ -556,7 +563,8 @@ def transfer_equipment(
                 equipment=item,
                 actor=current_user,
                 event_type=EventType.HANDOVER_LOC,
-                location=req.to_location,
+                before=before,
+                reason=req.reason,
             )
             result_msg = {"status": "Transferred", "location": req.to_location}
 

@@ -735,14 +735,27 @@ def test_a_missing_plain_index_is_not_drift(tmp_path):
     assert drift == [], f"a missing non-unique index was counted as drift: {drift}"
 
 
+def test_a_missing_column_that_a_later_revision_adds_is_not_drift(tmp_path):
+    """DATA-M8-1. migrations.ADDED_AFTER_BASELINE's columns are added by a
+    revision after the stamp, so a database without one is behind, not
+    broken -- the same reasoning as a missing plain index above."""
+    drift = _drift_after(tmp_path, "ALTER TABLE transaction_logs DROP COLUMN reason")
+
+    assert drift == [], f"a column a later revision adds was counted as drift: {drift}"
+
+
 @pytest.mark.parametrize(
     "statement, kind",
     [
         ("DROP INDEX ix_users_personal_number", "add_index"),
         ("ALTER TABLE fault_types DROP COLUMN severity", "add_column"),
         ("DROP TABLE daily_stats", "add_table"),
+        # Beside the columns ADDED_AFTER_BASELINE exempts, on the same table:
+        # an exemption that matched the table and not the column would pass
+        # every other case here.
+        ("ALTER TABLE transaction_logs DROP COLUMN user_status_at_time", "add_column"),
     ],
-    ids=["unique_index", "column", "table"],
+    ids=["unique_index", "column", "table", "column_beside_the_exempt_ones"],
 )
 def test_what_a_query_or_a_rule_depends_on_is_still_drift(tmp_path, statement, kind):
     """The other half: the exemption above must be exactly as wide as it says.
@@ -1065,6 +1078,63 @@ def test_a_legacy_row_holding_null_does_not_block_the_upgrade(tmp_path):
 
     assert survived == (None, None), "the migration rewrote a NULL it was asked to leave alone"
     assert "ck_equipment_status" in names, "the upgrade did not actually run"
+
+
+def test_the_columns_added_after_the_baseline_are_exactly_the_exempt_ones(tmp_path):
+    """migrations.ADDED_AFTER_BASELINE, derived from the chain rather than trusted.
+
+    describe_drift skips a missing column on that list, because the revision
+    that adds it runs after the stamp. A column missing from the list refuses
+    every pre-Alembic database that predates it; an extra entry hides real
+    drift. So: migrate one database to the stamp and one to head, and the
+    columns head has and the stamp lacks must be exactly the list.
+    """
+    at_stamp = create_engine(f"sqlite:///{tmp_path / 'stamp.db'}")
+    _upgrade(at_stamp, migrations.BASELINE_STAMP)
+    at_head = create_engine(f"sqlite:///{tmp_path / 'head.db'}")
+    _upgrade(at_head, "head")
+
+    def columns(engine):
+        insp = inspect(engine)
+        return {
+            (table, column["name"])
+            for table in insp.get_table_names()
+            for column in insp.get_columns(table)
+        }
+
+    added = columns(at_head) - columns(at_stamp)
+    at_stamp.dispose()
+    at_head.dispose()
+
+    assert added == migrations.ADDED_AFTER_BASELINE
+
+
+def test_a_pre_alembic_database_lacking_the_later_columns_is_stamped_and_given_them(
+    tmp_path, monkeypatch
+):
+    """The case ADDED_AFTER_BASELINE exists for, end to end: a create_all
+    database built just before DATA-M8-1, with no version table, is stamped
+    rather than refused and leaves run_migrations with every column head has.
+    """
+    path = tmp_path / "before_m8.db"
+    engine = create_engine(f"sqlite:///{path}")
+    _upgrade(engine, "a8c2e5f19b47")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE alembic_version")
+    engine.dispose()
+
+    engine = create_engine(f"sqlite:///{path}")
+    monkeypatch.setattr(migrations, "engine", engine)
+    migrations.run_migrations()
+
+    present = {(t, c) for t, c in migrations.ADDED_AFTER_BASELINE
+               if c in {col["name"] for col in inspect(engine).get_columns(t)}}
+    with engine.connect() as conn:
+        version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    engine.dispose()
+
+    assert version == ScriptDirectory.from_config(migrations.alembic_config()).get_current_head()
+    assert present == migrations.ADDED_AFTER_BASELINE
 
 
 def allowlisted_in_chain_order(script):

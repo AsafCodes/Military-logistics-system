@@ -221,14 +221,42 @@ class EquipmentResponse(BaseModel):
         from_attributes = True
 
 # --- Actions ---
+
+# DATA-M8-1. The longest reason a transfer, an assignment or a reclassification
+# may carry into transaction_logs.reason.
+REASON_MAX = 500
+
+
+def normalize_reason(v: Optional[str]) -> Optional[str]:
+    """Trim a reason; a blank one is no reason at all, and a long one is a 422.
+
+    Shared by every request that takes one, so "no reason" is stored as NULL
+    and never as "" or "   ", and the movement report has one way to say it.
+    """
+    if v is None:
+        return None
+    reason = v.strip()
+    if not reason:
+        return None
+    if len(reason) > REASON_MAX:
+        raise ValueError(f"reason must be at most {REASON_MAX} characters")
+    return reason
+
+
 class TransferPossessionRequest(BaseModel):
     equipment_id: int
     to_holder_id: Optional[int] = None
     to_location: Optional[str] = None # e.g. "Armory"
+    reason: Optional[str] = None
+
+    _normalize_reason = field_validator("reason")(normalize_reason)
 
 class AssignOwnerRequest(BaseModel):
     equipment_id: int
     owner_id: int
+    reason: Optional[str] = None
+
+    _normalize_reason = field_validator("reason")(normalize_reason)
 
 class ReportFaultRequest(BaseModel):
     equipment_id: int
@@ -242,10 +270,13 @@ class EquipmentVerifyRequest(BaseModel):
 class SetSensitivityRequest(BaseModel):
     """DATA-H3-2. The body of PATCH /equipment/{id}/sensitivity.
 
-    Required, not Optional, and the field stands alone. Declassifying is
-    UNCLASSIFIED -- an explicit value a caller states and the audit trail can
-    one day record -- never an omission. An Optional field here would make
-    "clear the classification" and "leave it alone" the same request.
+    `sensitivity` is required, not Optional. Declassifying is UNCLASSIFIED --
+    an explicit value a caller states and the audit trail can one day record
+    -- never an omission. An Optional field here would make "clear the
+    classification" and "leave it alone" the same request.
+
+    `reason` is optional (DATA-M8-1): why the caller decided, stored on the
+    RECLASSIFY row.
 
     No equipment_id, unlike the sibling *Request classes above: this route
     takes the id in the PATH, following equipment.verify_equipment_daily
@@ -253,6 +284,9 @@ class SetSensitivityRequest(BaseModel):
     identifies the resource being amended, which is what a path is for.
     """
     sensitivity: Sensitivity
+    reason: Optional[str] = None
+
+    _normalize_reason = field_validator("reason")(normalize_reason)
 
 # --- Setup ---
 class FaultTypeCreate(BaseModel):

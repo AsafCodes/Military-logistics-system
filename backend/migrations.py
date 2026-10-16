@@ -98,7 +98,37 @@ BASELINE_STAMP = "e5f1b8d24a07"
 # database whose rules are all still RESTRICT, that leaves nothing in the
 # result to tell the two apart, so a re-run is asserted to emit no DDL, on both
 # dialects.
-IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47"})
+#
+# DATA-M8-1's movement-history revision adds columns, keys, indexes and a
+# CHECK and drops a column, each checked by name before it is done. It adds
+# keys rather than re-ruling existing ones, so DATA-H13-2's quiet shape is
+# not among them; a re-run is still asserted to emit no DDL.
+IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
+    {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a"}
+)
+
+# (table, column) for every column a revision after BASELINE_STAMP adds.
+#
+# describe_drift gates the baseline path on the models of today, and a
+# pre-Alembic database built before such a revision lacks its columns by
+# definition -- the revision that adds them runs only after the stamp. So
+# without this a column added after the stamp would refuse every database
+# the baseline path exists for. DATA-M8-1 is the first revision after the
+# stamp to add one.
+#
+# Kept in step with the chain by a test rather than by hand:
+# tests/test_group_schema.py migrates one database to the stamp and another to
+# head and asserts that the columns head adds are exactly these.
+ADDED_AFTER_BASELINE = frozenset(
+    ("transaction_logs", column)
+    for column in (
+        "from_holder_user_id", "to_holder_user_id",
+        "from_owner_user_id", "to_owner_user_id",
+        "from_group_id", "to_group_id",
+        "from_location", "to_location",
+        "reason",
+    )
+)
 
 
 def alembic_config() -> Config:
@@ -137,11 +167,17 @@ def describe_drift(conn) -> list:
     A missing UNIQUE index is still drift. It is a rule about the data rather
     than a way of finding it, and a database without one accepts rows the
     models promise cannot exist.
+
+    A missing column in ADDED_AFTER_BASELINE is not counted either, for the
+    reason the index is not: the revision that adds it runs after the stamp.
+    See that constant.
     """
     context = MigrationContext.configure(conn)
     return [
         d for d in compare_metadata(context, models.Base.metadata)
-        if d[0] in BEHIND and not (d[0] == "add_index" and not d[1].unique)
+        if d[0] in BEHIND
+        and not (d[0] == "add_index" and not d[1].unique)
+        and not (d[0] == "add_column" and (d[2], d[3].name) in ADDED_AFTER_BASELINE)
     ]
 
 

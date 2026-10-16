@@ -206,7 +206,7 @@ def test_the_daily_movement_report_ranges_over_the_timestamp_index(
     now = clock.utcnow()
     db_session.add_all(
         models.TransactionLog(
-            equipment_id=item, event_type="TRANSFER", timestamp=now - timedelta(hours=18 * i)
+            equipment_id=item, event_type="HANDOVER", timestamp=now - timedelta(hours=18 * i)
         )
         for i in range(40)
     )
@@ -459,9 +459,10 @@ def test_a_pre_alembic_database_without_the_indexes_is_migrated_not_refused(
             "INSERT INTO equipment (id, catalog_item_id, group_id, holder_user_id) "
             "VALUES (1, 1, 1, NULL), (2, 1, 1, NULL), (3, 1, 1, 1), (4, 1, 1, 1)"
         )
+        # An event_type, because head refuses a row without one (DATA-M8-1).
         conn.exec_driver_sql(
-            "INSERT INTO transaction_logs (id, equipment_id, timestamp) "
-            "VALUES (1, NULL, NULL), (2, 3, '2026-01-01 00:00:00.000000')"
+            "INSERT INTO transaction_logs (id, equipment_id, timestamp, event_type) "
+            "VALUES (1, NULL, NULL, 'HANDOVER'), (2, 3, '2026-01-01 00:00:00.000000', 'HANDOVER')"
         )
         conn.exec_driver_sql("DROP TABLE alembic_version")
     engine.dispose()
@@ -478,6 +479,8 @@ def test_a_pre_alembic_database_without_the_indexes_is_migrated_not_refused(
     engine.dispose()
 
     assert version == _script().get_current_head()
-    assert set(_expected_indexes()) <= present
+    # Less the one whose column b7e3d91c4f2a (DATA-M8-1) drops on the way to
+    # head; tests/test_movement_history.py holds that revision.
+    assert set(_expected_indexes()) - {"ix_transaction_logs_involved_location_id"} <= present
     assert holders == [(1, None), (2, None), (3, 1), (4, 1)]
     assert logs == [(1, None), (2, 3)]

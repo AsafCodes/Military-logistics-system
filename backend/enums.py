@@ -190,7 +190,12 @@ class EventType(str, enum.Enum):
     remaining gaps are structural rather than missed: users.update_user_group
     and setup.py's fault-type routes have no equipment to name, and a NULL
     equipment_id is dropped by scope_equipment_derived_query's inner join, so a
-    row for them would be written and seen by nobody (DATA-M8).
+    row for them would be written and seen by nobody.
+
+    The column holds these values and nothing else, NULL included, since
+    DATA-M8-1: models.TransactionLog constrains it with a CHECK built from this
+    enum and NOT NULL. A new member needs a revision that widens the CHECK;
+    tests/test_group_schema.py's schema comparison fails until one exists.
 
     Read by frontend DailyActivityTable.tsx, which lowercases and looks the
     value up in its EVENT_META map to pick a Hebrew label; a member with no
@@ -208,14 +213,16 @@ class EventType(str, enum.Enum):
     # equipment.verify_equipment_daily -- the daily presence confirmation,
     # NOT verifications.create_verification's condition report.
     FIX = "FIX"
-    # maintenance.fix_equipment.
+    # maintenance.fix_equipment. The V4.0 root main.py spelled this event
+    # 'REPAIR'; revision b7e3d91c4f2a (DATA-M8-1) renames those rows.
     ASSIGN = "ASSIGN"
     # equipment.assign_owner. DATA-H4's headline: a change of custody wrote
     # nothing at all and never reached the movement report.
     FAULT = "FAULT"
-    # maintenance.report_fault (DATA-H4-2). Like ASSIGN above it, a value with
-    # no legacy spelling to preserve -- nothing has ever written a fault to this
-    # table -- so it is uppercase only to match its neighbours.
+    # maintenance.report_fault (DATA-H4-2). Uppercase to match its neighbours.
+    # Not quite without a legacy spelling, as DATA-H4-2 believed: the V4.0
+    # root main.py wrote fault reports to this table as 'FAULT_REPORT', and
+    # revision b7e3d91c4f2a (DATA-M8-1) renames those rows to this value.
     #
     # Written UNCONDITIONALLY, unlike the history row the same route also
     # produces. A second fault report on an already-broken item moves no status,
@@ -224,20 +231,22 @@ class EventType(str, enum.Enum):
     RECLASSIFY = "RECLASSIFY"
     # equipment.set_sensitivity, via audit_trail.set_sensitivity (DATA-H4-3).
     #
-    # Records WHO reclassified WHICH item WHEN, and deliberately not what it
-    # changed to, because transaction_logs has nowhere honest to put it.
+    # Records WHO reclassified WHICH item WHEN, and, since DATA-M8-1, the
+    # reason they gave. Deliberately not what it changed to, because
+    # transaction_logs has nowhere honest to put it.
     #
-    # Two string columns exist and neither is free. `location` already means a
-    # place AND a person ("User:{name}"), so a third meaning in a column no
-    # reader can disambiguate is the exact drift record_event's docstring
-    # exists to prevent. `broken_description` is dead -- nothing has written or
-    # read it since the initial migration -- but it is named for FAULTS, so
-    # putting a classification in it buys accuracy about one event by making
-    # the column lie about every other. Reusing a misnamed empty column is the
-    # cheaper-looking half of the same mistake.
+    # No column is free. `location` already means a place AND a person
+    # ("User:{name}"), so a third meaning in a column no reader can
+    # disambiguate is the drift record_event exists to prevent.
+    # `broken_description` is dead -- nothing has written or read it since the
+    # initial migration -- but it is named for FAULTS, so putting a
+    # classification in it buys accuracy about one event by making the column
+    # lie about every other. `reason` is the actor's words, not a value. The
+    # from_/to_ columns DATA-M8-1 added are custody, and a reclassification
+    # moves none, so record_event leaves them NULL here.
     #
-    # The current value is on the equipment row; DATA-M8 is where the log gains
-    # a column that means what it says.
+    # The current value is on the equipment row. A column for the value
+    # itself is still to be added.
     #
     # Written UNCONDITIONALLY, for FAULT's reason above: re-asserting CLASSIFIED
     # on an already-classified item is somebody making a classification
