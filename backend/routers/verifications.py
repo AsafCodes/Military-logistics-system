@@ -153,7 +153,7 @@ async def create_verification(
 
 @router.get("/equipment/{equipment_id}", response_model=List[schemas.VerificationResponse])
 async def get_equipment_verifications(
-    equipment_id: int,
+    equipment_id: schemas.DbInt,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
@@ -205,7 +205,7 @@ history_router = APIRouter(prefix="/equipment", tags=["Equipment History"])
 
 @history_router.get("/{equipment_id}/history", response_model=List[schemas.StatusHistoryResponse])
 async def get_equipment_status_history(
-    equipment_id: int,
+    equipment_id: schemas.DbInt,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):

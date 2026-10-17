@@ -289,7 +289,7 @@ def create_equipment(
 
 @router.patch("/equipment/{equipment_id}/sensitivity", response_model=schemas.EquipmentResponse)
 def set_sensitivity(
-    equipment_id: int,
+    equipment_id: schemas.DbInt,
     req: schemas.SetSensitivityRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
@@ -591,7 +591,7 @@ def transfer_equipment(
 
 @router.post("/equipment/{equipment_id}/verify")
 def verify_equipment_daily(
-    equipment_id: int,
+    equipment_id: schemas.DbInt,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):

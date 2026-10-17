@@ -1,9 +1,25 @@
-from pydantic import BaseModel, field_validator
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Annotated, Optional, List
 from datetime import datetime
 
 from . import clock
 from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus
+
+# --- Integers a request carries ---
+#
+# The range of a Postgres `integer`, which is what an `Integer` column is
+# there: no stored id can lie outside it. Every integer a request carries --
+# a path parameter or a body field -- is a DbInt, so a value outside it is
+# refused with 422, as a non-number is, before any query runs.
+#
+# Unbounded, any value reached the database. Postgres compared it without
+# error and answered 404 at every size; SQLite answered 404 too until the
+# value passed 64 bits, where Python's sqlite3 cannot bind it and raised
+# OverflowError (500). tests/test_integer_inputs.py finds every integer input through the
+# OpenAPI schema and fails on one without the bound.
+DB_INT_MIN = -(2**31)
+DB_INT_MAX = 2**31 - 1
+DbInt = Annotated[int, Field(ge=DB_INT_MIN, le=DB_INT_MAX)]
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -59,7 +75,7 @@ class UserCreate(UserBase):
     # belongs to no unit), so there is no creator group to fall back to. H1-6
     # left create_user issuing no GroupMembership at all; this closes that gap
     # rather than carrying it forward again.
-    group_id: int
+    group_id: DbInt
 
     class Config:
         # SEC-M2. This body writes an account, so a field it does not name is
@@ -82,7 +98,7 @@ class UserLogin(BaseModel):
     password: str
 
 class UpdateUserGroupRequest(BaseModel):
-    group_id: int
+    group_id: DbInt
 
 class CapabilitiesResponse(BaseModel):
     """What the caller may do. SEC-H10 -- the frontend's first way to ask.
@@ -136,7 +152,7 @@ class EquipmentCreate(BaseModel):
     # own membership -- the ordinary case, and the only one a client needs.
     # Supplied, it is an explicit override that the route validates against the
     # creator's extent, because unlike the derived value it is attacker-chosen.
-    group_id: Optional[int] = None
+    group_id: Optional[DbInt] = None
 
     # DATA-H3-2. Optional and defaulting to None, NOT to UNCLASSIFIED, and the
     # difference is load-bearing rather than stylistic. None means "the client
@@ -265,22 +281,22 @@ def normalize_reason(v: Optional[str]) -> Optional[str]:
 
 
 class TransferPossessionRequest(BaseModel):
-    equipment_id: int
-    to_holder_id: Optional[int] = None
+    equipment_id: DbInt
+    to_holder_id: Optional[DbInt] = None
     to_location: Optional[str] = None # e.g. "Armory"
     reason: Optional[str] = None
 
     _normalize_reason = field_validator("reason")(normalize_reason)
 
 class AssignOwnerRequest(BaseModel):
-    equipment_id: int
-    owner_id: int
+    equipment_id: DbInt
+    owner_id: DbInt
     reason: Optional[str] = None
 
     _normalize_reason = field_validator("reason")(normalize_reason)
 
 class ReportFaultRequest(BaseModel):
-    equipment_id: int
+    equipment_id: DbInt
     fault_name: str 
     description: str
 
@@ -402,7 +418,7 @@ class InventoryReportItem(BaseModel):
 
 # --- Verification & Status History ---
 class VerificationCreate(BaseModel):
-    equipment_id: int
+    equipment_id: DbInt
     verification_type: str
     reported_status: EquipmentStatus
     findings: Optional[str] = None

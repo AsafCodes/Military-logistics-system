@@ -52,7 +52,7 @@ def create_user(user: schemas.UserCreate, current_user: models.User = Depends(ge
     return new_user
 
 @router.put("/users/{user_id}/group", response_model=schemas.UserResponse)
-def update_user_group(user_id: int, req: schemas.UpdateUserGroupRequest, current_user: models.User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def update_user_group(user_id: schemas.DbInt, req: schemas.UpdateUserGroupRequest, current_user: models.User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     # Reassigning where someone sits is a personnel act, gated the same as
     # creating them -- H1-12 replaces the old profile-assignment route with
     # this one, same MANAGE_PERSONNEL gate, same replace-not-add shape.

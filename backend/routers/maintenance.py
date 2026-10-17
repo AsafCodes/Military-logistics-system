@@ -179,7 +179,7 @@ def report_fault(
 
 @router.post("/maintenance/fix/{equipment_id}")
 def fix_equipment(
-    equipment_id: int,
+    equipment_id: schemas.DbInt,
     notes: str = "",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)

@@ -64,7 +64,7 @@ def list_groups(
 
 @router.patch("/groups/{group_id}", response_model=schemas.GroupResponse)
 def update_group(
-    group_id: int,
+    group_id: schemas.DbInt,
     body: schemas.GroupUpdate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
@@ -149,7 +149,7 @@ def create_fault_type(
 
 @router.put("/setup/fault_types/{fault_id}/approve")
 def approve_fault_type(
-    fault_id: int,
+    fault_id: schemas.DbInt,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
@@ -184,7 +184,7 @@ def approve_fault_type(
 
 @router.delete("/setup/fault_types/{fault_id}")
 def delete_fault_type(
-    fault_id: int,
+    fault_id: schemas.DbInt,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
