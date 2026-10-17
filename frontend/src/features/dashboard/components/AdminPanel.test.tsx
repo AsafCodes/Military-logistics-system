@@ -17,7 +17,7 @@ import AdminPanel from './AdminPanel';
 import api from '@/lib/axios';
 import { holdGets, withAdapter } from '@/test/httpStubs';
 
-const GROUPS = [{ id: 1, name: 'Company A' }];
+const GROUPS = [{ id: 1, name: 'Company A', timezone: 'Europe/Vienna' }];
 const USER = { id: 1, full_name: 'Test User', personal_number: 'u_test' };
 
 // The group selector -- and any error about it -- lives in the "edit" side of
@@ -88,6 +88,29 @@ describe('AdminPanel: a failed /groups fetch is scoped, not panel-wide', () => {
 });
 
 /**
+ * DATA-M9-1. Each group option shows the group's zone, read-only. The select
+ * is right to left, and a name such as 188/53/A is not: with the zone written
+ * after it as plain text, the browser split the name around the suffix and
+ * showed "A (Etc/GMT+3)/188/53" (seen on the page). Each part is wrapped in a
+ * first-strong isolate (U+2068 ... U+2069), the text form of <bdi>, which an
+ * <option> cannot hold.
+ */
+describe('AdminPanel group options: the zone beside the name (DATA-M9-1)', () => {
+    it('isolates the name and the zone, each on its own', async () => {
+        const groups = [{ id: 4, name: '188/53/A', kind: 'UNIT', timezone: 'Etc/GMT+3' }];
+        vi.spyOn(api, 'get').mockImplementation((url: string) => Promise.resolve(
+            { data: url === '/groups' ? groups : url === '/users' ? [USER] : [] }));
+
+        render(<AdminPanel />);
+        await selectAUser();
+
+        const option = await screen.findByRole('option', { name: /188\/53\/A/ });
+        expect(option.textContent).toBe('\u2068188/53/A\u2069 (\u2068Etc/GMT+3\u2069)');
+        expect(option).toHaveValue('4');
+    });
+});
+
+/**
  * FE-H5. The search is debounced, but the debounce only cancels a timer that
  * has not fired. Before this fix a request already sent was left to land, so
  * an older term's response arriving after a newer one's replaced the newer
@@ -117,7 +140,7 @@ describe('AdminPanel groups: an aborted first load under StrictMode (FE-H5)', ()
 
         await act(async () => { held[1].resolve(GROUPS); });
         expect(screen.queryByText(LOADING)).toBeNull();
-        expect(screen.getByRole('option', { name: 'Company A' })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: /Company A/ })).toBeInTheDocument();
     });
 });
 

@@ -163,7 +163,7 @@ Marker_System/
   - **rows that refer to equipment** — transaction logs, maintenance tickets → `scope_equipment_derived_query`, which joins `Equipment` and defers to the above
   - **people** → `scope_user_query`: membership in a group inside `extent(VIEW)`, **or** yourself, **or** — for `MANAGE_PERSONNEL` holders — anyone belonging to no group at all
 - **⚠️ Non-Obvious Detail:** that third arm on `scope_user_query` is load-bearing, and was found by probing rather than by reading, at a time when `create_user` issued no membership at all — a fresh account was a member of nothing and invisible to **everyone including the master who just created it**. H1-12 closed that at the source: `create_user` now requires a `group_id` and places the account in the same transaction that creates it. The arm stays regardless — a `Group` can still be deleted out from under a member, since `GroupMembership` cascades on the group's `ondelete` — so an unplaced account remains reachable, just rarer.
-- **⚠️ Non-Obvious Detail:** `GET /groups` (H1-12 — replaces `GET /profiles`) is *gated* (`MANAGE_PERSONNEL`) rather than scoped, because the personnel table belongs to no unit. That is the same reason `authz.require_global` exists.
+- **⚠️ Non-Obvious Detail:** `GET /groups` (H1-12 — replaces `GET /profiles`) is *gated* (`MANAGE_PERSONNEL`) rather than scoped, because the personnel table belongs to no unit; so is `PATCH /groups/{group_id}`, which sets a group's zone. That is the same reason `authz.require_global` exists.
 
 ### Module F2: The Group Access Model
 - **Files:** `backend/authz.py`, `backend/enums.py` → `Capability`, `backend/dependencies.py`
@@ -254,6 +254,7 @@ Marker_System/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/groups` | List all groups (`MANAGE_PERSONNEL`) |
+| `PATCH` | `/groups/{group_id}` | Set a group's time zone (`MANAGE_PERSONNEL`; no page calls it) |
 | `GET` | `/setup/fault_types` | List all fault types, pending included |
 | `GET` | `/setup/fault_types/pending` | List pending fault types (`MANAGE_CATALOG`) |
 | `POST` | `/setup/fault_types` | Create fault type (`MANAGE_CATALOG`; always pending) |
@@ -298,7 +299,7 @@ BOOTSTRAP_ADMIN_ENABLED=1 python -m backend.bootstrap_admin <personal_number> "<
 ```
 
 It applies migrations, creates the MASTER user, then places it at the top of the group graph
-(creating a `ROOT` group if none exists) with a `GroupMembership` and every `Capability` granted
+(creating a `ROOT` group if none exists, in the zone `BOOTSTRAP_ROOT_TIMEZONE` names, else `Asia/Jerusalem`) with a `GroupMembership` and every `Capability` granted
 on each root — `bootstrap_admin.grant_root_authority()`, not a profile — and prints a generated
 password **once**: it is not stored in plaintext and cannot be recovered. It refuses if root
 authority is already held by anyone (`already_bootstrapped()` checks group membership on the
@@ -331,7 +332,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | Table | Purpose |
 |-------|---------| 
 | `users` | Credentials, active-duty flag |
-| `groups` | `Group` (polymorphic on `kind`) — nodes in the org DAG |
+| `groups` | `Group` (polymorphic on `kind`) — nodes in the org DAG. Each stores its own IANA `timezone` (NOT NULL, never inherited) |
 | `group_edges` | `GroupEdge` — direct containment |
 | `group_closure` | `GroupClosure` — materialised transitive closure |
 | `group_memberships` | `GroupMembership` — who sits where |
@@ -387,6 +388,7 @@ Every image the repository pulls is named by tag and digest (`name:tag@sha256:�
 | `VITE_API_URL` | `docker-compose.yml` (dev server); `--build-arg` (image) | Backend URL for frontend Axios. Read when the JavaScript is built: the dev server reads it at start, the image has it fixed at `docker build` |
 | `SEED_ENABLED` | shell, per-run | Must be `1` for `seed_data.py` to run at all |
 | `BOOTSTRAP_ADMIN_ENABLED` | shell, per-run | Must be `1` for `bootstrap_admin.py` to create the first MASTER |
+| `BOOTSTRAP_ROOT_TIMEZONE` | shell, per-run | Optional. The zone of the `ROOT` group `bootstrap_admin.py` creates when there is none; unset or empty means `Asia/Jerusalem`, an unknown name stops the run |
 
 ---
 

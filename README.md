@@ -32,7 +32,7 @@ The server migrates the database when it starts, so there is no migration to run
 
 A new database has no user, and nobody can log in until the seed has run. The seed makes seven accounts, from `u_master` down to `u_soldier`, with units and equipment for them. It prints each account's password once and they cannot be read again, so copy them from the terminal. Log in on the application's page with an account's name as the personal number. The seed refuses a database that already has a user.
 
-To start with one administrator and none of the seed's accounts, units and equipment, run [backend/bootstrap_admin.py](backend/bootstrap_admin.py) in place of the seed, the same way: `docker compose exec -e BOOTSTRAP_ADMIN_ENABLED=1 backend python -m backend.bootstrap_admin <personal number> "<full name>"`. It makes the account, a unit named ROOT for it to command when the database has no group, and prints the password once. After it the seed refuses, since the database has a user.
+To start with one administrator and none of the seed's accounts, units and equipment, run [backend/bootstrap_admin.py](backend/bootstrap_admin.py) in place of the seed, the same way: `docker compose exec -e BOOTSTRAP_ADMIN_ENABLED=1 backend python -m backend.bootstrap_admin <personal number> "<full name>"`. It makes the account, a unit named ROOT for it to command when the database has no group, and prints the password once. ROOT keeps its calendar day in Asia/Jerusalem time unless the run is given another zone, as `-e BOOTSTRAP_ROOT_TIMEZONE=Europe/Vienna` for example. After it the seed refuses, since the database has a user.
 
 ## Tests and local development
 

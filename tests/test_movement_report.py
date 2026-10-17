@@ -358,7 +358,7 @@ def _stock_moves(db_session, n, *, tag):
         for i in range(n)
         for role in ("actor", "from_h", "to_h", "from_o", "to_o")
     ]
-    units = [authz.Unit(name=f"{tag} {i} {end}") for i in range(n) for end in ("from", "to")]
+    units = [authz.Unit(name=f"{tag} {i} {end}", timezone=clock.DEFAULT_TIMEZONE) for i in range(n) for end in ("from", "to")]
     db_session.add_all(items + people + units)
     db_session.flush()
     for i in range(n):

@@ -23,7 +23,7 @@ from sqlalchemy import UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
-from backend import authz, database, migrations, models
+from backend import authz, clock, database, migrations, models
 from backend.database import Base
 from backend.enums import Capability, GroupKind
 from tests.conftest import recorded
@@ -89,7 +89,7 @@ def test_group_tables_are_registered_and_created(db_session):
 
 def test_unit_and_task_force_round_trip_as_groups(db_session):
     """Single-table inheritance: both kinds live in `groups` and come back typed."""
-    db_session.add_all([authz.Unit(name="Bn53"), authz.TaskForce(name="TF Sinai")])
+    db_session.add_all([authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE), authz.TaskForce(name="TF Sinai", timezone=clock.DEFAULT_TIMEZONE)])
     db_session.commit()
 
     by_name = {g.name: g for g in db_session.query(authz.Group).all()}
@@ -112,13 +112,13 @@ def test_the_polymorphic_base_cannot_be_persisted(db_session):
     would let kind='GROUP' persist -- a value outside GroupKind, which would
     make GroupKind(row.kind) unsafe for H1-2 and later.
     """
-    db_session.add(authz.Group(name="bare"))
+    db_session.add(authz.Group(name="bare", timezone=clock.DEFAULT_TIMEZONE))
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
 
     # Every value the mapper can actually write is a GroupKind member.
-    db_session.add_all([authz.Unit(name="u"), authz.TaskForce(name="t")])
+    db_session.add_all([authz.Unit(name="u", timezone=clock.DEFAULT_TIMEZONE), authz.TaskForce(name="t", timezone=clock.DEFAULT_TIMEZONE)])
     db_session.commit()
     assert {GroupKind(g.kind) for g in db_session.query(authz.Group).all()} == {
         GroupKind.UNIT,
@@ -129,9 +129,9 @@ def test_the_polymorphic_base_cannot_be_persisted(db_session):
 # --- constraints that SQLite does enforce --------------------------------
 
 def test_group_name_is_unique(db_session):
-    db_session.add(authz.Unit(name="Bn53"))
+    db_session.add(authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE))
     db_session.commit()
-    db_session.add(authz.Unit(name="Bn53"))
+    db_session.add(authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE))
     with pytest.raises(IntegrityError):
         db_session.commit()
 
@@ -139,7 +139,7 @@ def test_group_name_is_unique(db_session):
 def test_grant_triple_is_unique(db_session):
     """One row per (user, group, capability) -- re-granting must not duplicate."""
     user = models.User(personal_number="u1", full_name="One")
-    group = authz.Unit(name="Bn53")
+    group = authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add_all([user, group])
     db_session.commit()
 
@@ -151,7 +151,7 @@ def test_grant_triple_is_unique(db_session):
 
 
 def test_closure_depth_is_not_null(db_session):
-    group = authz.Unit(name="Bn53")
+    group = authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add(group)
     db_session.commit()
 
@@ -170,8 +170,8 @@ def test_closure_depth_is_not_null(db_session):
 )
 def test_composite_primary_keys_reject_duplicate_pairs(db_session, table, columns, values):
     """A DAG diamond reaches the same descendant twice; the pair must stay unique."""
-    db_session.execute(text("INSERT INTO groups (id, name, kind) VALUES (1, 'a', 'UNIT')"))
-    db_session.execute(text("INSERT INTO groups (id, name, kind) VALUES (2, 'b', 'UNIT')"))
+    db_session.execute(text("INSERT INTO groups (id, name, kind, timezone) VALUES (1, 'a', 'UNIT', 'UTC')"))
+    db_session.execute(text("INSERT INTO groups (id, name, kind, timezone) VALUES (2, 'b', 'UNIT', 'UTC')"))
     db_session.execute(text("INSERT INTO users (id, personal_number) VALUES (1, 'u1')"))
 
     stmt = text(f"INSERT INTO {table} ({columns}) VALUES ({values})")
@@ -316,8 +316,8 @@ def test_the_ondelete_rules_depend_entirely_on_the_sqlite_pragma(tmp_path):
         conn = sqlite3.connect(path)
         if pragma_on:
             conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("INSERT INTO groups (id, name, kind) VALUES (1, 'p', 'UNIT')")
-        conn.execute("INSERT INTO groups (id, name, kind) VALUES (2, 'c', 'UNIT')")
+        conn.execute("INSERT INTO groups (id, name, kind, timezone) VALUES (1, 'p', 'UNIT', 'UTC')")
+        conn.execute("INSERT INTO groups (id, name, kind, timezone) VALUES (2, 'c', 'UNIT', 'UTC')")
         conn.execute("INSERT INTO group_edges (parent_id, child_id) VALUES (1, 2)")
         conn.execute("DELETE FROM groups WHERE id = 1")
         remaining = len(list(conn.execute("SELECT 1 FROM group_edges WHERE parent_id = 1")))

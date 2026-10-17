@@ -29,16 +29,111 @@ this module, or the gap surfaces as a runtime TypeError rather than a silently
 wrong value. The production write paths are safe today only because a
 commit() (and its expire) happens to sit between every assign and every read.
 """
-from datetime import datetime, timezone
+import functools
+import logging
+from datetime import date, datetime, time, timedelta, timezone
+from importlib.resources import files
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.types import TypeDecorator
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
     """Aware UTC now. The replacement for datetime.utcnow() everywhere."""
     return datetime.now(timezone.utc)
+
+
+# --- Local calendar days (DATA-M9) -------------------------------------------
+#
+# Everything above stores and sends UTC, and still does. What follows is the
+# one place a local zone enters: the helpers that bound a group's calendar
+# day by midnight in that group's zone (authz.Group.timezone), converted to
+# UTC so it can be compared against the stored instants. DATA-M9-2's report
+# is their first reader.
+
+# The zone a group gets when nothing names one: the migration's backfill for
+# groups that predate the column, the seed's, the bootstrap's unless
+# BOOTSTRAP_ROOT_TIMEZONE says otherwise, and zone_or_default's fallback when
+# a stored name has left the list.
+DEFAULT_TIMEZONE = "Asia/Jerusalem"
+
+
+@functools.lru_cache(maxsize=1)
+def _known_zones() -> frozenset:
+    """The zone names the tzdata package lists: the same on every machine.
+
+    The package's own list, not zoneinfo.available_timezones(). That one
+    also takes in every zone file under the system's zone directories, so
+    it differs between machines: on Linux it lists whatever else sits
+    there, such as a file named `localtime`. The package is held to one
+    version by the hash lock, so the image, CI and a Windows host accept
+    exactly the same names.
+    """
+    return frozenset(files("tzdata").joinpath("zones").read_text(encoding="utf-8").split())
+
+
+def zone(name: str) -> ZoneInfo:
+    """The zone named, or ValueError. For write paths: a bad name is refused.
+
+    Checked against the list above, not by trying ZoneInfo(name) alone.
+    ZoneInfo accepts names that are not on it, and which ones depends on
+    the machine: on Windows, where a name is looked up as a file of the
+    tzdata package, 'utc' and 'Asia/Jerusalem ' (trailing space) both load.
+    A name stored because one machine accepted it could then fail on the
+    next.
+    """
+    if not isinstance(name, str) or name not in _known_zones():
+        raise ValueError(f"unknown time zone: {name!r}")
+    return ZoneInfo(name)
+
+
+def zone_or_default(name: str) -> tuple[ZoneInfo, str]:
+    """(zone, effective name) for a stored name. For read paths: never raises.
+
+    A name that was valid when it was stored could leave the list in a later
+    tzdata release. IANA seldom removes a name (a renamed zone stays as a
+    link), but a stored name can also be one written by raw SQL. Refusing
+    then would turn every read of that group's day into a 500, so this
+    falls back to DEFAULT_TIMEZONE and logs a warning naming the stored
+    value.
+    The EFFECTIVE name is returned beside the zone so a caller can send it on,
+    and a client formats times in the zone that actually bounded the day,
+    not the one that was asked for.
+    """
+    try:
+        return zone(name), name
+    except ValueError:
+        logger.warning(
+            "stored time zone %r is not a zone tzdata lists; using %s",
+            name, DEFAULT_TIMEZONE,
+        )
+        return ZoneInfo(DEFAULT_TIMEZONE), DEFAULT_TIMEZONE
+
+
+def day_bounds(tz: ZoneInfo, d: date) -> tuple[datetime, datetime]:
+    """The local calendar day `d` in `tz`, as a half-open UTC range [start, end).
+
+    Both ends are a local midnight converted to UTC: `d`'s and the next
+    day's. Not 24 elapsed hours after the start: a day that changes the
+    clock is 23 or 25 hours long, and the next day must begin exactly where
+    this one ends.
+
+    A midnight the clock skips or repeats (a zone that changes the clock at
+    00:00) is read with fold=0, so the day starts at the earliest instant
+    that is on it.
+    """
+    start = datetime.combine(d, time(0), tzinfo=tz)
+    end = datetime.combine(d + timedelta(days=1), time(0), tzinfo=tz)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def today_in(tz: ZoneInfo) -> date:
+    """The calendar date it is now in `tz`."""
+    return utcnow().astimezone(tz).date()
 
 
 def _stores_timezone(dialect) -> bool:

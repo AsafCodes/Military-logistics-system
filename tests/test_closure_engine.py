@@ -28,7 +28,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.orm import sessionmaker
 
-from backend import authz, models
+from backend import authz, clock, models
 from backend.authz import CycleError
 from backend.database import Base
 
@@ -36,7 +36,7 @@ from backend.database import Base
 
 def make_groups(db, *names):
     """Create Units by name and flush so they have ids. Deliberately no commit."""
-    groups = {name: authz.Unit(name=name) for name in names}
+    groups = {name: authz.Unit(name=name, timezone=clock.DEFAULT_TIMEZONE) for name in names}
     db.add_all(groups.values())
     db.flush()
     return groups
@@ -414,7 +414,7 @@ def test_a_reused_rowid_inherits_no_containment(db_session):
     db_session.delete(groups["SecretBn"])
     db_session.flush()
 
-    newcomer = authz.Unit(name="UnrelatedTaskForce")
+    newcomer = authz.Unit(name="UnrelatedTaskForce", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add(newcomer)
     db_session.flush()
     assert newcomer.id == doomed_id, "no rowid reuse happened; the test proves nothing"

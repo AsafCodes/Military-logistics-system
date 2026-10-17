@@ -302,7 +302,9 @@ def test_a_pre_alembic_database_is_repaired_rather_than_stamped_past(tmp_path, m
     engine = create_engine(f"sqlite:///{path}")
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
-        conn.exec_driver_sql("INSERT INTO groups (id, name, kind) VALUES (1, '188', 'unit')")
+        conn.exec_driver_sql(
+            "INSERT INTO groups (id, name, kind, timezone) VALUES (1, '188', 'unit', 'UTC')"
+        )
         conn.exec_driver_sql("INSERT INTO catalog_items (id, name) VALUES (1, 'M4')")
     add_item(engine, 1, "FORGED", FORGED)
     add_item(engine, 2, "CHECKED", FORGED)

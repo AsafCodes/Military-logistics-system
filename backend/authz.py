@@ -97,6 +97,27 @@ class Group(Base):
     name = Column(String, nullable=False, unique=True, index=True)
     kind = Column(String, nullable=False)
 
+    # DATA-M9. The IANA zone this group's calendar day is kept in: DATA-M9-2's
+    # daily movement report is to bound "a day" by midnight here
+    # (clock.day_bounds).
+    # Stored on every group, never inherited at read time: containment is a
+    # DAG, so a group with two parents in different zones would have no one
+    # zone to inherit, and a task force has its own anyway.
+    #
+    # No Python default, deliberately, and no server default after the
+    # revision that added it: every writer names a zone. Today only
+    # seed_data.py and bootstrap_admin.py create groups. When a route that
+    # creates one arrives, a new child takes its parent's zone unless the
+    # caller names another -- that rule lands with that route, not here.
+    #
+    # Validated on the way in (clock.zone, via schemas.GroupUpdate), not by
+    # the database: the zone list changes with tzdata releases, and a CHECK
+    # frozen into a revision would refuse a zone IANA adds later. For the
+    # same reason a day is to be bounded through clock.zone_or_default, which
+    # falls back rather than failing when a stored name has left the list.
+    # GET /groups sends the stored name as it is.
+    timezone = Column(String, nullable=False)
+
     # No polymorphic_identity on the base, deliberately. Giving it one lets a
     # bare Group() persist kind='GROUP' -- a value outside GroupKind, which
     # would make GroupKind(row.kind) unsafe for later code. Without one the

@@ -26,7 +26,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from backend import authz, models
+from backend import authz, clock, models
 from backend.dependencies import scope_equipment_query
 from backend.enums import Capability, GroupKind
 
@@ -303,6 +303,13 @@ def test_the_seed_builds_the_declared_org_chart(seeded, group_names):
         for edge in seeded.query(authz.GroupEdge)
     }
     assert edges == EXPECTED_EDGES
+
+
+def test_every_seeded_group_keeps_its_day_in_the_default_zone(seeded):
+    """DATA-M9-1. One zone, and one the strict check accepts."""
+    zones = {group.timezone for group in seeded.query(authz.Group)}
+    assert zones == {clock.DEFAULT_TIMEZONE}
+    clock.zone(clock.DEFAULT_TIMEZONE)
 
 
 def test_the_closure_is_exactly_the_containment_relation(seeded, group_names):

@@ -263,7 +263,7 @@ def group_graph(db_session):
     public API, it refuses an edge that would close a cycle, and it leaves the
     closure agreeing with the edges when it returns.
     """
-    groups = {name: authz.Unit(name=name) for name in FIXTURE_GROUP_TREE}
+    groups = {name: authz.Unit(name=name, timezone=clock.DEFAULT_TIMEZONE) for name in FIXTURE_GROUP_TREE}
     db_session.add_all(list(groups.values()))
     db_session.flush()  # add_edge needs the ids; this session does not autoflush
 
@@ -318,7 +318,7 @@ def create_group(db_session, name):
     would still see the isolation it was asserting, for the wrong reason.
     Pinned by test_scope_equipment_query.py's closure test.
     """
-    group = authz.Unit(name=name)
+    group = authz.Unit(name=name, timezone=clock.DEFAULT_TIMEZONE)
     db_session.add(group)
     authz.rebuild_closure(db_session)
     db_session.commit()

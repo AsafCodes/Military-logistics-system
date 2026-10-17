@@ -2,6 +2,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 
+from . import clock
 from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus
 
 # --- Analytics ---
@@ -23,9 +24,29 @@ class GroupResponse(BaseModel):
     id: int
     name: str
     kind: str
+    # DATA-M9-1. The IANA zone the group's calendar day is kept in, as stored.
+    timezone: str
 
     class Config:
         from_attributes = True
+
+class GroupUpdate(BaseModel):
+    """DATA-M9-1. The body of PATCH /groups/{group_id}."""
+    timezone: str
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_zone(cls, v: str) -> str:
+        # clock.zone, the write-path check: a name outside the zone database
+        # is refused (422) and nothing is stored.
+        clock.zone(v)
+        return v
+
+    class Config:
+        # SEC-M2's precedent: a field this body does not name is refused
+        # rather than dropped, so `name` or `kind` sent here is not silently
+        # ignored by a route that changes neither.
+        extra = "forbid"
 
 class UserBase(BaseModel):
     personal_number: str

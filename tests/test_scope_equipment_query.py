@@ -13,7 +13,7 @@ despite being the 404-not-403 guard standing in front of /verifications.
 import pytest
 from fastapi import HTTPException
 
-from backend import authz, models
+from backend import authz, clock, models
 from backend.dependencies import get_scoped_equipment_or_404, scope_equipment_query
 from backend.enums import Capability
 from tests.conftest import create_auth_header, create_group
@@ -167,7 +167,7 @@ def test_a_group_absent_from_the_closure_is_unreachable_by_any_grant(
     through add_edge.
     """
     user = mock_matrix_db["soldier_b"]
-    stranded = authz.Unit(name="920/Stranded")     # deliberately no rebuild
+    stranded = authz.Unit(name="920/Stranded", timezone=clock.DEFAULT_TIMEZONE)  # deliberately no rebuild
     db_session.add(stranded)
     db_session.flush()
     place(db_session, "STRANDED_ITEM", group=stranded)

@@ -103,8 +103,10 @@ BASELINE_STAMP = "e5f1b8d24a07"
 # CHECK and drops a column, each checked by name before it is done. It adds
 # keys rather than re-ruling existing ones, so DATA-H13-2's quiet shape is
 # not among them; a re-run is still asserted to emit no DDL.
+#
+# DATA-M9-1's group time zone adds one column, checked by name.
 IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
-    {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a"}
+    {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a", "9d4e2b7c1a60"}
 )
 
 # (table, column) for every column a revision after BASELINE_STAMP adds.
@@ -114,7 +116,7 @@ IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
 # definition -- the revision that adds them runs only after the stamp. So
 # without this a column added after the stamp would refuse every database
 # the baseline path exists for. DATA-M8-1 is the first revision after the
-# stamp to add one.
+# stamp to add one, DATA-M9-1 (groups.timezone) the second.
 #
 # Kept in step with the chain by a test rather than by hand:
 # tests/test_group_schema.py migrates one database to the stamp and another to
@@ -128,7 +130,7 @@ ADDED_AFTER_BASELINE = frozenset(
         "from_location", "to_location",
         "reason",
     )
-)
+) | {("groups", "timezone")}
 
 
 def alembic_config() -> Config:

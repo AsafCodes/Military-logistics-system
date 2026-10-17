@@ -858,3 +858,52 @@ def test_the_movement_history_revision_refuses_builds_re_runs_and_reverses_on_po
 
     _migrate(pg_schema, "head")
     assert shape()["version"] == script.get_current_head()
+
+
+def test_the_group_time_zone_revision_fills_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-M9-1 (9d4e2b7c1a60), on the dialect where it is two ALTERs.
+
+    tests/test_group_timezones.py covers it on SQLite, where dropping the
+    default rebuilds the table. Here: existing groups get the default zone,
+    the column is NOT NULL with no default left (so a group written without a
+    zone is refused), a second run emits no DDL, and the downgrade drops the
+    column.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.conftest import recorded
+    from tests.test_group_schema import _rerun_upgrade
+
+    revision, parent = "9d4e2b7c1a60", "b7e3d91c4f2a"
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+
+    def column():
+        with pg_schema.connect() as conn:
+            return {c["name"]: c for c in inspect(conn).get_columns("groups")}.get("timezone")
+
+    _migrate(pg_schema, parent)
+    with pg_schema.begin() as conn:
+        conn.execute(text("INSERT INTO groups (id, name, kind) VALUES (1, '188', 'UNIT'), (2, '188/53', 'UNIT')"))
+    assert column() is None
+
+    _migrate(pg_schema, revision)
+    with pg_schema.connect() as conn:
+        assert conn.execute(text("SELECT id, timezone FROM groups ORDER BY id")).all() == [
+            (1, "Asia/Jerusalem"), (2, "Asia/Jerusalem")
+        ]
+    upgraded = column()
+    assert upgraded["nullable"] is False
+    assert upgraded["default"] is None
+    with pytest.raises(IntegrityError), pg_schema.begin() as conn:
+        conn.execute(text("INSERT INTO groups (id, name, kind) VALUES (3, 'nowhere', 'UNIT')"))
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, revision)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision did its work again: {ddl}"
+
+    _migrate(pg_schema, parent, backwards=True)
+    assert column() is None
+
+    _migrate(pg_schema, "head")
+    assert column()["nullable"] is False

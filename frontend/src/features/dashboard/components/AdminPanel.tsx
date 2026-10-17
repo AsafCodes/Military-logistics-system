@@ -15,6 +15,7 @@ interface User {
 interface GroupSummary {
     id: number;
     name: string;
+    timezone: string;
 }
 
 export default function AdminPanel() {
@@ -263,7 +264,13 @@ export default function AdminPanel() {
                                         <option value="" disabled>-- בחר קבוצה --</option>
                                         {groups.map(g => (
                                             <option key={g.id} value={g.id} className="py-1">
-                                                {g.name}
+                                                {/* DATA-M9-1: the zone is shown, not edited here.
+                                                    Name and zone each sit in a first-strong
+                                                    isolate (U+2068 ... U+2069), the text form
+                                                    of <bdi>, which an <option> cannot hold:
+                                                    unisolated, this right-to-left select split
+                                                    188/53/A around the suffix. */}
+                                                {`\u2068${g.name}\u2069 (\u2068${g.timezone}\u2069)`}
                                             </option>
                                         ))}
                                     </select>

@@ -62,6 +62,38 @@ def list_groups(
 
     return db.query(authz.Group).order_by(authz.Group.id).all()
 
+@router.patch("/groups/{group_id}", response_model=schemas.GroupResponse)
+def update_group(
+    group_id: int,
+    body: schemas.GroupUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Set a group's time zone (DATA-M9-1). API only: no page calls it yet.
+
+    Gated like GET /groups, and for the same reason: the org chart belongs
+    to no unit, so the verb is MANAGE_PERSONNEL held globally. The gate runs
+    before the lookup, so a caller without it learns nothing about which ids
+    exist: a well-formed request from them gets 403 for every id, real or
+    not. (A malformed body or id is refused first, with 422, by FastAPI.)
+
+    Only this group changes. A zone is stored on every group and never
+    inherited (authz.Group.timezone), so its children keep theirs, and each
+    is set on its own. Nothing stores a day's bounds, so a reader of a day
+    (DATA-M9-2's report is to be the first) will bound it in the zone the
+    group has at that moment, past days included.
+    """
+    authz.require_global(db, current_user.id, Capability.MANAGE_PERSONNEL)
+
+    group = db.get(authz.Group, group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    group.timezone = body.timezone
+    db.commit()
+    db.refresh(group)
+    return group
+
 @router.get("/setup/fault_types")
 def get_fault_types(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     faults = db.query(models.FaultType).all()

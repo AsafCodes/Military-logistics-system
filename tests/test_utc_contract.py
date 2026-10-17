@@ -230,7 +230,7 @@ def _make_equipment(db_session, last_verified_at):
 
     unique = uuid.uuid4().hex
     cat = models.CatalogItem(name=f"Arithmetic Test Item {unique}")
-    group = authz.Unit(name=f"arithmetic-test-group-{unique}")
+    group = authz.Unit(name=f"arithmetic-test-group-{unique}", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add_all([cat, group])
     db_session.commit()
 

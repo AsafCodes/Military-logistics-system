@@ -18,6 +18,8 @@ export interface Group {
     id: number;
     name: string;
     kind: string;
+    // DATA-M9-1. The IANA zone the group's calendar day is kept in.
+    timezone: string;
 }
 
 // LoginCredentials and TokenResponse lived here and are gone with SEC-H9.
