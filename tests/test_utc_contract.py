@@ -293,23 +293,6 @@ def test_a_never_verified_item_is_severe(db_session):
     assert _make_equipment(db_session, None).compliance_level == "SEVERE"
 
 
-def test_iso_z_handles_none_naive_and_non_utc_input():
-    """clock.iso_z() directly, at its three input shapes.
-
-    The endpoint-level contract test below only ever feeds it values that
-    came back through UtcDateTime (already aware UTC), so it cannot catch a
-    regression in iso_z()'s own None/naive/offset handling -- this does.
-    """
-    assert clock.iso_z(None) is None
-
-    naive = datetime(2026, 3, 1, 8, 0, 0)
-    assert clock.iso_z(naive) == "2026-03-01T08:00:00Z"
-
-    plus_five = timezone(timedelta(hours=5))
-    offset = datetime(2026, 3, 1, 13, 0, 0, tzinfo=plus_five)  # == 08:00 UTC
-    assert clock.iso_z(offset) == "2026-03-01T08:00:00Z"
-
-
 # --- 5. The three non-plain-substitution sites -------------------------------
 
 
@@ -485,9 +468,11 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         _parse_and_check_aware_utc(value)
 
     # Every collected string must use the same ZONE DESIGNATOR ('Z' vs
-    # '+00:00'), proving the un-modelled daily movement report (clock.iso_z)
-    # and the Pydantic response_model routes, /reports/query among them since
-    # DATA-M7, agree on one wire format rather than shipping two. Extracted
+    # '+00:00'), proving the endpoints agree on one wire format rather than
+    # shipping two. Both reports used to format their timestamps with a
+    # helper of their own (clock.iso_z); each has had a response_model since,
+    # /reports/query from DATA-M7 and /reports/daily_movement from DATA-M8-2,
+    # and the helper is gone. Extracted
     # with a regex rather than a fixed slice, since fractional-second digits
     # legitimately differ per timestamp.
     designators = {

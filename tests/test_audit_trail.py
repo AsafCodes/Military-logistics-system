@@ -522,11 +522,12 @@ def test_assigning_ownership_writes_a_log_that_reaches_the_movement_report(
 
     assert len(rows) == 1, f"expected exactly one movement row, got {rows}"
     assert rows[0]["event_type"] == "ASSIGN"
-    assert rows[0]["location"] == f"User:{target.full_name}", (
+    assert rows[0]["to_owner_name"] == target.full_name, (
         "the new owner must be recoverable from the row; involved_user_id "
-        "records the ACTOR, and until DATA-M8-2 this column is the only one "
-        "the movement report sends"
+        "records the ACTOR, which the report sends as reporter_name"
     )
+    assert rows[0]["reporter_name"] == mock_matrix_db["company_cmdr_a"].full_name
+    assert rows[0]["location"] is None
     assert rows[0]["timestamp"] is not None
 
 

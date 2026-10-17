@@ -107,7 +107,7 @@ def test_opened_at_is_the_stored_value_not_a_recomputed_now(
     # bare call passed on a 3.11 dev machine and failed CI on every run. Same
     # substitution as tests/test_utc_contract.py's _parse_and_check_aware_utc.
     #
-    # Fixed HERE rather than by making clock.iso_z emit "+00:00": the "Z" is
+    # Fixed HERE rather than by making the backend emit "+00:00": the "Z" is
     # the contract, and this test is about where opened_at comes from, not
     # about which designator it carries.
     emitted = datetime.fromisoformat(ticket["opened_at"].replace("Z", "+00:00"))

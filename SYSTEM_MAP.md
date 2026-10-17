@@ -71,8 +71,9 @@ Marker_System/
 │       │   │   │   ├── DashboardPage.tsx    # Welcome + stats + equipment preview
 │       │   │   │   ├── StatsGrid.tsx        # 4 stat cards with animated counters (readiness inside a ring)
 │       │   │   │   ├── EquipmentTable.tsx   # Top-5 equipment preview table
-│       │   │   │   ├── DailyActivityTable.tsx # Recent event feed
+│       │   │   │   ├── DailyActivityTable.tsx # Recent event feed: reporter, from ← to, reason
 │       │   │   │   └── AdminPanel.tsx       # User search, group assignment
+│       │   │   ├── describeMove.ts          # What a movement row moved, for DailyActivityTable
 │       │   │   └── hooks/                   # Dashboard-specific hooks
 │       │   │       ├── useDashboardData.ts  # Readiness + accessible-equipment fetch
 │       │   │       └── useAnimatedCounter.ts # StatsGrid's eased counter, cancels its frame
@@ -263,7 +264,7 @@ Marker_System/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/reports/query` | Inventory report (matrix-filtered + user filters) |
-| `GET` | `/reports/daily_movement` | Last 24h transaction log |
+| `GET` | `/reports/daily_movement` | Last 24h transaction log: reporter, from/to holder, owner, unit and place, reason (`MovementReportItem`) |
 
 ### Analytics (`routers/analytics.py`)
 | Method | Path | Description |
@@ -339,7 +340,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | `catalog_items` | Equipment type definitions (Radio 710, Ceramic Vest, etc.) |
 | `locations` | Physical storage (Armory, Container, etc.) |
 | `fault_types` | Known fault categories + pending approval flag |
-| `transaction_logs` | Append-only log of every movement/handover/verification, and since DATA-H4-3 of every equipment mutation: creation, reclassification and condition reports too. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction. `involved_user_id` is the actor. Since DATA-M8-1 a custody event (`HANDOVER`, `HANDOVER_LOC`, `ASSIGN`) also records the custody it left and the one it went to (`from_`/`to_` holder, owner, group and location), and a transfer, an assignment or a reclassification can carry an optional `reason`; other events leave the custody columns NULL. `event_type` is NOT NULL and held to `EventType` by a CHECK. Rows from before DATA-M8-1 have only `location` (`User:<name>` or a place), which is still written until DATA-M8-2 moves the movement report onto the new columns |
+| `transaction_logs` | Append-only log of every movement/handover/verification, and since DATA-H4-3 of every equipment mutation: creation, reclassification and condition reports too. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction. `involved_user_id` is the actor. Since DATA-M8-1 a custody event (`HANDOVER`, `HANDOVER_LOC`, `ASSIGN`) also records the custody it left and the one it went to (`from_`/`to_` holder, owner, group and location), and a transfer, an assignment or a reclassification can carry an optional `reason`; other events leave the custody columns NULL. `event_type` is NOT NULL and held to `EventType` by a CHECK. Rows from before DATA-M8-1 have only `location` (`User:<name>` or a place); nothing writes it since DATA-M8-2, when the movement report moved onto the new columns |
 | `maintenance_logs` | Fault tickets (Open → In Progress → Closed) |
 | `verifications` | Detailed condition reports |
 | `equipment_status_history` | Audit: old_status → new_status with reason + verification link. **Written only by `audit_trail.set_status`**, which owns the `equipment.status` assignment too — the record and the change are one operation. Records **transitions**, so a no-op write adds nothing; `transaction_logs` is where the act still shows up |
@@ -428,7 +429,7 @@ Every image the repository pulls is named by tag and digest (`name:tag@sha256:�
 
 16. **`FaultTypeQueuePage.tsx` (`/catalog`) is the only frontend caller of `GET /setup/fault_types/pending` and `PUT /setup/fault_types/{id}/approve`** (API-H6). `DashboardPage.tsx` does not call either route, whatever older notes say. `DELETE /setup/fault_types/{id}` still has no frontend caller.
 
-17. **The `reports.py` endpoint declares `response_model=List[InventoryReportItem]`** (since DATA-M7), mirrored by the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). `reporting_status` is a `ComplianceLevel` (GOOD / WARNING / SEVERE), and the report page shows Hebrew labels for it. Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
+17. **Both `reports.py` endpoints declare a response model.** `/reports/daily_movement` has `List[MovementReportItem]` (since DATA-M8-2), mirrored by the shared frontend `MovementReportItem` in `types/index.ts` and held to it by `tests/test_movement_report.py`; its names come from eager-loaded `TransactionLog` relationships (`actor`, from/to holder, owner and group), so its query count does not grow with its length. `/reports/query` has `List[InventoryReportItem]` (since DATA-M7), mirrored by the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). `reporting_status` is a `ComplianceLevel` (GOOD / WARNING / SEVERE), and the report page shows Hebrew labels for it. Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 

@@ -142,11 +142,9 @@ def record_event(
     involved_user_id is the ACTOR, not the recipient, which is why the
     recipient needs columns of its own.
 
-    `location` still gets the after state as one string for a custody event,
-    "User:<name>" for a person and the place otherwise. The movement report
-    reads nothing else until DATA-M8-2 moves it onto the to_ columns, and a
-    row written now without it would show no destination there. The string
-    is spelled here only, so the format cannot split between callers.
+    `location` is not written (DATA-M8-2). Rows written before DATA-M8-2 carry
+    the after state there, as "User:<name>" or a place; the from_ and to_
+    columns replace it.
 
     `reason` is stored as given; schemas.normalize_reason has already trimmed
     it and turned a blank into None.
@@ -205,7 +203,6 @@ def record_event(
             to_group_id=after.group_id,
             from_location=before.location,
             to_location=after.location,
-            location=_legacy_location(db, after),
         )
 
     log = models.TransactionLog(
@@ -218,28 +215,6 @@ def record_event(
         **custody,
     )
     db.add(log)
-
-
-def _legacy_location(db: Session, after: Custody) -> str | None:
-    """The after state as the `location` column has always spelled it.
-
-    A person is "User:<name>", the format transfer_equipment used before
-    DATA-H4 moved it here; otherwise the place. Read by db.get, not by the
-    item's `holder` relationship: once loaded, that keeps pointing at the
-    previous holder after holder_user_id changes, a flush included, until
-    the item is expired. Both routes that move an item to a person have
-    just loaded the recipient, so the identity map answers and no query
-    runs. A caller that had not would get a query here, and with it an
-    autoflush, which record_event otherwise never does.
-    """
-    if after.holder_user_id is None:
-        return after.location
-    holder = db.get(models.User, after.holder_user_id)
-    # full_name is nullable (models.py), so the naive f-string would write
-    # "User:None". Equipment.current_state_description guards the same
-    # nullability with "Unknown"; matching it keeps one word for an unnamed
-    # person.
-    return f"User:{(holder.full_name if holder else None) or 'Unknown'}"
 
 
 def set_status(

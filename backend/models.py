@@ -357,12 +357,24 @@ class TransactionLog(Base):
     reason = Column(String, nullable=True)
 
     # The after state as one string: a place, or "User:<name>" for a person.
-    # Every row before DATA-M8-1 has only this. record_event still writes it
-    # for a custody event, derived from the to_ columns, because the movement
-    # report reads nothing else until DATA-M8-2 moves it onto them.
+    # Legacy only. Every row before DATA-M8-1 has only this; nothing writes it
+    # since DATA-M8-2, when the movement report moved onto the to_ columns. It
+    # is kept, and still sent by the report, for the rows that have nothing
+    # else.
     location = Column(String, nullable=True)
 
     equipment = relationship("Equipment")
+
+    # DATA-M8-2. Read by the movement report for the names it sends. viewonly,
+    # so the ids above stay the one way in: audit_trail.record_event writes
+    # those, and a relationship assignment cannot write past it.
+    actor = relationship("User", foreign_keys=[involved_user_id], viewonly=True)
+    from_holder = relationship("User", foreign_keys=[from_holder_user_id], viewonly=True)
+    to_holder = relationship("User", foreign_keys=[to_holder_user_id], viewonly=True)
+    from_owner = relationship("User", foreign_keys=[from_owner_user_id], viewonly=True)
+    to_owner = relationship("User", foreign_keys=[to_owner_user_id], viewonly=True)
+    from_group = relationship("Group", foreign_keys=[from_group_id], viewonly=True)
+    to_group = relationship("Group", foreign_keys=[to_group_id], viewonly=True)
 
 # --- Maintenance ---
 class FaultType(Base):

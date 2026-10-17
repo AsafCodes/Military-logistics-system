@@ -396,7 +396,7 @@ def test_orm_reads_back_utc_even_when_the_session_is_not(pg_schema):
     psycopg2 returns a TIMESTAMPTZ in the session's timezone, so under
     WRONG_TIMEZONE the raw driver value is aware +05:30. Passing that through
     unchanged -- which the H1-1 implementation did -- would serialize as
-    '+05:30' through Pydantic while clock.iso_z emits 'Z', splitting the single
+    '+05:30' through Pydantic where a UTC value emits 'Z', splitting the single
     wire format H1-1 exists to establish. Nothing on SQLite can observe this:
     its DATETIME never returns an aware value at all.
     """

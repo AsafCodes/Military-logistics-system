@@ -105,27 +105,11 @@ class UtcDateTime(TypeDecorator):
         # astimezone, not a pass-through, for the aware arm. psycopg2 returns a
         # TIMESTAMPTZ in the SESSION's timezone, which is not necessarily UTC --
         # and an aware non-UTC value serializes as '+03:00' through Pydantic
-        # while iso_z() emits 'Z', which would split the one wire format H1-1
-        # unified. Normalising here fixes it at the single point every read
-        # passes through.
+        # where an aware UTC one serializes as 'Z', which would split the one
+        # wire format H1-1 unified. Normalising here fixes it at the single
+        # point every read passes through.
         if value is None:
             return None
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
-
-
-def iso_z(value: Optional[datetime]) -> Optional[str]:
-    """Serialize an aware (or naive-assumed-UTC) datetime as '...Z'.
-
-    For the hand-built dict of routers/reports.py's daily movement report
-    only, which has no response_model and so bypasses Pydantic's own '...Z'
-    serialization -- this makes its output match every other endpoint's wire
-    format instead of emitting '+00:00' via jsonable_encoder. The inventory
-    report used it too until DATA-M7 gave that route a response_model.
-    """
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

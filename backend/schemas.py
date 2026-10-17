@@ -2,7 +2,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 
-from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, Sensitivity, TicketStatus
+from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -336,15 +336,32 @@ class TicketResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class DailyActivityItem(BaseModel):
+class MovementReportItem(BaseModel):
+    # One row of /reports/daily_movement, its response_model since DATA-M8-2.
+    # Mirrored by MovementReportItem in frontend/src/types/index.ts
+    # (tests/test_movement_report.py). Every key is always sent.
+    #
+    # timestamp is required: the route filters on it, and a NULL never
+    # passes the cutoff. The names are null where the column is NULL --
+    # every custody column on a non-custody event and on a row from before
+    # DATA-M8-1 -- and also where the person's full_name is NULL, which is
+    # sent as it is rather than coalesced (DATA-L11).
+    id: int
     timestamp: datetime
-    event_type: str
-    description: str
-    reporter_name: str
-    serial_number: str
-
-    class Config:
-        from_attributes = True
+    event_type: EventType
+    serial_number: Optional[str]
+    reporter_name: Optional[str]
+    from_holder_name: Optional[str]
+    to_holder_name: Optional[str]
+    from_owner_name: Optional[str]
+    to_owner_name: Optional[str]
+    from_group_name: Optional[str]
+    to_group_name: Optional[str]
+    from_location: Optional[str]
+    to_location: Optional[str]
+    reason: Optional[str]
+    # The after state as one string, on rows written before DATA-M8-2 only.
+    location: Optional[str]
 
 class InventoryReportItem(BaseModel):
     # One row of /reports/query, its response_model since DATA-M7. Every key

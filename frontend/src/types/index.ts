@@ -66,11 +66,15 @@ export interface TransferRequest {
     equipment_id: number;
     to_holder_id?: number;
     to_location?: string;
+    // DATA-M8-1. Optional free text; the backend trims it, turns a blank
+    // into null and refuses more than 500 characters.
+    reason?: string;
 }
 
 export interface AssignOwnerRequest {
     equipment_id: number;
     owner_id: number;
+    reason?: string;
 }
 
 // ============ REPORTS ============
@@ -97,6 +101,34 @@ export interface InventoryReportItem {
     reporting_status: ComplianceLevel;
     last_reporter: string;
     last_verified_at: string | null; // ISO-8601, Z-suffixed
+}
+
+// One row of GET /reports/daily_movement, key for key (DATA-M8-2), held to
+// the route's response model (schemas.MovementReportItem) by
+// tests/test_movement_report.py, which reads this block. Every key is
+// always sent.
+//
+// The from_/to_ names are the custody an event left and the one it went
+// to. They are null on every event that moves nothing, on a row from before
+// DATA-M8-1, and for a person whose full_name is NULL. `location` is the
+// other way round: only a row written before DATA-M8-2 has it.
+export interface MovementReportItem {
+    id: number;
+    timestamp: string; // ISO-8601, Z-suffixed
+    // An EventType value; DailyActivityTable's EVENT_META labels each one.
+    event_type: string;
+    serial_number: string | null;
+    reporter_name: string | null;
+    from_holder_name: string | null;
+    to_holder_name: string | null;
+    from_owner_name: string | null;
+    to_owner_name: string | null;
+    from_group_name: string | null;
+    to_group_name: string | null;
+    from_location: string | null;
+    to_location: string | null;
+    reason: string | null;
+    location: string | null;
 }
 
 // ============ MAINTENANCE ============

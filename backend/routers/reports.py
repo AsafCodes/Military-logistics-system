@@ -108,7 +108,11 @@ def get_inventory_report(
     
     return result
 
-@router.get("/reports/daily_movement")
+def _name(user):
+    return user.full_name if user else None
+
+
+@router.get("/reports/daily_movement", response_model=List[schemas.MovementReportItem])
 def get_daily_movement_report(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
@@ -123,19 +127,45 @@ def get_daily_movement_report(
     # inner on purpose here, unlike DATA-M10's complaint about optional
     # filters -- a log whose equipment row is gone describes nothing anyone
     # can be authorised to see.
+    log = models.TransactionLog
     logs = scope_equipment_derived_query(
-        db.query(models.TransactionLog)
-        .options(joinedload(models.TransactionLog.equipment))
-        .filter(models.TransactionLog.timestamp >= cutoff),
-        models.TransactionLog,
+        db.query(log)
+        .options(
+            joinedload(log.equipment),
+            # DATA-M8-2. Every name below comes from one of these, and a lazy
+            # load there is a query per row per name.
+            joinedload(log.actor),
+            joinedload(log.from_holder),
+            joinedload(log.to_holder),
+            joinedload(log.from_owner),
+            joinedload(log.to_owner),
+            joinedload(log.from_group),
+            joinedload(log.to_group),
+        )
+        .filter(log.timestamp >= cutoff),
+        log,
         current_user,
-    ).order_by(models.TransactionLog.timestamp.desc()).all()
-    
+    ).order_by(log.timestamp.desc()).all()
+
+    # Each row is schemas.MovementReportItem, which the response_model holds
+    # it to, and MovementReportItem in frontend/src/types/index.ts, key for
+    # key; tests/test_movement_report.py holds the frontend type to it.
     return [{
-        "id": log.id,
-        "timestamp": clock.iso_z(log.timestamp),
-        "event_type": log.event_type,
-        "serial_number": log.equipment.serial_number if log.equipment else None,
-        "reporter_name": None,
-        "location": log.location
-    } for log in logs]
+        "id": row.id,
+        # Aware UTC from clock.UtcDateTime; the response model writes the 'Z'.
+        "timestamp": row.timestamp,
+        "event_type": row.event_type,
+        "serial_number": row.equipment.serial_number if row.equipment else None,
+        # The actor. This was a constant None until DATA-M8-2.
+        "reporter_name": _name(row.actor),
+        "from_holder_name": _name(row.from_holder),
+        "to_holder_name": _name(row.to_holder),
+        "from_owner_name": _name(row.from_owner),
+        "to_owner_name": _name(row.to_owner),
+        "from_group_name": row.from_group.name if row.from_group else None,
+        "to_group_name": row.to_group.name if row.to_group else None,
+        "from_location": row.from_location,
+        "to_location": row.to_location,
+        "reason": row.reason,
+        "location": row.location,
+    } for row in logs]

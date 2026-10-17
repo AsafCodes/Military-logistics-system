@@ -1,19 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Clock, ArrowUpDown, Wrench, UserCheck, ShieldCheck, AlertTriangle, ShieldAlert, PackagePlus, ClipboardCheck } from 'lucide-react';
 import api from '@/lib/axios';
+import type { MovementReportItem } from '@/types';
+import { describeMove, NONE } from '../describeMove';
 
 // ============================================================
-// Types — matches the actual API response from /reports/daily_movement
+// Types
 // ============================================================
 
-interface DailyActivityItem {
-    id: number;
-    timestamp: string | null;
-    event_type: string;
-    serial_number: string | null;
-    reporter_name: string | null;
-    location: string | null;
-}
+// The row is MovementReportItem in @/types, held to the route by
+// tests/test_movement_report.py. This file declared a private copy of it
+// until DATA-M8-2, with a reporter_name it never rendered.
 
 interface DailyActivityTableProps {
     /** Max items to show. undefined = show all */
@@ -93,9 +90,21 @@ function getEventLabel(eventType: string) {
 
 // The API returns a flat array, not { items: [...] }; the second shape is
 // still accepted.
-function activityList(data: unknown): DailyActivityItem[] {
+function activityList(data: unknown): MovementReportItem[] {
     if (Array.isArray(data)) return data;
-    return (data as { items?: DailyActivityItem[] } | null)?.items || [];
+    return (data as { items?: MovementReportItem[] } | null)?.items || [];
+}
+
+// Each end in its own <bdi>. The table is RTL, and two Latin names around a
+// bare arrow would form one left-to-right run, putting `from` on the left
+// with the arrow pointing at it.
+//
+// The arrow is held to the destination. At a common laptop width this cell
+// is about 100px, and a free break after the arrow left it dangling at the
+// end of the `from` line, pointing at nothing; held, the cell breaks into
+// `from` over `← to`.
+function Ends({ from, to }: { from: string; to: string }) {
+    return <><bdi>{from}</bdi> <span className="whitespace-nowrap">← <bdi>{to}</bdi></span></>;
 }
 
 // ============================================================
@@ -103,7 +112,7 @@ function activityList(data: unknown): DailyActivityItem[] {
 // ============================================================
 
 export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTableProps) {
-    const [activities, setActivities] = useState<DailyActivityItem[]>([]);
+    const [activities, setActivities] = useState<MovementReportItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -159,11 +168,14 @@ export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTa
                             <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">שעה</th>
                             <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">צד״ק</th>
                             <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">אירוע</th>
-                            <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">מיקום</th>
+                            <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">מדווח</th>
+                            <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">מ ← אל</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border/30">
-                        {displayItems.map((item, index) => (
+                        {displayItems.map((item, index) => {
+                            const move = describeMove(item);
+                            return (
                             <tr
                                 key={item.id || index}
                                 className="hover:bg-accent/40 transition-colors"
@@ -174,7 +186,9 @@ export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTa
                                         : '—'
                                     }
                                 </td>
-                                <td className="px-4 py-3 font-mono text-sm font-bold text-primary">
+                                {/* nowrap: the fifth column (DATA-M8-2) narrowed this one until a
+                                    serial broke at its hyphen, CO- over A-3. */}
+                                <td className="px-4 py-3 font-mono text-sm font-bold text-primary whitespace-nowrap">
                                     {item.serial_number || '—'}
                                 </td>
                                 <td className="px-4 py-3">
@@ -183,11 +197,27 @@ export default function DailyActivityTable({ limit, onViewAll }: DailyActivityTa
                                         {getEventLabel(item.event_type)}
                                     </span>
                                 </td>
-                                <td className="px-4 py-3 text-xs text-muted-foreground">
-                                    {item.location || '—'}
+                                <td className="px-4 py-3 text-xs text-foreground" data-testid="reporter">
+                                    {item.reporter_name ?? NONE}
+                                </td>
+                                <td className="px-4 py-3 text-xs" data-testid="move">
+                                    <div className="text-foreground">
+                                        {move ? <Ends from={move.from} to={move.to} /> : (item.location || NONE)}
+                                    </div>
+                                    {move?.unit && (
+                                        <div className="text-muted-foreground" data-testid="unit">
+                                            <Ends from={move.unit.from} to={move.unit.to} />
+                                        </div>
+                                    )}
+                                    {item.reason && (
+                                        <div className="text-muted-foreground" data-testid="reason">
+                                            סיבה: {item.reason}
+                                        </div>
+                                    )}
                                 </td>
                             </tr>
-                        ))}
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>

@@ -95,10 +95,10 @@ def test_a_handover_to_a_person_records_both_ends(client, db_session, mock_matri
         "from_location": None,
         "to_location": None,
     }
-    # The actor is not the recipient, and the legacy column still names the
-    # recipient for the movement report until DATA-M8-2.
+    # The actor is not the recipient. The legacy column is not written since
+    # DATA-M8-2; the to_ columns above name the recipient.
     assert log.involved_user_id == mock_matrix_db["bat_cmdr"].id
-    assert log.location == f"User:{soldier_b.full_name}"
+    assert log.location is None
 
 
 def test_a_handover_to_a_location_and_back_records_the_place_at_each_end(
@@ -125,7 +125,7 @@ def test_a_handover_to_a_location_and_back_records_the_place_at_each_end(
         "from_location": None,
         "to_location": "Armory",
     }
-    assert out.location == "Armory"
+    assert out.location is None
 
     res = _transfer(client, "u_cmdr_a", equipment_id=item.id, to_holder_id=soldier_a.id)
     assert res.status_code == 200, res.text
@@ -400,28 +400,35 @@ def test_the_before_state_is_the_one_passed_in_and_the_after_state_is_the_item(
     log = _last_log(db_session, item, EventType.HANDOVER_LOC)
     assert (log.from_holder_user_id, log.to_holder_user_id) == (mock_matrix_db["soldier_a"].id, None)
     assert (log.from_location, log.to_location) == (None, "Vault")
-    assert log.location == "Vault"
 
 
-def test_an_unnamed_recipient_is_spelled_unknown(db_session, mock_matrix_db):
-    """full_name is nullable; the legacy string must not read "User:None"."""
+@pytest.mark.parametrize("event_type", sorted(audit_trail.CUSTODY_EVENTS))
+def test_no_custody_event_writes_the_legacy_location(db_session, mock_matrix_db, event_type):
+    """DATA-M8-2. `location` is for rows written before DATA-M8-2; a new row
+    carries its destination in the to_ columns and nowhere else, so the
+    movement report cannot read two answers off one row."""
     item = _item(db_session, "SA100")
-    recipient = mock_matrix_db["soldier_b"]
-    recipient.full_name = None
-    db_session.commit()
-
     before = audit_trail.custody_of(item)
-    item.holder_user_id = recipient.id
+    if event_type is EventType.HANDOVER_LOC:
+        item.holder_user_id = None
+        item.custom_location = "Vault"
+    else:
+        item.holder_user_id = mock_matrix_db["soldier_b"].id
+    if event_type is EventType.ASSIGN:
+        item.owner_user_id = mock_matrix_db["soldier_b"].id
+
     audit_trail.record_event(
         db_session,
         equipment=item,
         actor=mock_matrix_db["master"],
-        event_type=EventType.HANDOVER,
+        event_type=event_type,
         before=before,
     )
     db_session.commit()
 
-    assert _last_log(db_session, item, EventType.HANDOVER).location == "User:Unknown"
+    log = _last_log(db_session, item, event_type)
+    assert (log.to_holder_user_id, log.to_location) != (None, None)
+    assert log.location is None
 
 
 # --- 3. the database ---------------------------------------------------------
