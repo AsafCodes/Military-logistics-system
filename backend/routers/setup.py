@@ -80,8 +80,8 @@ def update_group(
     Only this group changes. A zone is stored on every group and never
     inherited (authz.Group.timezone), so its children keep theirs, and each
     is set on its own. Nothing stores a day's bounds, so a reader of a day
-    (DATA-M9-2's report is to be the first) will bound it in the zone the
-    group has at that moment, past days included.
+    (DATA-M9-2's daily movement report is the first) bounds it in the zone
+    the group has at that moment, past days included.
     """
     authz.require_global(db, current_user.id, Capability.MANAGE_PERSONNEL)
 

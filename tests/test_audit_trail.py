@@ -517,7 +517,7 @@ def test_assigning_ownership_writes_a_log_that_reaches_the_movement_report(
 
     report = client.get(
         "/reports/daily_movement", headers=create_auth_header("u_cmdr_a")
-    ).json()
+    ).json()["items"]
     rows = [r for r in report if r["serial_number"] == "SA100"]
 
     assert len(rows) == 1, f"expected exactly one movement row, got {rows}"
@@ -1512,9 +1512,10 @@ def create_item(client, who, serial, **extra):
 
 
 def movement_report(client, who):
+    """The rows of the caller's one group's day (DATA-M9-2)."""
     res = client.get("/reports/daily_movement", headers=create_auth_header(who))
     assert res.status_code == 200, res.text
-    return res.json()
+    return res.json()["items"]
 
 
 def test_classifying_an_item_records_who_decided_it(
@@ -1599,7 +1600,8 @@ def test_the_reclassify_row_is_hidden_by_the_act_it_records(
 ):
     """Sensitivity's third named limit, executable.
 
-    scope_equipment_derived_query filters on the item's CURRENT sensitivity, so
+    The movement report filters on the item's CURRENT sensitivity (through
+    scope_equipment_derived_query until DATA-M9-2, per row since), so
     classifying an item retroactively removes every transaction_logs row about
     it -- including the row that records the classification. The caller who
     would most want to know why the item vanished is exactly the caller who
@@ -1631,7 +1633,7 @@ def test_the_reclassify_row_is_hidden_by_the_act_it_records(
     )
     assert reclassify_rows("u_cmdr_a") == [], (
         "an uncleared caller can see the RECLASSIFY row for a classified item; "
-        "scope_equipment_derived_query is not inheriting the clause"
+        "the movement report is not applying the classification clause"
     )
 
 
@@ -1643,8 +1645,8 @@ def test_a_created_item_is_born_with_a_log_that_reaches_the_report(
     ASSERTED THROUGH THE REPORT, and that is the whole design of this test.
     record_event reads equipment.id, which is None until the INSERT runs, so
     dropping create_equipment's db.flush() writes a TransactionLog with a NULL
-    equipment_id -- which scope_equipment_derived_query's inner join discards
-    silently. Nothing raises. The row exists. A count of transaction_logs still
+    equipment_id -- which the movement report's inner join on the item
+    discards silently. Nothing raises. The row exists. A count of transaction_logs still
     goes up by one. Only asking the endpoint tells the two apart.
     """
     res = create_item(client, "u_master", "NEW-001")
@@ -1697,8 +1699,9 @@ def test_record_event_refuses_an_equipment_that_has_no_id_yet(
     """The one failure in this module that no assertion could otherwise see.
 
     A pending equipment has id None, so the row would carry a NULL
-    equipment_id -- and scope_equipment_derived_query joins INNER, so it is
-    dropped from the movement report and every listing built on it. Nothing
+    equipment_id -- and the movement report joins the item INNER, as every
+    listing built on scope_equipment_derived_query does, so it is dropped from
+    all of them. Nothing
     raises, the row exists, and a count of transaction_logs still goes up by
     one. Written, committed, visible to nobody.
 

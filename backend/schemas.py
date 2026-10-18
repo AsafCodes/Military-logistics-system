@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, Optional, List
+import datetime as dt
 from datetime import datetime
 
 from . import clock
@@ -9,8 +10,9 @@ from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Se
 #
 # The range of a Postgres `integer`, which is what an `Integer` column is
 # there: no stored id can lie outside it. Every integer a request carries --
-# a path parameter or a body field -- is a DbInt, so a value outside it is
-# refused with 422, as a non-number is, before any query runs.
+# a path parameter, a query parameter or a body field -- is a DbInt, so a
+# value outside it is refused with 422, as a non-number is, before any query
+# runs.
 #
 # Unbounded, any value reached the database. Postgres compared it without
 # error and answered 404 at every size; SQLite answered 404 too until the
@@ -378,8 +380,8 @@ class MovementReportItem(BaseModel):
     # Mirrored by MovementReportItem in frontend/src/types/index.ts
     # (tests/test_movement_report.py). Every key is always sent.
     #
-    # timestamp is required: the route filters on it, and a NULL never
-    # passes the cutoff. The names are null where the column is NULL --
+    # timestamp is required: the route filters on it, and a NULL is in no
+    # day. The names are null where the column is NULL --
     # every custody column on a non-custody event and on a row from before
     # DATA-M8-1 -- and also where the person's full_name is NULL, which is
     # sent as it is rather than coalesced (DATA-L11).
@@ -399,6 +401,23 @@ class MovementReportItem(BaseModel):
     reason: Optional[str]
     # The after state as one string, on rows written before DATA-M8-2 only.
     location: Optional[str]
+
+class MovementReport(BaseModel):
+    # /reports/daily_movement's response_model since DATA-M9-2: one group's
+    # calendar day. Mirrored by MovementReport in frontend/src/types/index.ts
+    # (tests/test_movement_report.py).
+    #
+    # `timezone` is the zone that bounded the day, the one a client formats
+    # times in: the group's own, or clock.DEFAULT_TIMEZONE when the stored
+    # name is not one tzdata lists (clock.zone_or_default). `start` and `end`
+    # are that day's half-open range in UTC.
+    group_id: int
+    group_name: str
+    timezone: str
+    date: dt.date
+    start: datetime
+    end: datetime
+    items: List[MovementReportItem]
 
 class InventoryReportItem(BaseModel):
     # One row of /reports/query, its response_model since DATA-M7. Every key

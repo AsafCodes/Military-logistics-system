@@ -7,7 +7,8 @@ a nullable string with no constraint. This revision adds:
 
 - eight custody columns, from_ and to_ for each of holder, owner (user ids),
   group (a group id) and location (text), with RESTRICT foreign keys and an
-  index on each id column;
+  index on each id column (from_group_id's was replaced by a composite in
+  3c6a0f8e2d71, DATA-M9-2; see SUPERSEDED below);
 - a free-text `reason`;
 - a CHECK holding event_type to the EventType vocabulary, and NOT NULL.
 
@@ -93,6 +94,12 @@ DEAD_REFERRED = 'locations'
 NAMING_CONVENTION = {'fk': 'fk_%(table_name)s_%(column_0_name)s'}
 
 
+# index -> the index of a later revision that replaced it. See upgrade().
+SUPERSEDED = {
+    'ix_transaction_logs_from_group_id': 'ix_transaction_logs_from_group_id_timestamp',
+}
+
+
 def _fk_name(column):
     return f'fk_{TABLE}_{column}'
 
@@ -160,7 +167,16 @@ def upgrade():
         for name in TEXT_COLUMNS if name not in columns
     ]
     add_fks = [(name, referred) for name, referred in ID_COLUMNS if _fk_name(name) not in state['fks']]
-    add_indexes = [name for name, _referred in ID_COLUMNS if _ix_name(name) not in state['indexes']]
+    # Less an index a LATER revision replaced, once its replacement exists:
+    # 3c6a0f8e2d71 drops ix_transaction_logs_from_group_id for a composite
+    # that leads with the same column. The composite exists only on a
+    # database built after that revision -- the create_all databases this
+    # re-runs against -- and there the index stays gone.
+    add_indexes = [
+        name for name, _referred in ID_COLUMNS
+        if _ix_name(name) not in state['indexes']
+        and SUPERSEDED.get(_ix_name(name)) not in state['indexes']
+    ]
     add_check = CHECK_NAME not in state['checks']
     set_not_null = columns['event_type']['nullable']
     drop_dead = DEAD_COLUMN in columns

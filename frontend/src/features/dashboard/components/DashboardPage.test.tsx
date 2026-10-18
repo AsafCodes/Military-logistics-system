@@ -12,13 +12,20 @@ import DashboardPage from './DashboardPage';
 import api from '@/lib/axios';
 import { holdGets } from '@/test/httpStubs';
 import { TEST_USER } from '@/test/setup';
+import type { MovementReport } from '@/types';
+
+// A day with nothing in it, as the movement report answers one (DATA-M9-2).
+const EMPTY_DAY = {
+    group_id: 1, group_name: '188', timezone: 'Asia/Jerusalem', date: '2026-06-15',
+    start: '2026-06-14T21:00:00Z', end: '2026-06-15T21:00:00Z', items: [],
+} satisfies MovementReport;
 
 // The page's data reads and its two child components' reads, all answered.
 const DATA_LOADS = {
     '/analytics/unit_readiness': { readiness_percentage: 80, total_items: 5, functional_items: 4 },
     '/equipment/accessible': [],
     '/tickets/?status_filter=Open': [],
-    '/reports/daily_movement': [],
+    '/reports/daily_movement': EMPTY_DAY,
 };
 
 const INIT_ERROR = 'טעינת לוח הבקרה נכשלה. נסה לרענן.';
@@ -63,7 +70,7 @@ describe('DashboardPage: the spinner covers the whole first load (FE-H6-2)', () 
         const { held } = holdGets(api, {
             '/users/me': TEST_USER,
             '/tickets/?status_filter=Open': [],
-            '/reports/daily_movement': [],
+            '/reports/daily_movement': EMPTY_DAY,
         });
         const { container } = render(<DashboardPage />);
         await waitFor(() => expect(held).toHaveLength(2));
@@ -107,7 +114,7 @@ describe('DashboardPage: Refresh twice, the latest load wins (FE-H5)', () => {
         const { held } = holdGets(api, {
             '/users/me': TEST_USER,
             '/tickets/?status_filter=Open': [],
-            '/reports/daily_movement': [],
+            '/reports/daily_movement': EMPTY_DAY,
         });
         render(<DashboardPage />);
 

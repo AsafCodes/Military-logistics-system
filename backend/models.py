@@ -1,7 +1,7 @@
 import enum
 from datetime import timedelta
 
-from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 # Imported for its side effect: it registers the group algebra tables on
@@ -292,13 +292,13 @@ class Equipment(Base):
         return "דיווח תקין"
 
 # --- Logs & History ---
-def _custody_column(column: str, referred: str) -> Column:
+def _custody_column(column: str, referred: str, index: bool = True) -> Column:
     """One of TransactionLog's from_/to_ id columns. DATA-M8-1."""
     return Column(
         Integer,
         _restrict('transaction_logs', column, referred),
         nullable=True,
-        index=True,
+        index=index,
     )
 
 
@@ -310,12 +310,30 @@ class TransactionLog(Base):
     # happened says nothing. The one writer, audit_trail.record_event, passes
     # a member; the root main.py that predated it did not always (see the
     # revision b7e3d91c4f2a).
+    #
+    # DATA-M9-2. The daily movement report selects a group's day in two arms,
+    # one over group_id and one over from_group_id, each a range on the
+    # timestamp; each arm has its composite index. The second leads with
+    # from_group_id, so it also serves that foreign key, and the single-column
+    # index it replaced would only repeat its prefix. The report was the one
+    # reader of the timestamp index, which went with it.
     __table_args__ = (
         _one_of('event_type', EventType, 'ck_transaction_logs_event_type'),
+        Index('ix_transaction_logs_group_id_timestamp', 'group_id', 'timestamp'),
+        Index('ix_transaction_logs_from_group_id_timestamp', 'from_group_id', 'timestamp'),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     equipment_id = Column(Integer, _restrict('transaction_logs', 'equipment_id', 'equipment'), index=True)
+    # DATA-M9-2. The item's group when the event happened: the group whose
+    # calendar day the row belongs to. Written by audit_trail.record_event for
+    # every event, so a past day keeps its rows when the item moves on. NULL
+    # only on a row with no item.
+    group_id = Column(
+        Integer,
+        _restrict('transaction_logs', 'group_id', 'groups'),
+        nullable=True,
+    )
     # The ACTOR: whoever made the change, not whoever received the item.
     involved_user_id = Column(
         Integer,
@@ -323,7 +341,7 @@ class TransactionLog(Base):
         nullable=True,
         index=True,
     )
-    timestamp = Column(clock.UtcDateTime, default=clock.utcnow, index=True)
+    timestamp = Column(clock.UtcDateTime, default=clock.utcnow)
     user_status_at_time = Column(Boolean, nullable=True)
     event_type = Column(String, nullable=False)
 
@@ -346,7 +364,8 @@ class TransactionLog(Base):
     to_holder_user_id = _custody_column('to_holder_user_id', 'users')
     from_owner_user_id = _custody_column('from_owner_user_id', 'users')
     to_owner_user_id = _custody_column('to_owner_user_id', 'users')
-    from_group_id = _custody_column('from_group_id', 'groups')
+    # Indexed by ix_transaction_logs_from_group_id_timestamp above, not here.
+    from_group_id = _custody_column('from_group_id', 'groups', index=False)
     to_group_id = _custody_column('to_group_id', 'groups')
     from_location = Column(String, nullable=True)
     to_location = Column(String, nullable=True)

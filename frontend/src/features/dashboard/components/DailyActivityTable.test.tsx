@@ -10,21 +10,22 @@
  * suffix, so a backend regression that reintroduced a zoneless string would
  * reshift this table again with nothing to notice. This test is that guard.
  *
- * It only means something under a non-UTC runtime timezone -- a naive string
- * and a `Z` string parse to the SAME instant when TZ=UTC, which is CI's
- * default, so a test that didn't force a non-UTC zone would pass whether or
- * not the `Z` is honored. Asia/Kolkata is +05:30 with no DST, so this can't
- * start failing seasonally. 09:30Z is chosen deliberately over a round UTC
- * hour: it renders as 15:00 IST, an unambiguous five-and-a-half-hour shift
- * that could not be mistaken for a rounding artifact of some other offset.
+ * Since DATA-M9-2 the table shows times in the GROUP's zone, which the report
+ * names, not the browser's. The `Z` still matters: a naive string would be
+ * read as the browser's local time and converted from there. So the runtime
+ * is still forced off UTC -- Asia/Kolkata is +05:30 with no DST, so this
+ * can't start failing seasonally -- and the group is in Asia/Jerusalem
+ * (+03:00 in June). 09:30Z renders as 12:30; read naively as Kolkata time it
+ * would be 04:00Z, which renders as 07:00.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import DailyActivityTable from './DailyActivityTable';
 import { describeMove } from '../describeMove';
+import type { AxiosRequestConfig } from 'axios';
 import api from '@/lib/axios';
-import type { MovementReportItem } from '@/types';
+import type { MovementReport, MovementReportItem } from '@/types';
 
 // Every key the route sends, each one empty. Each fixture below spreads it
 // and sets what it is about.
@@ -68,22 +69,37 @@ const SECOND_ACTIVITY_ITEM = {
     location: 'Warehouse',
 } satisfies MovementReportItem;
 
+// One group's day, as the route answers it (DATA-M9-2).
+const day = (items: MovementReportItem[], over: Partial<MovementReport> = {}) => ({
+    group_id: 1,
+    group_name: 'פלוגה א',
+    timezone: 'Asia/Jerusalem',
+    date: '2026-06-15',
+    start: '2026-06-14T21:00:00Z',
+    end: '2026-06-15T21:00:00Z',
+    items,
+    ...over,
+} satisfies MovementReport);
+
 afterEach(() => {
     vi.unstubAllEnvs();
 });
 
-describe('DailyActivityTable: renders the Z-suffixed timestamp in the viewer local time (DATA-H1-3)', () => {
-    it('shows 15:00 for 09:30Z under Asia/Kolkata (+05:30)', async () => {
+describe('DailyActivityTable: reads the Z-suffixed timestamp as the instant it names (DATA-H1-3)', () => {
+    it('shows 12:30 for 09:30Z in an Asia/Jerusalem group, under an Asia/Kolkata browser', async () => {
         vi.stubEnv('TZ', 'Asia/Kolkata');
         vi.spyOn(api, 'get').mockImplementation((url: string) => {
-            if (url === '/reports/daily_movement') return Promise.resolve({ data: [ACTIVITY_ITEM] });
+            if (url === '/reports/daily_movement') return Promise.resolve({ data: day([ACTIVITY_ITEM]) });
             throw new Error(`unexpected URL in test: ${url}`);
         });
 
         render(<DailyActivityTable />);
 
-        expect(await screen.findByText('15:00')).toBeInTheDocument();
-        // Not the naive misread of the same string -- see this file's docstring.
+        expect(await screen.findByText('12:30')).toBeInTheDocument();
+        // Not the naive misread of the same string, nor the browser's clock --
+        // see this file's docstring.
+        expect(screen.queryByText('07:00')).toBeNull();
+        expect(screen.queryByText('15:00')).toBeNull();
         expect(screen.queryByText('09:30')).toBeNull();
     });
 
@@ -91,15 +107,15 @@ describe('DailyActivityTable: renders the Z-suffixed timestamp in the viewer loc
         vi.stubEnv('TZ', 'Asia/Kolkata');
         vi.spyOn(api, 'get').mockImplementation((url: string) => {
             if (url === '/reports/daily_movement') {
-                return Promise.resolve({ data: [ACTIVITY_ITEM, SECOND_ACTIVITY_ITEM] });
+                return Promise.resolve({ data: day([ACTIVITY_ITEM, SECOND_ACTIVITY_ITEM]) });
             }
             throw new Error(`unexpected URL in test: ${url}`);
         });
 
         render(<DailyActivityTable />);
 
-        expect(await screen.findByText('15:00')).toBeInTheDocument();
-        expect(await screen.findByText('17:45')).toBeInTheDocument();
+        expect(await screen.findByText('12:30')).toBeInTheDocument();
+        expect(await screen.findByText('15:15')).toBeInTheDocument();
         expect(screen.queryByText('09:30')).toBeNull();
         expect(screen.queryByText('12:15')).toBeNull();
     });
@@ -139,7 +155,7 @@ describe('DailyActivityTable: labels the event types the backend really writes (
         vi.spyOn(api, 'get').mockImplementation((url: string) => {
             if (url === '/reports/daily_movement') {
                 return Promise.resolve({
-                    data: [{ ...ACTIVITY_ITEM, event_type: eventType }],
+                    data: day([{ ...ACTIVITY_ITEM, event_type: eventType }]),
                 });
             }
             throw new Error(`unexpected URL in test: ${url}`);
@@ -176,30 +192,32 @@ describe('DailyActivityTable: a real failure is still reported (FE-H5)', () => {
  */
 describe('DailyActivityTable: loading and the response shapes (FE-H6-2)', () => {
     const LOADING = 'טוען פעילות...';
-    const EMPTY = 'אין פעילות מתועדת ב-24 השעות האחרונות';
+    const EMPTY = 'אין פעילות מתועדת היום';
     const answerWith = (data: unknown) => vi.spyOn(api, 'get').mockResolvedValue({ data });
 
     it('shows loading in the first frame, before any effect has run', () => {
         expect(renderToStaticMarkup(<DailyActivityTable />)).toContain(LOADING);
     });
 
-    it('stops loading once a flat array has answered', async () => {
-        answerWith([ACTIVITY_ITEM]);
+    it('stops loading once the day has answered', async () => {
+        answerWith(day([ACTIVITY_ITEM]));
         render(<DailyActivityTable />);
         expect(await screen.findByText(ACTIVITY_ITEM.serial_number)).toBeInTheDocument();
         expect(screen.queryByText(LOADING)).toBeNull();
     });
 
-    it('also reads rows from an { items } body', async () => {
-        answerWith({ items: [ACTIVITY_ITEM] });
+    it('shows a day with no rows as no activity today', async () => {
+        answerWith(day([]));
         render(<DailyActivityTable />);
-        expect(await screen.findByText(ACTIVITY_ITEM.serial_number)).toBeInTheDocument();
+        expect(await screen.findByText(EMPTY)).toBeInTheDocument();
     });
 
-    it.each([[null], [{}], [{ items: null }]])('treats a body of %j as no activity', async (body) => {
+    // The flat array is the shape the route sent before DATA-M9-2.
+    it.each([[null], [{}], [{ items: null }], [[ACTIVITY_ITEM]]])('treats a body of %j as no activity', async (body) => {
         answerWith(body);
         render(<DailyActivityTable />);
         expect(await screen.findByText(EMPTY)).toBeInTheDocument();
+        expect(screen.queryByText(ACTIVITY_ITEM.serial_number)).toBeNull();
     });
 });
 
@@ -213,7 +231,7 @@ describe('DailyActivityTable: loading and the response shapes (FE-H6-2)', () => 
  */
 describe('DailyActivityTable: reporter, from and to, and reason (DATA-M8-2)', () => {
     const show = async (row: MovementReportItem) => {
-        vi.spyOn(api, 'get').mockResolvedValue({ data: [row] });
+        vi.spyOn(api, 'get').mockResolvedValue({ data: day([row]) });
         render(<DailyActivityTable />);
         return {
             reporter: await screen.findByTestId('reporter'),
@@ -326,6 +344,149 @@ describe('DailyActivityTable: reporter, from and to, and reason (DATA-M8-2)', ()
     it('keeps a serial on one line in the narrower five-column table', async () => {
         await show(HANDOVER);
         expect(screen.getByText('H1').closest('td')).toHaveClass('whitespace-nowrap');
+    });
+});
+
+/**
+ * DATA-M9-2. One group's calendar day: the table names the group and the day,
+ * shows times on the group's clock, says so when there is no group to show,
+ * and asks which unit when the caller views several.
+ */
+describe('DailyActivityTable: one group\'s day (DATA-M9-2)', () => {
+    const answerWith = (data: unknown) => vi.spyOn(api, 'get').mockResolvedValue({ data });
+    const httpError = (status: number, data: unknown) =>
+        Object.assign(new Error(`Request failed with status code ${status}`), { response: { status, data } });
+
+    it.each([
+        ['Asia/Jerusalem', '12:30'],
+        ['Europe/Vienna', '11:30'],
+    ])('shows 09:30Z on the clock of a group in %s, whatever the browser\'s zone', async (timezone, shown) => {
+        vi.stubEnv('TZ', 'America/New_York');
+        answerWith(day([ACTIVITY_ITEM], { timezone }));
+        render(<DailyActivityTable />);
+        expect(await screen.findByText(shown)).toBeInTheDocument();
+        expect(screen.queryByText('05:30')).toBeNull();
+    });
+
+    it('names the group and the day in the heading', async () => {
+        answerWith(day([ACTIVITY_ITEM], { group_name: 'גדוד 53', date: '2026-06-15' }));
+        render(<DailyActivityTable />);
+        const heading = await screen.findByTestId('activity-heading');
+        await waitFor(() => expect(heading).toHaveTextContent(/^פעילות היום — גדוד 53$/));
+        expect(heading.querySelector('bdi')).toHaveTextContent(/^גדוד 53$/);
+        expect(screen.getByTestId('activity-day')).toHaveTextContent('15.6.2026');
+    });
+
+    it('shows the day\'s date as the group\'s date, in a browser far west of it', async () => {
+        vi.stubEnv('TZ', 'Pacific/Honolulu');
+        answerWith(day([], { date: '2026-01-01' }));
+        render(<DailyActivityTable />);
+        expect(await screen.findByTestId('activity-day')).toHaveTextContent('1.1.2026');
+    });
+
+    it('says there is no unit to show on a 404, and logs nothing', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        vi.spyOn(api, 'get').mockRejectedValue(httpError(404, { detail: 'No such group.' }));
+        render(<DailyActivityTable />);
+        expect(await screen.findByText('אין יחידה להצגה')).toBeInTheDocument();
+        expect(screen.queryByText('טעינת יומן הפעילות נכשלה')).toBeNull();
+        expect(error).not.toHaveBeenCalled();
+    });
+
+    it('treats a 400 without a list of groups as a failure', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => { });
+        vi.spyOn(api, 'get').mockRejectedValue(httpError(400, { detail: 'bad' }));
+        render(<DailyActivityTable />);
+        expect(await screen.findByText('טעינת יומן הפעילות נכשלה')).toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: 'יחידה' })).toBeNull();
+    });
+
+    // A list with nothing to pick, or entries that are not {id, name}, would
+    // draw a select that leads nowhere. The route never sends one; a body
+    // that is not the route's is a failure like any other.
+    it.each([
+        ['an empty list', []],
+        ['an entry with no id', [{ name: '188/53/A' }]],
+        ['an entry with no name', [{ id: 3 }]],
+    ])('treats a 400 with %s of groups as a failure', async (_label, groups) => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => { });
+        vi.spyOn(api, 'get').mockRejectedValue(httpError(400, { detail: 'several', groups }));
+        render(<DailyActivityTable />);
+        expect(await screen.findByText('טעינת יומן הפעילות נכשלה')).toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: 'יחידה' })).toBeNull();
+        expect(error).toHaveBeenCalled();
+    });
+
+    // A select fires no change for the option it already shows, so a unit
+    // whose day failed could not be asked for again without first picking
+    // another. After a failure the select shows its placeholder.
+    it('lets the viewer ask for the same unit again after its day failed', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => { });
+        const groups = [{ id: 7, name: 'פלוגה א' }, { id: 9, name: 'פלוגה ב' }];
+        let picks = 0;
+        const get = vi.spyOn(api, 'get').mockImplementation((_url: string, config?: AxiosRequestConfig) => {
+            const groupId = (config?.params as { group_id?: number } | undefined)?.group_id;
+            if (groupId === undefined) return Promise.reject(httpError(400, { detail: 'several', groups }));
+            picks += 1;
+            if (picks === 1) return Promise.reject(httpError(500, { detail: 'down' }));
+            return Promise.resolve({
+                data: day([{ ...ACTIVITY_ITEM, serial_number: 'SECOND-TRY' }], { group_id: 9, group_name: 'פלוגה ב' }),
+            });
+        });
+        render(<DailyActivityTable />);
+
+        const select = await screen.findByRole('combobox', { name: 'יחידה' });
+        fireEvent.change(select, { target: { value: '9' } });
+        expect(await screen.findByText('טעינת יומן הפעילות נכשלה')).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'יחידה' })).toHaveValue('');
+
+        fireEvent.change(screen.getByRole('combobox', { name: 'יחידה' }), { target: { value: '9' } });
+
+        expect(await screen.findByText('SECOND-TRY')).toBeInTheDocument();
+        expect(get.mock.calls.filter(([, config]) =>
+            (config?.params as { group_id?: number } | undefined)?.group_id === 9)).toHaveLength(2);
+        expect(screen.getByRole('combobox', { name: 'יחידה' })).toHaveValue('9');
+    });
+
+    it('asks which unit on a 400 that lists them, and reads the one picked', async () => {
+        const groups = [{ id: 7, name: 'פלוגה א' }, { id: 9, name: 'פלוגה ב' }];
+        const get = vi.spyOn(api, 'get').mockImplementation((_url: string, config?: AxiosRequestConfig) => {
+            const groupId = (config?.params as { group_id?: number } | undefined)?.group_id;
+            if (groupId === undefined) return Promise.reject(httpError(400, { detail: 'several', groups }));
+            return Promise.resolve({
+                data: day([{ ...ACTIVITY_ITEM, serial_number: `FROM-${groupId}` }], { group_id: groupId, group_name: 'פלוגה ב' }),
+            });
+        });
+        render(<DailyActivityTable />);
+
+        const select = await screen.findByRole('combobox', { name: 'יחידה' });
+        expect(Array.from((select as HTMLSelectElement).options, (o) => o.textContent)).toEqual(
+            ['בחר יחידה', '\u2068פלוגה א\u2069', '\u2068פלוגה ב\u2069'],
+        );
+        expect(screen.queryByRole('table')).toBeNull();
+        expect(screen.getByText('בחרו יחידה כדי להציג את פעילות היום שלה')).toBeInTheDocument();
+
+        fireEvent.change(select, { target: { value: '9' } });
+
+        expect(await screen.findByText('FROM-9')).toBeInTheDocument();
+        expect(get).toHaveBeenLastCalledWith('/reports/daily_movement', expect.objectContaining({ params: { group_id: 9 } }));
+        expect(screen.getByTestId('activity-heading')).toHaveTextContent(/^פעילות היום — פלוגה ב$/);
+        // The select stays, so the viewer can switch.
+        expect(screen.getByRole('combobox', { name: 'יחידה' })).toHaveValue('9');
+    });
+
+    // Seen live: unisolated, the right-to-left select showed 188/53/A as
+    // A/188/53. An <option> cannot hold <bdi>, so each name sits in a
+    // first-strong isolate (U+2068 ... U+2069), as AdminPanel's does.
+    it('isolates each unit name in the select, so a path-shaped name keeps its order', async () => {
+        const groups = [{ id: 3, name: '188/53/A' }, { id: 7, name: 'Wien/1' }];
+        vi.spyOn(api, 'get').mockRejectedValue(httpError(400, { detail: 'several', groups }));
+        render(<DailyActivityTable />);
+
+        const select = await screen.findByRole('combobox', { name: 'יחידה' });
+        expect(Array.from((select as HTMLSelectElement).options, (o) => o.textContent).slice(1)).toEqual(
+            ['\u2068188/53/A\u2069', '\u2068Wien/1\u2069'],
+        );
     });
 });
 

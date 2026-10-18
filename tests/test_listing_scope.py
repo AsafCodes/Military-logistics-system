@@ -85,10 +85,11 @@ def test_the_movement_report_covers_only_visible_equipment(
 ):
     """Every handover of every item, force-wide, to any authenticated user.
 
-    A transaction log is exactly as visible as the item it describes, so the
-    scope comes from the equipment rather than from the log. Generated through
-    the API rather than inserted, so the rows under test are the ones the app
-    actually writes.
+    Since DATA-M9-2 the report is one group's day, and the scope is the group:
+    each caller gets the day of their one top VIEW group, so a company
+    commander sees their company's movements and not the other's. Generated
+    through the API rather than inserted, so the rows under test are the ones
+    the app actually writes.
     """
     a = db_session.query(models.Equipment).filter_by(serial_number="SA100").one()
     b = db_session.query(models.Equipment).filter_by(serial_number="SB200").one()
@@ -107,7 +108,7 @@ def test_the_movement_report_covers_only_visible_equipment(
     def serials(who):
         res = get(client, who, "/reports/daily_movement")
         assert res.status_code == 200, res.text
-        return {row["serial_number"] for row in res.json()}
+        return {row["serial_number"] for row in res.json()["items"]}
 
     assert serials("u_master") == {"SA100", "SB200"}
     assert serials("u_cmdr_a") == {"SA100"}

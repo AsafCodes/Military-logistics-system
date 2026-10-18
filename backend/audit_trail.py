@@ -148,6 +148,13 @@ def record_event(
 
     `reason` is stored as given; schemas.normalize_reason has already trimmed
     it and turned a blank into None.
+
+    THE EVENT'S GROUP (DATA-M9-2). Every row records the item's group as the
+    event left it, in group_id: the group whose calendar day the daily
+    movement report files the row under. For a custody event that is the
+    after state, so it equals to_group_id; the group it came from is
+    from_group_id. Recorded rather than read off the item later, so a day
+    that has passed keeps its rows when the item moves on.
     """
     is_custody_event = event_type in CUSTODY_EVENTS
     if is_custody_event and before is None:
@@ -164,9 +171,10 @@ def record_event(
     if equipment.id is None:
         # DATA-H4-3. The equipment has not been INSERTed yet, so reading .id
         # below writes NULL into equipment_id -- and a NULL there is not a loud
-        # failure. scope_equipment_derived_query joins INNER, so the row is
-        # dropped from the movement report and from every listing built on it:
-        # written, committed, and visible to nobody. It is the mechanism that
+        # failure. The movement report joins the item INNER, as
+        # scope_equipment_derived_query does for every listing built on it, so
+        # the row is dropped from all of them: written, committed, and visible
+        # to nobody. It is the mechanism that
         # makes users.update_user_group unauditable, and create_equipment
         # reached it by accident before this check existed.
         #
@@ -207,6 +215,7 @@ def record_event(
 
     log = models.TransactionLog(
         equipment_id=equipment.id,
+        group_id=equipment.group_id,
         involved_user_id=actor.id,
         event_type=event_type.value,
         user_status_at_time=actor.is_active_duty,

@@ -27,6 +27,11 @@ on SQLite at 200,000 log rows over two years, with statistics gathered: 0.6 ms
 through this index against 53 ms without it, where the best remaining plan
 walks every visible item's whole history and sorts what survives.
 
+GONE SINCE 3c6a0f8e2d71 (DATA-M9-2). The report became one group's calendar
+day, read through two composite indexes that lead with a group column, and
+nothing else ranges over the timestamp alone, so that revision drops this
+index. SUPERSEDED below keeps a re-run of this revision from building it again.
+
 DELIBERATELY NOT INDEXED, though the ticket names them:
 
   - maintenance_logs.opened_at. The ticket list sorts by it and has no LIMIT,
@@ -117,6 +122,12 @@ INDEXES = (
 )
 
 
+# index -> the index of a later revision that replaced it. See upgrade().
+SUPERSEDED = {
+    'ix_transaction_logs_timestamp': 'ix_transaction_logs_group_id_timestamp',
+}
+
+
 def _index_name(table, column):
     return f'ix_{table}_{column}'
 
@@ -160,6 +171,12 @@ def upgrade():
         # re-runs against a create_all database built after that drop, which
         # the baseline path does (backend.migrations.IDEMPOTENT_SCHEMA_REVISIONS).
         if column not in {c['name'] for c in inspector.get_columns(table)}:
+            continue
+        # An index a LATER revision replaced: 3c6a0f8e2d71 drops
+        # ix_transaction_logs_timestamp for a composite. The composite exists
+        # only on a database built after that revision, which this meets when
+        # it re-runs as above; there the index stays gone.
+        if name in SUPERSEDED and SUPERSEDED[name] in present:
             continue
         if name not in present:
             missing.append((name, table, column))

@@ -77,20 +77,24 @@ def _ruled(rule="RESTRICT"):
 
 # b7e3d91c4f2a (DATA-M8-1) drops this column, with its key, on the way to head,
 # and adds keys of its own to transaction_logs; tests/test_movement_history.py
-# holds that revision.
+# holds that revision. 3c6a0f8e2d71 (DATA-M9-2) adds one more
+# (tests/test_daily_movement_day.py).
 DROPPED_AT_HEAD = ("transaction_logs", "involved_location_id")
 
 
 def _ruled_at_head():
     """What _foreign_keys returns at head: _ruled(), less DROPPED_AT_HEAD, plus
-    b7e3d91c4f2a's own keys, read off that revision. Exact, so a stray key or a
-    custody key without its rule is caught here too."""
+    the keys b7e3d91c4f2a and 3c6a0f8e2d71 add, read off those revisions.
+    Exact, so a stray key or a later key without its rule is caught here
+    too."""
     history = _script().get_revision("b7e3d91c4f2a").module
+    day = _script().get_revision("3c6a0f8e2d71").module
     ruled = {key: value for key, value in _ruled().items() if key != DROPPED_AT_HEAD}
     ruled.update({
         ("transaction_logs", column): (f"fk_transaction_logs_{column}", referred, "RESTRICT")
         for column, referred in history.ID_COLUMNS
     })
+    ruled[("transaction_logs", day.COLUMN)] = (day.FK_NAME, "groups", "RESTRICT")
     return ruled
 
 

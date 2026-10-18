@@ -133,6 +133,21 @@ export interface MovementReportItem {
     location: string | null;
 }
 
+// GET /reports/daily_movement, key for key (DATA-M9-2): one group's calendar
+// day. Held to the route's response model (schemas.MovementReport) by
+// tests/test_movement_report.py, which reads this block. Every key is always
+// sent.
+export interface MovementReport {
+    group_id: number;
+    group_name: string;
+    // The IANA zone that bounded the day, and the one to show its times in.
+    timezone: string;
+    date: string; // YYYY-MM-DD, the day in that zone
+    start: string; // ISO-8601, Z-suffixed: the day's first instant
+    end: string; // ISO-8601, Z-suffixed: the next day's first instant
+    items: MovementReportItem[];
+}
+
 // ============ MAINTENANCE ============
 export interface Ticket {
     id: number;

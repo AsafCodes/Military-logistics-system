@@ -681,17 +681,21 @@ def test_the_index_revision_builds_re_runs_and_reverses_on_postgres(pg_schema):
     expected = _expected_indexes()
     # b7e3d91c4f2a (DATA-M8-1) drops one of these with its column on the way
     # to head, and adds indexes of its own, which its downgrade removes.
-    dropped = "ix_transaction_logs_involved_location_id"
+    # 3c6a0f8e2d71 (DATA-M9-2) replaces another with a composite, and its
+    # downgrade puts it back.
+    dropped = {"ix_transaction_logs_involved_location_id", "ix_transaction_logs_timestamp"}
     history = script.get_revision("b7e3d91c4f2a").module
+    day = script.get_revision("3c6a0f8e2d71").module
     added_later = {f"ix_transaction_logs_{column}" for column, _referred in history.ID_COLUMNS}
+    added_later |= set(day.NEW_INDEXES)
 
     _migrate(pg_schema, "head")
     at_head = _indexes(pg_schema)
-    assert {name: at_head.get(name) for name in expected if name != dropped} == {
+    assert {name: at_head.get(name) for name in expected if name not in dropped} == {
         name: (table, (column,), False)
-        for name, (table, column) in expected.items() if name != dropped
+        for name, (table, column) in expected.items() if name not in dropped
     }
-    assert dropped not in at_head
+    assert not dropped & set(at_head)
 
     with pg_schema.begin() as conn:
         _rerun_upgrade(conn, script, INDEX_REVISION)
@@ -907,3 +911,52 @@ def test_the_group_time_zone_revision_fills_re_runs_and_reverses_on_postgres(pg_
 
     _migrate(pg_schema, "head")
     assert column()["nullable"] is False
+
+
+def test_the_movement_log_group_revision_files_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-M9-2 (3c6a0f8e2d71). tests/test_daily_movement_day.py covers it on
+    SQLite, where adding the key rebuilds the table. Here: old rows are filed
+    under a group (exact for a custody row, the item's group for the rest,
+    NULL with no item), the key is RESTRICT -- an item with a logged event
+    cannot be deleted -- two indexes are traded for two, a second run emits
+    no DDL, and the downgrade puts the old indexes back.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.conftest import recorded
+    from tests.test_daily_movement_day import LEGACY_ROWS, NEW_INDEXES, OLD_INDEXES
+    from tests.test_group_schema import _rerun_upgrade
+
+    revision, parent = "3c6a0f8e2d71", "9d4e2b7c1a60"
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+
+    def indexes():
+        with pg_schema.connect() as conn:
+            return {ix["name"] for ix in inspect(conn).get_indexes("transaction_logs")}
+
+    _migrate(pg_schema, parent)
+    with pg_schema.begin() as conn:
+        for statement in LEGACY_ROWS:
+            conn.execute(text(statement))
+    before = indexes()
+
+    _migrate(pg_schema, revision)
+    with pg_schema.connect() as conn:
+        rows = conn.execute(text("SELECT id, group_id FROM transaction_logs ORDER BY id")).all()
+        keys = {fk["name"]: fk for fk in inspect(conn).get_foreign_keys("transaction_logs")}
+    assert rows == [(1, 3), (2, 2), (3, 2), (4, None)]
+    assert indexes() == (before - OLD_INDEXES) | NEW_INDEXES
+    assert keys["fk_transaction_logs_group_id"]["options"].get("ondelete") == "RESTRICT"
+    with pytest.raises(IntegrityError), pg_schema.begin() as conn:
+        conn.execute(text("DELETE FROM equipment WHERE id = 1"))
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, revision)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision did its work again: {ddl}"
+
+    _migrate(pg_schema, parent, backwards=True)
+    assert indexes() == before
+
+    _migrate(pg_schema, "head")
+    assert NEW_INDEXES <= indexes()

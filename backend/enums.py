@@ -99,10 +99,12 @@ class Sensitivity(str, enum.Enum):
     ENFORCED, as of DATA-H3-3, and this is the member's whole point: a
     CLASSIFIED item is hidden from a caller who lacks VIEW_CLASSIFIED over its
     group. The filter lives in dependencies.scope_equipment_query, so it reaches
-    every listing, the maintenance and transaction-log listings built on
+    every listing, the maintenance listing built on
     scope_equipment_derived_query, and every 404 in the system through
     get_scoped_equipment_or_404 -- one definition rather than a rule each route
-    reimplements. A CLASSIFIED value is no longer merely a claim recorded about
+    reimplements. The one exception is the daily movement report, which since
+    DATA-M9-2 is scoped by group rather than through the item and applies the
+    same clause per row (routers/reports.py _day_arm). A CLASSIFIED value is no longer merely a claim recorded about
     the record; it is a restriction the server applies to it.
 
     Three deliberate limits on that guarantee, all load-bearing:
@@ -116,8 +118,8 @@ class Sensitivity(str, enum.Enum):
         scope, so an uncleared caller's total silently drops by one. Comparing
         totals with a cleared caller reveals that a classified item exists,
         though not which. Accepted rather than overlooked; see that route.
-      - AUDIT DISAPPEARS WITH THE ITEM. scope_equipment_derived_query filters on
-        the item's CURRENT sensitivity, so classifying one retroactively removes
+      - AUDIT DISAPPEARS WITH THE ITEM. The movement report filters on the
+        item's CURRENT sensitivity, so classifying one retroactively removes
         every transaction_logs row about it -- including the RECLASSIFY row
         recording the classification itself. The event that hides an item is
         hidden by the same act, from exactly the callers who would notice it had
@@ -189,8 +191,8 @@ class EventType(str, enum.Enum):
     asked for and what tests/test_audit_trail.py's guards keep true. The
     remaining gaps are structural rather than missed: users.update_user_group
     and setup.py's fault-type routes have no equipment to name, and a NULL
-    equipment_id is dropped by scope_equipment_derived_query's inner join, so a
-    row for them would be written and seen by nobody.
+    equipment_id is dropped by the movement report's inner join on the item,
+    so a row for them would be written and seen by nobody.
 
     The column holds these values and nothing else, NULL included, since
     DATA-M8-1: models.TransactionLog constrains it with a CHECK built from this

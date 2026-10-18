@@ -98,7 +98,7 @@ class Group(Base):
     kind = Column(String, nullable=False)
 
     # DATA-M9. The IANA zone this group's calendar day is kept in: DATA-M9-2's
-    # daily movement report is to bound "a day" by midnight here
+    # daily movement report bounds "a day" by midnight here
     # (clock.day_bounds).
     # Stored on every group, never inherited at read time: containment is a
     # DAG, so a group with two parents in different zones would have no one
@@ -673,6 +673,33 @@ def implied_view_placements(placements):
         for capability in EQUIPMENT_CAPABILITIES
         for pair in placements.get(capability, ())
     }
+
+
+def top_view_groups(db: Session, user_id: int) -> list[Group]:
+    """The tops of `user`'s VIEW extent: their VIEW groups that no other contains.
+
+    DATA-M9-2. The daily movement report shows one group's day, and this is
+    how it picks the group when the caller names none. VIEW grants, not
+    membership: a battalion commander is a member of the headquarters company
+    and views the whole battalion, and the report is about what they view.
+
+    A group inside another of the user's VIEW groups adds nothing to their
+    extent, so it is dropped. What is left are disjoint subtrees (or ones
+    that only share descendants, in the DAG). Several is a real answer and
+    the caller decides what it means; ordered by id so the answer does not
+    depend on row order.
+    """
+    granted = select(Grant.group_id).where(
+        Grant.user_id == user_id,
+        Grant.capability == Capability.VIEW.value,
+    )
+    contained = select(GroupClosure.descendant_id).where(
+        GroupClosure.ancestor_id.in_(granted),
+        GroupClosure.depth > 0,
+    )
+    return db.query(Group).filter(
+        Group.id.in_(granted), ~Group.id.in_(contained)
+    ).order_by(Group.id).all()
 
 
 def root_groups(db: Session) -> list[Group]:

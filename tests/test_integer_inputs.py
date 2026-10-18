@@ -120,6 +120,9 @@ CASES = {
         lambda v, r: f"/verifications/equipment/{v}", None),
     ("GET", "/equipment/{equipment_id}/history", "path", "equipment_id"): (
         lambda v, r: f"/equipment/{v}/history", None),
+    # DATA-M9-2, the first integer QUERY parameter.
+    ("GET", "/reports/daily_movement", "query", "group_id"): (
+        lambda v, r: f"/reports/daily_movement?group_id={v}", None),
 }
 
 

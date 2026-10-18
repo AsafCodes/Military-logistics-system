@@ -10,8 +10,13 @@ transaction_logs the columns, and this is the read side:
   keeps it;
 - the contract: schemas.MovementReportItem and MovementReportItem in
   frontend/src/types/index.ts, key for key, both ways, with
-  test_report_item_contract.py's parser and its rules;
+  test_report_item_contract.py's parser and its rules; since DATA-M9-2 the
+  rows come inside schemas.MovementReport, held to MovementReport the same
+  way;
 - the query count, which must not grow with the rows.
+
+Which day and which group the report covers (DATA-M9-2) is
+tests/test_daily_movement_day.py's.
 """
 from datetime import timedelta
 
@@ -29,6 +34,7 @@ from tests.test_report_item_contract import (
 )
 
 INTERFACE = "MovementReportItem"
+ENVELOPE = "MovementReport"
 URL = "/reports/daily_movement"
 
 CUSTODY_NAME_KEYS = (
@@ -48,10 +54,15 @@ def _post(client, who, url, body):
     assert res.status_code == 200, res.text
 
 
-def _report(client, who="u_master"):
+def _envelope(client, who="u_master"):
     res = client.get(URL, headers=create_auth_header(who))
     assert res.status_code == 200, res.text
     return res.json()
+
+
+def _report(client, who="u_master"):
+    """The rows of the caller's one group's day: today, in its zone."""
+    return _envelope(client, who)["items"]
 
 
 @pytest.fixture
@@ -63,7 +74,9 @@ def movements(client, db_session, mock_matrix_db, group_graph):
 
     - legacy: shaped like a row from before DATA-M8-1, `location` and no
       custody columns; it also has no actor, which is what puts
-      reporter_name's null on the wire (a real old row has one);
+      reporter_name's null on the wire (a real old row has one). Its
+      group_id is what 3c6a0f8e2d71 backfills on such a row, the item's
+      group;
     - from_shelf: an item with no serial, no holder and no owner, sitting at a
       place, handed to a person with a reason;
     - to_armory: a handover to a place;
@@ -75,8 +88,11 @@ def movements(client, db_session, mock_matrix_db, group_graph):
 
     legacy = models.TransactionLog(
         equipment_id=template.id,
+        group_id=template.group_id,
         event_type=EventType.HANDOVER.value,
-        timestamp=clock.utcnow() - timedelta(hours=1),
+        # Now, not an hour ago: an hour ago is yesterday between midnight and
+        # one, and the report is today's.
+        timestamp=clock.utcnow(),
         location="User:Someone Old",
     )
     shelf_item = models.Equipment(
@@ -198,6 +214,11 @@ def test_the_timestamp_is_utc_with_a_z(movements):
     assert rows and all(row["timestamp"].endswith("Z") for row in rows), rows
 
 
+def test_the_ends_of_the_day_are_utc_with_a_z(client, mock_matrix_db):
+    report = _envelope(client)
+    assert report["start"].endswith("Z") and report["end"].endswith("Z"), report
+
+
 # --- the contract ------------------------------------------------------------
 
 def test_the_shared_type_declares_exactly_the_keys_every_row_carries(movements):
@@ -245,18 +266,22 @@ def test_null_appears_on_the_wire_exactly_where_the_type_admits_it(movements):
             )
 
 
+def _openapi():
+    from backend.main import app
+
+    return app.openapi()
+
+
 def test_the_response_model_and_the_type_agree_on_every_key_and_every_null():
     """The two tests above compare the type with what the fixture SENDS, so a
     key the response model declares nullable and the route never sends null
     passes them unseen -- `timestamp: Optional[datetime]` would. This compares
     the type with the response model itself, through the OpenAPI document
     FastAPI builds from it."""
-    from backend.main import app
-
-    spec = app.openapi()
-    body = spec["paths"][URL]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-    assert body.get("type") == "array", body
-    assert body["items"] == {"$ref": f"#/components/schemas/{INTERFACE}"}, body
+    spec = _openapi()
+    items = spec["components"]["schemas"][ENVELOPE]["properties"]["items"]
+    assert items.get("type") == "array", items
+    assert items["items"] == {"$ref": f"#/components/schemas/{INTERFACE}"}, items
 
     model = spec["components"]["schemas"][INTERFACE]
     fields = declared_fields(TYPES_FILE.read_text(encoding="utf-8"), INTERFACE)
@@ -334,7 +359,62 @@ def test_no_second_definition_of_a_movement_row_exists_in_the_frontend():
     assert found == [("types/index.ts", INTERFACE)], found
 
 
+# The envelope's keys and the one TypeScript type each must be declared as.
+# OpenAPI says `string` for a date and a datetime alike, so the format is
+# checked as well.
+ENVELOPE_TYPES = {
+    "group_id": ("integer", None, "number"),
+    "group_name": ("string", None, "string"),
+    "timezone": ("string", None, "string"),
+    "date": ("string", "date", "string"),
+    "start": ("string", "date-time", "string"),
+    "end": ("string", "date-time", "string"),
+    "items": ("array", None, f"{INTERFACE}[]"),
+}
+
+
+def test_the_envelope_the_response_model_and_the_type_agree_key_for_key():
+    """DATA-M9-2. The response is the envelope now, and the type the frontend
+    reads it through is held to it as each row is: every key, required on
+    both sides, none nullable, each of the one type it is sent as."""
+    spec = _openapi()
+    body = spec["paths"][URL]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert body == {"$ref": f"#/components/schemas/{ENVELOPE}"}, body
+
+    model = spec["components"]["schemas"][ENVELOPE]
+    fields = declared_fields(TYPES_FILE.read_text(encoding="utf-8"), ENVELOPE)
+    assert set(model["properties"]) == set(fields) == set(ENVELOPE_TYPES)
+    assert set(model["required"]) == set(fields)
+
+    for key, (json_type, json_format, ts_type) in ENVELOPE_TYPES.items():
+        prop = model["properties"][key]
+        assert (prop.get("type"), prop.get("format")) == (json_type, json_format), (key, prop)
+        assert fields[key] == (False, [ts_type]), (key, fields[key])
+
+
+def test_the_envelope_on_the_wire_names_the_group_its_zone_and_its_day(
+    client, mock_matrix_db, group_graph
+):
+    report = _envelope(client)
+
+    assert set(report) == set(ENVELOPE_TYPES)
+    assert (report["group_id"], report["group_name"]) == (group_graph["188"].id, "188")
+    assert report["timezone"] == clock.DEFAULT_TIMEZONE
+    tz = clock.zone(clock.DEFAULT_TIMEZONE)
+    assert report["date"] == clock.today_in(tz).isoformat()
+    assert isinstance(report["items"], list)
+
+
 # --- the query count ---------------------------------------------------------
+
+# A fixed past day of the root group's zone, and noon in it. A seed written
+# just before "now" and read as "today" moves to yesterday for its first
+# seconds after local midnight; a past day's noon is in its day at any hour
+# the test runs.
+STOCK_DAY = clock.today_in(clock.zone(clock.DEFAULT_TIMEZONE)) - timedelta(days=1)
+_start, _end = clock.day_bounds(clock.zone(clock.DEFAULT_TIMEZONE), STOCK_DAY)
+STOCK_NOON = _start + (_end - _start) / 2
+
 
 def _stock_moves(db_session, n, *, tag):
     """n rows, each on its own item, naming its own five people and two units.
@@ -366,9 +446,10 @@ def _stock_moves(db_session, n, *, tag):
         a, b = units[i * 2].id, units[i * 2 + 1].id
         db_session.add(models.TransactionLog(
             equipment_id=items[i].id,
+            group_id=items[i].group_id,
             involved_user_id=actor.id,
             event_type=EventType.ASSIGN.value,
-            timestamp=clock.utcnow() - timedelta(minutes=i),
+            timestamp=STOCK_NOON - timedelta(seconds=i),
             from_holder_user_id=from_h.id, to_holder_user_id=to_h.id,
             from_owner_user_id=from_o.id, to_owner_user_id=to_o.id,
             from_group_id=a, to_group_id=b,
@@ -378,13 +459,14 @@ def _stock_moves(db_session, n, *, tag):
 
 def test_the_report_does_not_fan_out(client, db_session, mock_matrix_db, count_queries):
     token = create_auth_header("u_master")
+    url = f"{URL}?date={STOCK_DAY.isoformat()}"
 
     _stock_moves(db_session, 2, tag="small")
     with count_queries() as small:
-        assert len(client.get(URL, headers=token).json()) == 2
+        assert len(client.get(url, headers=token).json()["items"]) == 2
     _stock_moves(db_session, 8, tag="large")
     with count_queries() as large:
-        assert len(client.get(URL, headers=token).json()) == 10
+        assert len(client.get(url, headers=token).json()["items"]) == 10
 
     assert large.count == small.count, (
         f"{small.count} statements for 2 rows, {large.count} for 10 "

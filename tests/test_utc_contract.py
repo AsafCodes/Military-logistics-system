@@ -327,33 +327,40 @@ def test_bulk_update_writes_an_aware_correct_closed_at(client, mock_matrix_db, t
     assert before <= log.closed_at <= after
 
 
-def test_cutoff_comparison_selects_the_right_side_of_the_boundary(
+def test_the_day_s_bounds_select_the_right_side_of_each_edge(
     client, db_session, mock_matrix_db, token_master
 ):
-    """reports.py:91's `cutoff` is a comparison bind against TransactionLog.timestamp,
-    not a write -- the aware cutoff must convert correctly or the 24h filter on
-    /reports/daily_movement compares an aware value against naive storage.
+    """The movement report's day ends (DATA-M9-2) are comparison binds against
+    TransactionLog.timestamp, not writes -- the aware bounds must convert
+    correctly or the filter on /reports/daily_movement compares an aware
+    value against naive storage.
+
+    One microsecond either side of both edges, on a day that has passed so
+    both edges are behind the clock. The range is half-open: its first
+    instant is in and the next day's is not.
     """
     item = db_session.query(models.Equipment).filter_by(serial_number="SA100").one()
+    tz = clock.zone(clock.DEFAULT_TIMEZONE)
+    day = clock.today_in(tz) - timedelta(days=2)
+    start, end = clock.day_bounds(tz, day)
+    tick = timedelta(microseconds=1)
 
-    inside = models.TransactionLog(
-        equipment_id=item.id, event_type="HANDOVER",
-        timestamp=clock.utcnow() - timedelta(hours=1),
-    )
-    outside = models.TransactionLog(
-        equipment_id=item.id, event_type="HANDOVER",
-        timestamp=clock.utcnow() - timedelta(hours=48),
-    )
-    db_session.add_all([inside, outside])
+    def row(at):
+        return models.TransactionLog(
+            equipment_id=item.id, group_id=item.group_id, event_type="HANDOVER", timestamp=at,
+        )
+
+    inside = [row(start), row(end - tick)]
+    outside = [row(start - tick), row(end)]
+    db_session.add_all(inside + outside)
     db_session.commit()
 
-    res = client.get("/reports/daily_movement", headers=token_master)
+    res = client.get(f"/reports/daily_movement?date={day.isoformat()}", headers=token_master)
     assert res.status_code == 200, res.text
     # Told apart by id: event_type holds the EventType vocabulary only
     # (DATA-M8-1), so it can no longer carry a marker.
-    ids = {row["id"] for row in res.json()}
-    assert inside.id in ids
-    assert outside.id not in ids
+    ids = {r["id"] for r in res.json()["items"]}
+    assert ids == {r.id for r in inside}
 
 
 def test_jwt_exp_claim_is_byte_identical_before_and_after(monkeypatch):
@@ -444,7 +451,10 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
 
     daily_movement = client.get("/reports/daily_movement", headers=token_master)
     assert daily_movement.status_code == 200
-    collected += [row["timestamp"] for row in daily_movement.json() if row["timestamp"]]
+    movement = daily_movement.json()
+    collected += [row["timestamp"] for row in movement["items"] if row["timestamp"]]
+    # DATA-M9-2: the day's two ends.
+    collected += [movement["start"], movement["end"]]
 
     verifications = client.get(f"/verifications/equipment/{item.id}", headers=token_master)
     assert verifications.status_code == 200

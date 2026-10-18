@@ -105,8 +105,12 @@ BASELINE_STAMP = "e5f1b8d24a07"
 # not among them; a re-run is still asserted to emit no DDL.
 #
 # DATA-M9-1's group time zone adds one column, checked by name.
+#
+# DATA-M9-2's movement-log group adds a column, a key and two indexes and
+# drops two indexes, each checked by name.
 IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
-    {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a", "9d4e2b7c1a60"}
+    {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a", "9d4e2b7c1a60",
+     "3c6a0f8e2d71"}
 )
 
 # (table, column) for every column a revision after BASELINE_STAMP adds.
@@ -116,7 +120,8 @@ IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
 # definition -- the revision that adds them runs only after the stamp. So
 # without this a column added after the stamp would refuse every database
 # the baseline path exists for. DATA-M8-1 is the first revision after the
-# stamp to add one, DATA-M9-1 (groups.timezone) the second.
+# stamp to add one, DATA-M9-1 (groups.timezone) the second, DATA-M9-2
+# (transaction_logs.group_id) the third.
 #
 # Kept in step with the chain by a test rather than by hand:
 # tests/test_group_schema.py migrates one database to the stamp and another to
@@ -128,7 +133,7 @@ ADDED_AFTER_BASELINE = frozenset(
         "from_owner_user_id", "to_owner_user_id",
         "from_group_id", "to_group_id",
         "from_location", "to_location",
-        "reason",
+        "reason", "group_id",
     )
 ) | {("groups", "timezone")}
 

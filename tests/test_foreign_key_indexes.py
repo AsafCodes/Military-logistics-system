@@ -180,42 +180,77 @@ def test_the_fault_type_usage_count_goes_through_its_index(client, mock_matrix_d
     _assert_served_by(plans, "maintenance_logs", "ix_maintenance_logs_fault_type_id")
 
 
-def test_the_daily_movement_report_ranges_over_the_timestamp_index(
-    client, mock_matrix_db, db_session
-):
-    """The one index here that is not a foreign key, and why it is kept.
+DAY_INDEXES = (
+    "ix_transaction_logs_group_id_timestamp",
+    "ix_transaction_logs_from_group_id_timestamp",
+)
 
-    The report wants the last 24 hours of a log that holds every movement ever
-    made. With this index the planner starts from those hours; without it the
-    best plan left walks each visible item's entire history and sorts what
-    survives. Measured at 200,000 rows over two years: 0.6 ms against 53 ms.
+
+def test_each_arm_of_the_daily_movement_report_ranges_over_its_composite_index(
+    client, mock_matrix_db, db_session, group_graph
+):
+    """DATA-M9-2. The two indexes here that lead with a foreign key and go on
+    to the timestamp, and why each is there.
+
+    The report is one group's calendar day, the rows filed under the group
+    through group_id or through from_group_id, as a UNION of two SELECTs. Each
+    arm is an IN on its group column and a range on the timestamp, and each
+    has the composite that serves exactly that, so the planner seeks the
+    group's rows for the day and reads nothing else. Before DATA-M9-2 one
+    index on the timestamp alone served a 24-hour window over every item the
+    caller could see; it was dropped with the window.
+
+    Measured on SQLite at 200,000 rows over two years, 38 companies, one
+    company's past day (7 rows), the route's own statement: 0.07 ms with the
+    two composites, 8.8 ms with the pair it had before (the timestamp alone
+    and from_group_id alone), 126 ms with neither. On Postgres (pgserver,
+    same seed, EXPLAIN ANALYZE, not asserted here): a bitmap index scan on
+    each composite, then the day's ids fetched by primary key, 0.4 ms. That
+    second half needs the route to JOIN the union rather than test
+    `id IN (union)`: with the IN, Postgres read and joined all 200,000 rows
+    first, 226 ms, while SQLite planned both forms alike, so this test cannot
+    see the difference.
 
     NEEDS STATISTICS, unlike the tests above, and that is a property of the
     plan rather than a convenience of the test. Knowing nothing about the
-    table, SQLite prefers the equality on equipment_id to a range on timestamp
-    and this index goes unused. It is chosen once ANALYZE has told the planner
-    how few rows a day is -- which is the situation of any database old enough
-    for the question to matter. Forty rows over thirty days is enough to say so.
+    table, SQLite can prefer the equality on equipment_id that the join to
+    the item offers, and the composites go unused. They are chosen once
+    ANALYZE has told the planner how few rows a group's day is -- which is
+    the situation of any database old enough for the question to matter.
+    Forty rows over fifteen days, on one item, is enough to say so.
 
-    maintenance_logs.opened_at was indexed on the same reasoning and then not,
-    because the same measurement refuted it: the ticket list has no LIMIT, so
-    every visible ticket is fetched and sorted whatever index exists. See the
-    revision's own docstring.
+    maintenance_logs.opened_at was indexed on the same reasoning as the old
+    timestamp index and then not, because a measurement refuted it: the
+    ticket list has no LIMIT, so every visible ticket is fetched and sorted
+    whatever index exists. See f4d81b2c6a93's docstring.
     """
     item = _item_id(db_session, "SA100")
-    now = clock.utcnow()
-    db_session.add_all(
+    company_a, company_b = group_graph["188/53/A"].id, group_graph["188/53/B"].id
+    tz = clock.zone(clock.DEFAULT_TIMEZONE)
+    day = clock.today_in(tz) - timedelta(days=10)
+    start, end = clock.day_bounds(tz, day)
+    noon = start + (end - start) / 2
+
+    # Every row is filed under A: half through group_id (they arrived), half
+    # only through from_group_id (they left for B). So each arm has rows to
+    # find in the day, and each arm's index is what finds them.
+    logs = [
         models.TransactionLog(
-            equipment_id=item, event_type="HANDOVER", timestamp=now - timedelta(hours=18 * i)
+            equipment_id=item, event_type="HANDOVER", timestamp=noon - timedelta(hours=9 * (i - 20)),
+            group_id=company_a if i % 2 else company_b,
+            from_group_id=None if i % 2 else company_a,
         )
         for i in range(40)
-    )
+    ]
+    db_session.add_all(logs)
     db_session.commit()
+    in_day = {log.id for log in logs if start <= log.timestamp < end}
     db_session.execute(text("ANALYZE"))
 
     try:
         response, plans = _plans(
-            client, db_session, "u_cmdr_a", "GET", "/reports/daily_movement", "transaction_logs"
+            client, db_session, "u_cmdr_a", "GET",
+            f"/reports/daily_movement?date={day.isoformat()}", "transaction_logs",
         )
     finally:
         # The suite shares one in-memory database. Dropping the tables takes
@@ -225,8 +260,14 @@ def test_the_daily_movement_report_ranges_over_the_timestamp_index(
         db_session.commit()
 
     assert response.status_code == 200, response.text
-    assert len(response.json()) == 2, "the seed no longer puts exactly two movements inside 24 hours"
-    _assert_served_by(plans, "transaction_logs", "ix_transaction_logs_timestamp")
+    assert {row["id"] for row in response.json()["items"]} == in_day
+    arms = {log.id for log in logs if log.id in in_day and log.from_group_id is not None}
+    assert 0 < len(arms) < len(in_day), (
+        "the seed no longer puts rows of both arms in the day, so one index "
+        "would be asserted over no rows of its own"
+    )
+    for index in DAY_INDEXES:
+        _assert_served_by(plans, "transaction_logs", index)
 
 
 # --- the revision, against each state it will meet --------------------------
@@ -480,7 +521,14 @@ def test_a_pre_alembic_database_without_the_indexes_is_migrated_not_refused(
 
     assert version == _script().get_current_head()
     # Less the one whose column b7e3d91c4f2a (DATA-M8-1) drops on the way to
-    # head; tests/test_movement_history.py holds that revision.
-    assert set(_expected_indexes()) - {"ix_transaction_logs_involved_location_id"} <= present
+    # head (tests/test_movement_history.py holds that revision), and the one
+    # 3c6a0f8e2d71 (DATA-M9-2) replaces with a composite
+    # (tests/test_daily_movement_day.py).
+    assert set(_expected_indexes()) - {
+        "ix_transaction_logs_involved_location_id",
+        "ix_transaction_logs_timestamp",
+    } <= present
+    assert "ix_transaction_logs_timestamp" not in present
+    assert set(DAY_INDEXES) <= present
     assert holders == [(1, None), (2, None), (3, 1), (4, 1)]
     assert logs == [(1, None), (2, 3)]
