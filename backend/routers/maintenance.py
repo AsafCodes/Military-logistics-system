@@ -1,5 +1,6 @@
 """Maintenance Router - Tickets and fix endpoints"""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 
@@ -65,8 +66,13 @@ def get_tickets(
         query = query.filter(models.MaintenanceLog.status == status_filter.value)
     
     tickets = query.order_by(models.MaintenanceLog.opened_at.desc()).all()
-    
-    return [schemas.TicketResponse(
+
+    return [_ticket_response(t) for t in tickets]
+
+
+def _ticket_response(t: models.MaintenanceLog) -> schemas.TicketResponse:
+    """One ticket as the list and close_ticket both return it."""
+    return schemas.TicketResponse(
         id=t.id,
         equipment_id=t.equipment_id,
         fault_type_id=t.fault_type_id,
@@ -75,8 +81,82 @@ def get_tickets(
         description=t.description,
         status=t.status,
         opened_at=t.opened_at,
-        closed_at=t.closed_at
-    ) for t in tickets]
+        closed_at=t.closed_at,
+        technician_id=t.technician_id,
+    )
+
+
+def _lock_item(db: Session, item: models.Equipment) -> models.Equipment:
+    """Take the item's row lock for the rest of the transaction. DATA-M21.
+
+    The three routes that open or close an item's tickets take it before
+    they write a ticket or the item (report_fault after its fault-type
+    commit, which would release it), so they run one at a time per item.
+    Without it, a close
+    that counts the item's open tickets while a report commits a new one can
+    set the item Functional with a ticket still open.
+
+    SELECT ... FOR UPDATE on Postgres. SQLite has no row locks and SQLAlchemy
+    leaves the clause out there; SQLite takes one write lock for the whole
+    database instead.
+
+    populate_existing, because the item was loaded before the lock and
+    set_status reads its status as the "from" of the history row. The row as
+    it stands once the lock is held is the one to read.
+    """
+    return (
+        db.query(models.Equipment)
+        .filter(models.Equipment.id == item.id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
+
+
+def _not_closed():
+    """A ticket that is not closed yet, NULL status included.
+
+    is_distinct_from, not `!=`: the column is nullable and its default is
+    Python-side only, so raw SQL can store NULL, and `NULL != 'Closed'` is
+    NULL, not TRUE. A bare `!=` skipped such a ticket in both the close and
+    the count of what is still open, so close_ticket repaired the item, left
+    the ticket NULL and committed before failing on the response. The same
+    three-valued-logic ruling as dependencies.scope_equipment_query's.
+    """
+    return models.MaintenanceLog.status.is_distinct_from(TicketStatus.CLOSED.value)
+
+
+def _close_tickets(db: Session, *criteria, actor: models.User) -> int:
+    """Close the matching tickets that are not closed yet. Returns how many.
+
+    The pragma sits on the first line of the statement because that is where
+    the AST reports the call, and the guard reads the line a node starts on. A
+    ticket's Open/Closed is not an equipment status -- equipment_status_history
+    has no row shape for it -- so this bypass is permanent. It is the only one
+    in the backend: DATA-H4-2 deleted the two that were waiting for it, and
+    DATA-M21 moved this one here so close_ticket and fix_equipment share it.
+    """
+    return db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
+        *criteria, _not_closed()
+    ).update(
+        # DATA-H12-2. `.value` rather than the member, and here it is load-
+        # bearing rather than defensive: this is a Core UPDATE that bypasses
+        # the ORM, so the value goes to the driver as written.
+        #
+        # The dict key stays the bare string "status" because it is a COLUMN
+        # name, not a status value -- and test_audit_trail.py's _names_column
+        # guard matches exactly that key, which is why the bypass pragma above
+        # has to stay with it.
+        #
+        # technician_id is the person who closed the ticket (DATA-M21). The
+        # column was in the first schema and nothing wrote it before.
+        {
+            "status": TicketStatus.CLOSED.value,
+            "closed_at": clock.utcnow(),
+            "technician_id": actor.id,
+        },
+        synchronize_session=False,
+    )
 
 @router.post("/maintenance/report")
 def report_fault(
@@ -120,7 +200,11 @@ def report_fault(
         db.add(fault_type)
         db.commit()
         db.refresh(fault_type)
-    
+
+    # DATA-M21. Below the commit above, which would release it. A close that
+    # runs at the same time either sees this ticket or runs after it.
+    item = _lock_item(db, item)
+
     # Create maintenance log
     log = models.MaintenanceLog(
         equipment_id=item.id,
@@ -157,7 +241,7 @@ def report_fault(
     # row reading "Functional -> Malfunctioning, fault_report" with no why, when
     # the why arrived in the same request. It is duplicated onto the ticket
     # above, and that is the lesser cost: the ticket is closed and filtered out
-    # by fix_equipment, while this row is the permanent record.
+    # by close_ticket or fix_equipment, while this row is the permanent record.
     #
     # `or None` for the same reason fix_equipment uses it below: schemas.py
     # declares description as a bare `str` with no min_length, so "" is a legal
@@ -196,8 +280,13 @@ def fix_equipment(
     # declare it fixed, and a company commander may report on their company's
     # kit and may not close the ticket -- the technical function does that.
     # Those two refusals are the only reason the second verb exists.
+    #
+    # DATA-M21. This route repairs the whole ITEM, so it still closes every
+    # open ticket of it. A single ticket is closed by close_ticket below,
+    # which is what the maintenance page's button calls.
     item = get_scoped_equipment_or_404(db, current_user, equipment_id)
     authz.require(db, current_user.id, Capability.RESOLVE_FAULT, item.group_id)
+    item = _lock_item(db, item)
 
     # DATA-H4-2. This route already logged the FIX below and wrote no history
     # row, so an item could be broken and repaired for years while
@@ -206,7 +295,7 @@ def fix_equipment(
     #
     # `notes or None` writes NULL today and will keep writing NULL until
     # DATA-M5 lands: `notes` is a QUERY PARAMETER and no client sends one
-    # (EquipmentPage.tsx, MaintenancePage.tsx both post with no body), so it is
+    # (EquipmentPage.tsx, its one caller, posts with no body), so it is
     # always "". Storing that empty string would put a value in the column that
     # means "the repairer said nothing" and looks like "the repairer said
     # nothing in particular"; NULL says the first honestly.
@@ -219,27 +308,9 @@ def fix_equipment(
         notes=notes or None,
     )
 
-    # Close open tickets.
-    #
-    # The pragma sits on this line because that is where the AST reports the
-    # call, and the guard reads the line a node starts on. A ticket's
-    # Open/Closed is not an equipment status -- equipment_status_history has no
-    # row shape for it -- so this bypass is permanent. It is now the only one
-    # in the backend: DATA-H4-2 deleted the two that were waiting for it.
-    db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
-        models.MaintenanceLog.equipment_id == item.id,
-        models.MaintenanceLog.status != TicketStatus.CLOSED.value
-    ).update(
-        # DATA-H12-2. `.value` rather than the member, and here it is load-
-        # bearing rather than defensive: this is a Core UPDATE that bypasses
-        # the ORM, so the value goes to the driver as written.
-        #
-        # The dict key stays the bare string "status" because it is a COLUMN
-        # name, not a status value -- and test_audit_trail.py's _names_column
-        # guard matches exactly that key, which is why the bypass pragma above
-        # has to stay with it.
-        {"status": TicketStatus.CLOSED.value, "closed_at": clock.utcnow()},
-        synchronize_session=False,
+    # Close the item's open tickets.
+    _close_tickets(
+        db, models.MaintenanceLog.equipment_id == item.id, actor=current_user
     )
 
     # This site is why record_event normalises user_status_at_time: the other
@@ -255,3 +326,73 @@ def fix_equipment(
 
     db.commit()
     return {"status": "Fixed", "notes": notes}
+
+
+@router.post(
+    "/maintenance/tickets/{ticket_id}/close", response_model=schemas.TicketResponse
+)
+def close_ticket(
+    ticket_id: schemas.DbInt,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Close one ticket. DATA-M21.
+
+    The maintenance page's button used to post fix_equipment with the
+    ticket's item, which closed every open ticket of that item and declared
+    it repaired. This closes the one ticket. The item turns Functional only
+    when no other ticket of it is still open, with the same REPAIR history row
+    and FIX event fix_equipment writes. Closing one of several writes neither:
+    nothing about the item has changed.
+    """
+    # Resolve, then gate, as fix_equipment does. A ticket is as visible as its
+    # item, so an id outside the caller's sight answers the same 404 as one
+    # that was never issued.
+    ticket = scope_equipment_derived_query(
+        db.query(models.MaintenanceLog).filter(models.MaintenanceLog.id == ticket_id),
+        models.MaintenanceLog,
+        current_user,
+    ).first()
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    item = ticket.equipment
+    authz.require(db, current_user.id, Capability.RESOLVE_FAULT, item.group_id)
+    item = _lock_item(db, item)
+
+    # Read again under the lock: a close that ran while this request waited
+    # for it has already closed the ticket. A column query, so the identity
+    # map's copy of the ticket cannot answer instead of the database.
+    status = (
+        db.query(models.MaintenanceLog.status)
+        .filter(models.MaintenanceLog.id == ticket.id)
+        .scalar()
+    )
+    if status == TicketStatus.CLOSED.value:
+        raise HTTPException(status_code=409, detail="Ticket already closed")
+
+    _close_tickets(db, models.MaintenanceLog.id == ticket.id, actor=current_user)
+
+    still_open = (
+        db.query(func.count(models.MaintenanceLog.id))
+        .filter(models.MaintenanceLog.equipment_id == item.id, _not_closed())
+        .scalar()
+    )
+    if still_open == 0:
+        audit_trail.set_status(
+            db,
+            equipment=item,
+            actor=current_user,
+            new_status=EquipmentStatus.FUNCTIONAL,
+            reason=ChangeReason.REPAIR,
+            notes=None,
+        )
+        audit_trail.record_event(
+            db,
+            equipment=item,
+            actor=current_user,
+            event_type=EventType.FIX,
+        )
+
+    db.commit()
+    db.refresh(ticket)
+    return _ticket_response(ticket)

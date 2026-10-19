@@ -521,6 +521,8 @@ export default function EquipmentPage() {
         }
     };
 
+    // Repairs the whole item, so the backend closes every open ticket of it.
+    // MaintenancePage closes one ticket by its own id (DATA-M21).
     const handleRepair = async (item: Equipment) => {
         try {
             await api.post(`/maintenance/fix/${item.id}`);

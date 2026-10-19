@@ -67,9 +67,11 @@ const formatDate = (dateStr: string | null | undefined) => {
 // ============================================================
 
 export default function MaintenancePage() {
-    // SEC-H10-3. Same real gate as EquipmentPage's תקן button (both hit
-    // POST /maintenance/fix/{id}) -- see EquipmentPage.tsx for why this stays
-    // a bare capability check with no possession arm.
+    // SEC-H10-3. Same real gate as EquipmentPage's תקן button: this one posts
+    // POST /maintenance/tickets/{id}/close and that one
+    // POST /maintenance/fix/{id} (DATA-M21), both behind RESOLVE_FAULT. See
+    // EquipmentPage.tsx for why this stays a bare capability check with no
+    // possession arm.
     const caps = useCapabilities();
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [loading, setLoading] = useState(true);
@@ -131,7 +133,9 @@ export default function MaintenancePage() {
     const handleCloseTicket = async (ticket: Ticket) => {
         setFixingId(ticket.id);
         try {
-            await api.post(`/maintenance/fix/${ticket.equipment_id}`);
+            // DATA-M21: by the ticket's own id. The item route closed every
+            // open ticket of the item.
+            await api.post(`/maintenance/tickets/${ticket.id}/close`);
             reload();
         } catch (err) {
             console.error(err);
@@ -295,7 +299,7 @@ export default function MaintenancePage() {
                                             ) : (
                                                 <>
                                                     <CheckCircle size={14} />
-                                                    סגור כרטיס ותקן ציוד
+                                                    סגור כרטיס
                                                 </>
                                             )}
                                         </button>

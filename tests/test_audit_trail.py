@@ -49,9 +49,10 @@ AUDIT_TABLES = ("TransactionLog", "EquipmentStatusHistory")
 #
 # DATA-H4-1 left two of these carrying `DATA-H4-2`, on report_fault's and
 # fix_equipment's bare assignments; DATA-H4-2 cut both routes onto the helper
-# and deleted them. The one that remains is fix_equipment's ticket-closing bulk
-# update, and it is permanent -- a ticket's Open/Closed is not an equipment
-# status and equipment_status_history has no row shape for it.
+# and deleted them. The one that remains is the ticket-closing bulk update in
+# maintenance._close_tickets (fix_equipment's until DATA-M21 moved it there for
+# close_ticket to share), and it is permanent -- a ticket's Open/Closed is not
+# an equipment status and equipment_status_history has no row shape for it.
 #
 # DATA-H4-3 added a second guarded column and no fourth pragma: set_sensitivity
 # had one assignment and it moved into the writer whole. A guard arriving with
@@ -137,9 +138,10 @@ def column_assignments(tree, column):
     are not hits -- verified against both.
 
     The second is `query(...).update({"status": ...})`, which issues UPDATE
-    without ever touching an attribute. Not hypothetical: fix_equipment uses
-    exactly this idiom on MaintenanceLog four lines from its own status write,
-    so it is live house style, and an author reaching for it on equipment would
+    without ever touching an attribute. Not hypothetical: maintenance's
+    _close_tickets uses exactly this idiom on MaintenanceLog, in the routes
+    that also write the item's status, so it is live house style, and an
+    author reaching for it on equipment would
     move a status past a guard that only watched attributes.
 
     EVERY model, not just Equipment. An earlier version required the name
@@ -316,7 +318,8 @@ def test_only_audit_trail_assigns_equipment_status():
     there is no prior status for a history row to record.
 
     An intended bypass marks its own line with the pragma above. The one that
-    exists is fix_equipment's ticket-closing bulk update, which is permanent.
+    exists is maintenance._close_tickets' ticket-closing bulk update, which is
+    permanent.
 
     The match is on the NAME `status`, with no idea whose. An unrelated class
     doing `self.status = "ok"` under backend/ would be flagged, and the right

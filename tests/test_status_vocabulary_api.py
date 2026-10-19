@@ -244,7 +244,7 @@ def test_a_valid_ticket_status_still_filters(
     """Same pairing for the ticket list, plus the member no writer assigns.
 
     IN_PROGRESS is accepted and answers empty on purpose. No backend path
-    assigns it -- report_fault writes OPEN and fix_equipment writes CLOSED --
+    assigns it -- report_fault writes OPEN, close_ticket and fix_equipment CLOSED --
     so the emptiness is a true statement about the queue rather than a lie
     about the query, and DATA-M22 is what gives it a writer. MaintenancePage.tsx
     already renders the tab.

@@ -349,7 +349,7 @@ class TicketResponse(BaseModel):
 
     # DATA-H12-2, and the one of the six that admits a value no backend path
     # writes: TicketStatus carries IN_PROGRESS and WAITING_PARTS, which
-    # report_fault and fix_equipment between them never assign. That is
+    # report_fault, close_ticket and fix_equipment never assign. That is
     # deliberate on both sides -- ck_maintenance_logs_status admits all four so
     # DATA-M22 stays a route change rather than a migration, and this field
     # admits all four so it will not have to be widened on the same day.
@@ -365,6 +365,10 @@ class TicketResponse(BaseModel):
     # list response with it (DATA-M12's shape).
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
+
+    # DATA-M21. Who closed the ticket. Optional: an open ticket has nobody,
+    # and so does every ticket closed before DATA-M21, when nothing wrote it.
+    technician_id: Optional[int] = None
 
     # DATA-H2, named not fixed: neither exists on MaintenanceLog and neither is
     # ever passed, so both are constants presented as data -- the same falsehood

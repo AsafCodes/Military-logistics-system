@@ -159,7 +159,7 @@ describe('MaintenancePage: loads after the first (FE-H6-3)', () => {
         const { posts, held, spinner } = await mountWithOneTicket();
 
         fireEvent.click(screen.getByText(CLOSE));
-        expect(posts.map(p => p.url)).toEqual(['/maintenance/fix/10']);
+        expect(posts.map(p => p.url)).toEqual(['/maintenance/tickets/1/close']);
         await act(async () => { posts[0].resolve(); });
 
         expect(held).toHaveLength(2);

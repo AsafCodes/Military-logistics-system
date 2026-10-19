@@ -107,6 +107,9 @@ CASES = {
         lambda v, r: {"equipment_id": v, "fault_name": "X", "description": "d"}),
     ("POST", "/maintenance/fix/{equipment_id}", "path", "equipment_id"): (
         lambda v, r: f"/maintenance/fix/{v}", None),
+    # DATA-M21.
+    ("POST", "/maintenance/tickets/{ticket_id}/close", "path", "ticket_id"): (
+        lambda v, r: f"/maintenance/tickets/{v}/close", None),
     ("PATCH", "/groups/{group_id}", "path", "group_id"): (
         lambda v, r: f"/groups/{v}", lambda v, r: {"timezone": "Europe/Vienna"}),
     ("PUT", "/setup/fault_types/{fault_id}/approve", "path", "fault_id"): (

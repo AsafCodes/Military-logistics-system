@@ -157,7 +157,8 @@ class TicketStatus(str, enum.Enum):
         later is a migration either way.
 
     The two that ARE written are OPEN (this column's default, and report_fault)
-    and CLOSED (fix_equipment). Both were bare string literals in
+    and CLOSED (maintenance._close_tickets, which close_ticket and
+    fix_equipment both call since DATA-M21). Both were bare string literals in
     routers/maintenance.py until DATA-H12-2, which sources them from here --
     along with the ticket-list filter, which is typed to this enum and so
     answers 422 for a status outside it rather than 200 with an empty list.
@@ -215,7 +216,8 @@ class EventType(str, enum.Enum):
     # equipment.verify_equipment_daily -- the daily presence confirmation,
     # NOT verifications.create_verification's condition report.
     FIX = "FIX"
-    # maintenance.fix_equipment. The V4.0 root main.py spelled this event
+    # maintenance.fix_equipment, and maintenance.close_ticket when it closes
+    # the item's last open ticket. The V4.0 root main.py spelled this event
     # 'REPAIR'; revision b7e3d91c4f2a (DATA-M8-1) renames those rows.
     ASSIGN = "ASSIGN"
     # equipment.assign_owner. DATA-H4's headline: a change of custody wrote
@@ -298,7 +300,8 @@ class ChangeReason(str, enum.Enum):
     FAULT_REPORT = "fault_report"
     # maintenance.report_fault.
     REPAIR = "repair"
-    # maintenance.fix_equipment.
+    # maintenance.fix_equipment, and maintenance.close_ticket when it closes
+    # the item's last open ticket.
 
 
 class GroupKind(str, enum.Enum):
@@ -434,7 +437,8 @@ class Capability(str, enum.Enum):
     REPORT_STATUS = "REPORT_STATUS"
     # maintenance.report_fault, verifications.create_verification.
     RESOLVE_FAULT = "RESOLVE_FAULT"
-    # maintenance.fix_equipment, on the group the item belongs to.
+    # maintenance.fix_equipment and maintenance.close_ticket, on the group the
+    # item belongs to.
     SET_SENSITIVITY = "SET_SENSITIVITY"
     # equipment.set_sensitivity, and equipment.create_equipment when the
     # request names a sensitivity. On the group the item belongs to.

@@ -297,7 +297,7 @@ def test_a_never_verified_item_is_severe(db_session):
 
 
 def test_bulk_update_writes_an_aware_correct_closed_at(client, mock_matrix_db, token_master, db_session):
-    """maintenance.py:152 writes closed_at through Query.update(), not an ORM
+    """maintenance._close_tickets writes closed_at through Query.update(), not an ORM
     attribute assignment -- a different path through the bind processor than
     every other site here, and worth its own pin.
     """
