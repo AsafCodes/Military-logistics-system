@@ -24,7 +24,7 @@ const EMPTY_DAY = {
 const DATA_LOADS = {
     '/analytics/unit_readiness': { readiness_percentage: 80, total_items: 5, functional_items: 4 },
     '/equipment/accessible': [],
-    '/tickets/?status_filter=Open': [],
+    '/tickets/': [],
     '/reports/daily_movement': EMPTY_DAY,
 };
 
@@ -69,7 +69,7 @@ describe('DashboardPage: the spinner covers the whole first load (FE-H6-2)', () 
     it('keeps the spinner while the data reads are out, and drops it when they answer', async () => {
         const { held } = holdGets(api, {
             '/users/me': TEST_USER,
-            '/tickets/?status_filter=Open': [],
+            '/tickets/': [],
             '/reports/daily_movement': EMPTY_DAY,
         });
         const { container } = render(<DashboardPage />);
@@ -113,7 +113,7 @@ describe('DashboardPage: Refresh twice, the latest load wins (FE-H5)', () => {
         // page's own pair is held.
         const { held } = holdGets(api, {
             '/users/me': TEST_USER,
-            '/tickets/?status_filter=Open': [],
+            '/tickets/': [],
             '/reports/daily_movement': EMPTY_DAY,
         });
         render(<DashboardPage />);

@@ -110,6 +110,11 @@ CASES = {
     # DATA-M21.
     ("POST", "/maintenance/tickets/{ticket_id}/close", "path", "ticket_id"): (
         lambda v, r: f"/maintenance/tickets/{v}/close", None),
+    # DATA-M22.
+    ("POST", "/maintenance/tickets/{ticket_id}/start", "path", "ticket_id"): (
+        lambda v, r: f"/maintenance/tickets/{v}/start", None),
+    ("POST", "/maintenance/tickets/{ticket_id}/release", "path", "ticket_id"): (
+        lambda v, r: f"/maintenance/tickets/{v}/release", None),
     ("PATCH", "/groups/{group_id}", "path", "group_id"): (
         lambda v, r: f"/groups/{v}", lambda v, r: {"timezone": "Europe/Vienna"}),
     ("PUT", "/setup/fault_types/{fault_id}/approve", "path", "fault_id"): (

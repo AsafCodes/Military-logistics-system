@@ -170,8 +170,10 @@ def test_a_ticket_of_another_item_does_not_count_as_still_open(client, db_sessio
 def test_a_ticket_in_any_unclosed_status_counts_and_closes(
     status, client, db_session, mock_matrix_db
 ):
-    """No route writes these two today (DATA-M22), and the constraint admits
-    them. A sibling in either keeps the item broken, and either can be closed."""
+    """start_ticket writes the first (DATA-M22), nothing writes the second,
+    and the constraint admits both. Set by raw SQL here so this stays about
+    the close. A sibling in either keeps the item broken, and either can be
+    closed."""
     item = item_named(db_session, "SA100")
     first = open_ticket(client, item.id, "Cracked Housing")
     second = open_ticket(client, item.id, "Dead Battery")

@@ -243,11 +243,11 @@ def test_a_valid_ticket_status_still_filters(
 ):
     """Same pairing for the ticket list, plus the member no writer assigns.
 
-    IN_PROGRESS is accepted and answers empty on purpose. No backend path
-    assigns it -- report_fault writes OPEN, close_ticket and fix_equipment CLOSED --
-    so the emptiness is a true statement about the queue rather than a lie
-    about the query, and DATA-M22 is what gives it a writer. MaintenancePage.tsx
-    already renders the tab.
+    WAITING_PARTS is accepted and answers empty on purpose. No backend path
+    assigns it -- DATA-M22 gave IN_PROGRESS its writer and kept this one
+    without -- so the emptiness is a true statement about the queue rather
+    than a lie about the query. CLOSED and IN_PROGRESS have writers, and
+    answer empty here only because the one ticket is Open.
     """
     _open_ticket(client, token_master, _item(db_session).id)
 
@@ -259,16 +259,16 @@ def test_a_valid_ticket_status_still_filters(
     assert open_tickets.status_code == 200, open_tickets.text
     assert [t["status"] for t in open_tickets.json()] == ["Open"]
 
-    for unwritten in (TicketStatus.CLOSED, TicketStatus.IN_PROGRESS):
+    for absent in (TicketStatus.CLOSED, TicketStatus.IN_PROGRESS, TicketStatus.WAITING_PARTS):
         response = client.get(
             "/tickets/",
-            params={"status_filter": unwritten.value},
+            params={"status_filter": absent.value},
             headers=token_master,
         )
         assert response.status_code == 200, response.text
         assert response.json() == [], (
-            f"{unwritten.value!r} is in the vocabulary and must be accepted "
-            "even though nothing writes it"
+            f"{absent.value!r} is in the vocabulary and must be accepted "
+            "even when no ticket holds it"
         )
 
 

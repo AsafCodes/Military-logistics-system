@@ -27,13 +27,12 @@ def get_tickets(
     # answered 200 with an empty list, which reads as "no tickets" rather than
     # "no such status". 422 now, naming the four members.
     #
-    # Admits IN_PROGRESS and WAITING_PARTS, which no route assigns, so the
-    # filter accepts a value that always answers empty. That is correct: the
-    # emptiness is then a true statement about the queue rather than a lie
-    # about the query, and it is DATA-M22 that gives the first of the two a
-    # writer. The frontend already asks for it -- MaintenancePage.tsx renders
-    # an "In Progress" tab -- though it filters client-side and only
-    # StatsGrid.tsx sends this parameter, always as Open.
+    # Admits WAITING_PARTS, which no route assigns, so the filter accepts a
+    # value that always answers empty. That is correct: the emptiness is then
+    # a true statement about the queue rather than a lie about the query.
+    # IN_PROGRESS has a writer since DATA-M22 (start_ticket).
+    # No client in this repository sends the parameter: MaintenancePage.tsx
+    # and StatsGrid.tsx both fetch the whole list and filter it themselves.
     status_filter: Optional[TicketStatus] = Query(None, description="Filter by ticket status"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
@@ -51,6 +50,7 @@ def get_tickets(
         db.query(models.MaintenanceLog).options(
             joinedload(models.MaintenanceLog.equipment),
             joinedload(models.MaintenanceLog.fault_type),
+            joinedload(models.MaintenanceLog.assignee),
         ),
         models.MaintenanceLog,
         current_user,
@@ -71,7 +71,7 @@ def get_tickets(
 
 
 def _ticket_response(t: models.MaintenanceLog) -> schemas.TicketResponse:
-    """One ticket as the list and close_ticket both return it."""
+    """One ticket as the list and the three ticket routes return it."""
     return schemas.TicketResponse(
         id=t.id,
         equipment_id=t.equipment_id,
@@ -83,15 +83,20 @@ def _ticket_response(t: models.MaintenanceLog) -> schemas.TicketResponse:
         opened_at=t.opened_at,
         closed_at=t.closed_at,
         technician_id=t.technician_id,
+        assigned_to_id=t.assigned_to_id,
+        assigned_to_name=t.assignee.full_name if t.assignee else None,
+        started_at=t.started_at,
     )
 
 
 def _lock_item(db: Session, item: models.Equipment) -> models.Equipment:
     """Take the item's row lock for the rest of the transaction. DATA-M21.
 
-    The three routes that open or close an item's tickets take it before
-    they write a ticket or the item (report_fault after its fault-type
-    commit, which would release it), so they run one at a time per item.
+    Every route that writes an item's tickets takes it before it writes a
+    ticket or the item (report_fault after its fault-type commit, which would
+    release it), so they run one at a time per item. Since DATA-M22 that is
+    five: report_fault, fix_equipment, close_ticket, start_ticket and
+    release_ticket.
     Without it, a close
     that counts the item's open tickets while a report commits a new one can
     set the item Functional with a ticket still open.
@@ -126,37 +131,108 @@ def _not_closed():
     return models.MaintenanceLog.status.is_distinct_from(TicketStatus.CLOSED.value)
 
 
+def _update_tickets(db: Session, *criteria, status: TicketStatus, **columns) -> int:
+    """Set the matching tickets' status, and `columns` with it. Returns how many.
+
+    Every change of a ticket's status goes through here (report_fault's
+    INSERT and the column default set the first one). The pragma sits on the
+    first line of the statement because that is where the AST reports the
+    call, and the guard reads the line a node starts on. A ticket's status is not an
+    equipment status -- equipment_status_history has no row shape for it -- so
+    this bypass is permanent. It is the only one in the backend: DATA-H4-2
+    deleted the two that were waiting for it, DATA-M21 moved this one into a
+    helper so close_ticket and fix_equipment share it, and DATA-M22 widened
+    the helper to every status so start and release share it too.
+
+    The dict stays a literal inside the call, with "status" spelled out as
+    its key, because that is the shape test_audit_trail.py's guard reads: a
+    `.update()` whose argument is a dict naming the column. Handed a variable
+    instead, the guard sees nothing here and the pragma waives nothing --
+    measured during DATA-M22, which first wrote it that way. `**columns`
+    inside the literal leaves the status key where the guard can see it.
+
+    `.value` rather than the member (DATA-H12-2), and here it is load-bearing
+    rather than defensive: this is a Core UPDATE that bypasses the ORM, so
+    the value goes to the driver as written.
+    """
+    return db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
+        *criteria
+    ).update({"status": status.value, **columns}, synchronize_session=False)
+
+
 def _close_tickets(db: Session, *criteria, actor: models.User) -> int:
     """Close the matching tickets that are not closed yet. Returns how many.
 
-    The pragma sits on the first line of the statement because that is where
-    the AST reports the call, and the guard reads the line a node starts on. A
-    ticket's Open/Closed is not an equipment status -- equipment_status_history
-    has no row shape for it -- so this bypass is permanent. It is the only one
-    in the backend: DATA-H4-2 deleted the two that were waiting for it, and
-    DATA-M21 moved this one here so close_ticket and fix_equipment share it.
+    technician_id is the person who closed the ticket (DATA-M21). The column
+    was in the first schema and nothing wrote it before. assigned_to_id and
+    started_at are left as they are (DATA-M22): a ticket someone took says
+    who worked it as well as who closed it.
     """
-    return db.query(models.MaintenanceLog).filter(  # audit-trail-bypass: permanent
-        *criteria, _not_closed()
-    ).update(
-        # DATA-H12-2. `.value` rather than the member, and here it is load-
-        # bearing rather than defensive: this is a Core UPDATE that bypasses
-        # the ORM, so the value goes to the driver as written.
-        #
-        # The dict key stays the bare string "status" because it is a COLUMN
-        # name, not a status value -- and test_audit_trail.py's _names_column
-        # guard matches exactly that key, which is why the bypass pragma above
-        # has to stay with it.
-        #
-        # technician_id is the person who closed the ticket (DATA-M21). The
-        # column was in the first schema and nothing wrote it before.
-        {
-            "status": TicketStatus.CLOSED.value,
-            "closed_at": clock.utcnow(),
-            "technician_id": actor.id,
-        },
-        synchronize_session=False,
+    return _update_tickets(
+        db,
+        *criteria,
+        _not_closed(),
+        status=TicketStatus.CLOSED,
+        closed_at=clock.utcnow(),
+        technician_id=actor.id,
     )
+
+
+def _transition(
+    db: Session,
+    ticket_id: int,
+    actor: models.User,
+    *,
+    expected: TicketStatus,
+    status: TicketStatus,
+    columns: dict,
+    conflict: str,
+) -> schemas.TicketResponse:
+    """Move one ticket from `expected` to `status`, writing `columns` with it.
+    DATA-M22.
+
+    start_ticket and release_ticket, in close_ticket's order: resolve within
+    the caller's scope (404), gate on RESOLVE_FAULT over the item's group,
+    take the item lock, then write.
+
+    The write names `expected` as a criterion, and a write that matched no
+    row is the 409. That is the status check, made by the UPDATE itself
+    rather than by a read before it, so nothing can change the status
+    between the check and the write. A NULL status matches no `expected`
+    and answers 409 too.
+
+    No history row and no transaction event, decided in DATA-M22's plan.
+    Neither table is about tickets: equipment_status_history records the
+    item's condition, which a take does not change (it is Malfunctioning
+    before and after), and transaction_logs records acts on the item, which a
+    take is not. FAULT is different: EventType writes it unconditionally
+    because a report is about the item. Who holds a ticket and since when is
+    on the ticket itself. The cost is that the ticket keeps only the current
+    claim, so a release leaves no trace of who held it.
+    """
+    ticket = scope_equipment_derived_query(
+        db.query(models.MaintenanceLog).filter(models.MaintenanceLog.id == ticket_id),
+        models.MaintenanceLog,
+        actor,
+    ).first()
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    item = ticket.equipment
+    authz.require(db, actor.id, Capability.RESOLVE_FAULT, item.group_id)
+    _lock_item(db, item)
+
+    moved = _update_tickets(
+        db,
+        models.MaintenanceLog.id == ticket.id,
+        models.MaintenanceLog.status == expected.value,
+        status=status,
+        **columns,
+    )
+    if moved == 0:
+        raise HTTPException(status_code=409, detail=conflict)
+    db.commit()
+    db.refresh(ticket)
+    return _ticket_response(ticket)
 
 @router.post("/maintenance/report")
 def report_fault(
@@ -396,3 +472,52 @@ def close_ticket(
     db.commit()
     db.refresh(ticket)
     return _ticket_response(ticket)
+
+
+@router.post(
+    "/maintenance/tickets/{ticket_id}/start", response_model=schemas.TicketResponse
+)
+def start_ticket(
+    ticket_id: schemas.DbInt,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Take an Open ticket: In Progress, assigned to the caller. DATA-M22.
+
+    RESOLVE_FAULT, the verb that closes it. Taking a ticket is the first half
+    of resolving it, and a verb of its own would be held by exactly the rows
+    that hold this one (see Capability's docstring).
+    """
+    return _transition(
+        db,
+        ticket_id,
+        current_user,
+        expected=TicketStatus.OPEN,
+        status=TicketStatus.IN_PROGRESS,
+        columns={"assigned_to_id": current_user.id, "started_at": clock.utcnow()},
+        conflict="Ticket is not open",
+    )
+
+
+@router.post(
+    "/maintenance/tickets/{ticket_id}/release", response_model=schemas.TicketResponse
+)
+def release_ticket(
+    ticket_id: schemas.DbInt,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Put an In Progress ticket back in the queue: Open, nobody's. DATA-M22.
+
+    Any RESOLVE_FAULT holder over the item may release it, not only whoever
+    took it, so a ticket someone took and walked away from can be freed.
+    """
+    return _transition(
+        db,
+        ticket_id,
+        current_user,
+        expected=TicketStatus.IN_PROGRESS,
+        status=TicketStatus.OPEN,
+        columns={"assigned_to_id": None, "started_at": None},
+        conflict="Ticket is not in progress",
+    )

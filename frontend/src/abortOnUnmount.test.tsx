@@ -51,7 +51,7 @@ const EFFECT_CASES: Case[] = [
     {
         name: 'StatsGrid',
         ui: () => <StatsGrid stats={{ readiness_percentage: 80, total_items: 5, functional_items: 4 }} />,
-        urls: ['/tickets/?status_filter=Open'],
+        urls: ['/tickets/'],
     },
     {
         name: 'DailyActivityTable',

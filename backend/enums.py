@@ -142,26 +142,31 @@ class TicketStatus(str, enum.Enum):
     was not free to defer to it, because the delete half would have left the
     column exactly as free-text as it started.
 
-    All four members are admitted by the check constraint, and two of them are
-    written by nothing today. That is deliberate, and each is a different case:
+    All four members are admitted by the check constraint, and three of them
+    are written:
 
-      - IN_PROGRESS is offered as a filter tab by the maintenance page
-        (frontend MaintenancePage.tsx), so a client already asks for it. No
-        backend path assigns it, which makes the tab permanently empty -- a
-        product gap, not a vocabulary one. Admitting it means implementing that
-        tab is a route change rather than a migration.
-      - WAITING_PARTS appears nowhere else in this repository, frontend
-        included. It is kept because narrowing the vocabulary to what happens
-        to be written today would make the constraint a record of current
-        behaviour rather than of the domain, and because removing a member
-        later is a migration either way.
+      - OPEN: this column's default, report_fault, and release_ticket, which
+        puts a ticket someone took back in the queue (DATA-M22).
+      - IN_PROGRESS: start_ticket (DATA-M22). The maintenance page offered it
+        as a tab for a long time before anything wrote it; because the
+        constraint already admitted it, the status itself needed no migration
+        (the assignee columns did).
+      - CLOSED: maintenance._close_tickets, which close_ticket and
+        fix_equipment both call (DATA-M21), from any state that is not
+        closed.
 
-    The two that ARE written are OPEN (this column's default, and report_fault)
-    and CLOSED (maintenance._close_tickets, which close_ticket and
-    fix_equipment both call since DATA-M21). Both were bare string literals in
-    routers/maintenance.py until DATA-H12-2, which sources them from here --
-    along with the ticket-list filter, which is typed to this enum and so
-    answers 422 for a status outside it rather than 200 with an empty list.
+    WAITING_PARTS is written by nothing, and DATA-M22 kept it that way on
+    purpose rather than dropping it. It appears nowhere else in this
+    repository, frontend included. It is kept because narrowing the
+    vocabulary to what happens to be written today would make the constraint
+    a record of current behaviour rather than of the domain, and because
+    removing a member later is a migration either way.
+
+    Every status change goes through maintenance._update_tickets. The values were bare
+    string literals in routers/maintenance.py until DATA-H12-2, which sources
+    them from here -- along with the ticket-list filter, which is typed to this
+    enum and so answers 422 for a status outside it rather than 200 with an
+    empty list.
     """
     OPEN = "Open"
     IN_PROGRESS = "In Progress"
@@ -349,6 +354,13 @@ class Capability(str, enum.Enum):
     is wrong about. H1-10 is where profiles.py stops being the source of truth
     and where this judgement should be confirmed or reversed on purpose.
 
+    Taking a ticket and releasing it (DATA-M22) also ask for RESOLVE_FAULT
+    rather than a verb of their own. Taking a ticket is the first half of
+    resolving it, and a separate verb would be held by exactly the seeded rows
+    that hold this one: two tables that differ only in name, the SEC-H4 shape.
+    Split it when some grant has to let an account take tickets without
+    closing them, or the reverse.
+
     MANAGE_CATALOG was declared absent here through H1-7, H1-8 and H1-9 on
     the argument that neither CatalogItem nor FaultType has a group, so the
     algebra had nothing to scope them by and the verb 'would not merely be
@@ -437,8 +449,8 @@ class Capability(str, enum.Enum):
     REPORT_STATUS = "REPORT_STATUS"
     # maintenance.report_fault, verifications.create_verification.
     RESOLVE_FAULT = "RESOLVE_FAULT"
-    # maintenance.fix_equipment and maintenance.close_ticket, on the group the
-    # item belongs to.
+    # maintenance.fix_equipment, close_ticket, start_ticket and release_ticket,
+    # on the group the item belongs to.
     SET_SENSITIVITY = "SET_SENSITIVITY"
     # equipment.set_sensitivity, and equipment.create_equipment when the
     # request names a sensitivity. On the group the item belongs to.

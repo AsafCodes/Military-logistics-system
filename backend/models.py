@@ -422,9 +422,19 @@ class MaintenanceLog(Base):
     closed_at = Column(clock.UtcDateTime, nullable=True)
     
     technician_id = Column(Integer, _restrict('maintenance_logs', 'technician_id', 'users'), nullable=True, index=True)
-    
+
+    # DATA-M22. Who took the ticket, and when. Set by start, cleared by
+    # release, and left alone by a close, so a closed ticket says who worked
+    # it (here) and who closed it (technician_id).
+    assigned_to_id = Column(
+        Integer, _restrict('maintenance_logs', 'assigned_to_id', 'users'), nullable=True, index=True
+    )
+    started_at = Column(clock.UtcDateTime, nullable=True)
+
     equipment = relationship("Equipment")
     fault_type = relationship("FaultType")
+    # foreign_keys, because technician_id is a second key to users.
+    assignee = relationship("User", foreign_keys=[assigned_to_id])
 
 # --- Solution Types ---
 class SolutionType(Base):

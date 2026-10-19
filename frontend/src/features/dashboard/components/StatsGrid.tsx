@@ -20,11 +20,20 @@ export default function StatsGrid({ stats }: StatsGridProps) {
     const [openTickets, setOpenTickets] = useState(0);
 
     // Fetch open tickets count. FE-H5: unmounting aborts the request.
+    //
+    // DATA-M22. Every ticket that is not Closed, not only status Open: a
+    // ticket someone has taken (In Progress) is still an unresolved fault,
+    // and counting Open alone would drop it from this card the moment it was
+    // taken. Filtered here, as MaintenancePage does.
     useEffect(() => {
         const controller = new AbortController();
         const { signal } = controller;
-        api.get('/tickets/?status_filter=Open', { signal })
-            .then(res => { if (!signal.aborted) setOpenTickets(Array.isArray(res.data) ? res.data.length : 0); })
+        api.get('/tickets/', { signal })
+            .then(res => {
+                if (signal.aborted) return;
+                const tickets: { status: string }[] = Array.isArray(res.data) ? res.data : [];
+                setOpenTickets(tickets.filter(t => t.status !== 'Closed').length);
+            })
             .catch(() => { if (!signal.aborted) setOpenTickets(0); });
         return () => controller.abort();
     }, []);

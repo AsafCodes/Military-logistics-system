@@ -49,10 +49,11 @@ AUDIT_TABLES = ("TransactionLog", "EquipmentStatusHistory")
 #
 # DATA-H4-1 left two of these carrying `DATA-H4-2`, on report_fault's and
 # fix_equipment's bare assignments; DATA-H4-2 cut both routes onto the helper
-# and deleted them. The one that remains is the ticket-closing bulk update in
-# maintenance._close_tickets (fix_equipment's until DATA-M21 moved it there for
-# close_ticket to share), and it is permanent -- a ticket's Open/Closed is not
-# an equipment status and equipment_status_history has no row shape for it.
+# and deleted them. The one that remains is the ticket-status bulk update in
+# maintenance._update_tickets (fix_equipment's until DATA-M21 moved it into a
+# helper for close_ticket to share, and DATA-M22 widened it to every ticket
+# status for start and release), and it is permanent -- a ticket's status is
+# not an equipment status and equipment_status_history has no row shape for it.
 #
 # DATA-H4-3 added a second guarded column and no fourth pragma: set_sensitivity
 # had one assignment and it moved into the writer whole. A guard arriving with
@@ -139,7 +140,7 @@ def column_assignments(tree, column):
 
     The second is `query(...).update({"status": ...})`, which issues UPDATE
     without ever touching an attribute. Not hypothetical: maintenance's
-    _close_tickets uses exactly this idiom on MaintenanceLog, in the routes
+    _update_tickets uses exactly this idiom on MaintenanceLog, in the routes
     that also write the item's status, so it is live house style, and an
     author reaching for it on equipment would
     move a status past a guard that only watched attributes.
@@ -318,7 +319,7 @@ def test_only_audit_trail_assigns_equipment_status():
     there is no prior status for a history row to record.
 
     An intended bypass marks its own line with the pragma above. The one that
-    exists is maintenance._close_tickets' ticket-closing bulk update, which is
+    exists is maintenance._update_tickets' ticket-status bulk update, which is
     permanent.
 
     The match is on the NAME `status`, with no idea whose. An unrelated class
@@ -435,6 +436,34 @@ def test_every_setter_declares_the_column_it_owns():
         f"audit_trail defines setters for {sorted(setters)} but declares "
         f"{sorted(audit_trail.OWNED_COLUMNS)}; a column with a setter and no "
         "declaration is guarded by nothing"
+    )
+
+
+def test_every_bypass_pragma_sits_on_a_write_the_guard_sees():
+    """A pragma waives a hit. One on a line the guard does not flag waives
+    nothing, and says a bypass is accounted for when the guard can no longer
+    see it at all.
+
+    DATA-M22 did exactly that on the way in: the ticket-status update took its
+    dict as a variable, `.update(values)`, which column_assignments cannot
+    read, so the one pragma in the backend sat on a statement the guard had
+    stopped seeing, and every test stayed green. Any ticket status written
+    through it would have passed unseen, pragma or not.
+    """
+    decorative = []
+    for relpath, source, tree in backend_sources():
+        flagged = {
+            node.lineno
+            for column in audit_trail.OWNED_COLUMNS
+            for node in column_assignments(tree, column)
+        }
+        for number, line in enumerate(source.splitlines(), start=1):
+            if BYPASS_PRAGMA in line and number not in flagged:
+                decorative.append(f"{relpath}:{number}")
+
+    assert decorative == [], (
+        "a bypass pragma sits on a line the guard does not flag, so it waives "
+        f"nothing and the write beside it is invisible to the guard: {decorative}"
     )
 
 

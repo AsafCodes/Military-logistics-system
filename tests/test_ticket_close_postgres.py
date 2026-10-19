@@ -7,8 +7,10 @@ their history row from the item's status. Each read could be stale: a close
 counting a sibling another close is about to commit would leave the item
 Malfunctioning with no ticket open, and a report reading "already
 Malfunctioning" while a repair commits would leave it Functional with a ticket
-open. So all three take the item's row lock (maintenance._lock_item,
-SELECT ... FOR UPDATE, populate_existing) and read after it.
+open. So each takes the item's row lock (maintenance._lock_item,
+SELECT ... FOR UPDATE, populate_existing) and reads after it. DATA-M22's
+start_ticket and release_ticket take it too, so every writer of an item's
+tickets runs one at a time; start_ticket's case is below with the others.
 
 Each test holds that lock from a second connection, changes what the route is
 about to read, and commits. The route must wait, then act on the committed
@@ -132,9 +134,31 @@ def _expect_no_second_repair(db, item_id):
     assert _history(db, item_id, ChangeReason.REPAIR) == []
 
 
+def _expect_not_revived(db, item_id):
+    # DATA-M22. The start matched no Open ticket and wrote nothing: the ticket
+    # closed meanwhile stays Closed and nobody's, and the sibling is untouched.
+    db.expire_all()
+    tickets = (
+        db.query(models.MaintenanceLog)
+        .filter_by(equipment_id=item_id)
+        .order_by(models.MaintenanceLog.id)
+        .all()
+    )
+    assert [(t.status, t.assigned_to_id, t.started_at) for t in tickets] == [
+        (TicketStatus.CLOSED.value, None, None),
+        (TicketStatus.OPEN.value, None, None),
+    ]
+
+
 def _close_first(client, item_id, first):
     return client.post(
         f"/maintenance/tickets/{first}/close", headers=create_auth_header("u_tech_a")
+    )
+
+
+def _start_first(client, item_id, first):
+    return client.post(
+        f"/maintenance/tickets/{first}/start", headers=create_auth_header("u_tech_a")
     )
 
 
@@ -149,6 +173,12 @@ CASES = {
     # nothing.
     "close_ticket, same ticket closed meanwhile": (
         _close_first, _close_the_same_ticket, 409, _expect_left_alone,
+    ),
+    # DATA-M22. Without the lock the start does not wait: it moves the ticket
+    # before the close commits. The UPDATE's own `status = 'Open'` is what
+    # answers 409 once it has waited.
+    "start_ticket, same ticket closed meanwhile": (
+        _start_first, _close_the_same_ticket, 409, _expect_not_revived,
     ),
     # The fault name is in the catalog by now, so the request reaches the lock
     # without first committing a new fault type.
