@@ -172,11 +172,9 @@ export default function Dashboard() {
                     )}
                 </div>
 
-                {/* Activity Feed */}
+                {/* Activity Feed. The table renders its own heading, since it
+                    names the unit and the day it read (DATA-M9-2). */}
                 <div className="glass-card overflow-hidden animate-slide-up" style={{ animationDelay: '200ms' }}>
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-border/30">
-                        <h3 className="font-bold text-foreground">פעילות אחרונה (24 שעות)</h3>
-                    </div>
                     <DailyActivityTable limit={8} />
                 </div>
             </div>

@@ -35,7 +35,7 @@
  * rather than an invisible sub-day difference a floor() would swallow.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { CanceledError } from 'axios';
 import GeneralReportPage from './GeneralReportPage';
 import api from '@/lib/axios';
@@ -44,9 +44,9 @@ import type { InventoryReportItem } from '@/types';
 
 // Every fixture `satisfies` the shared row type (API-H4), so `tsc -b` --
 // which compiles test files too -- refuses a fixture with a missing, extra
-// or wrongly-typed key. It checks SHAPE only: reporting_status is a plain
-// string, so 'Late' below type-checks although the route never sends it
-// (that vocabulary is DATA-M7's).
+// or wrongly-typed key. Since DATA-M7 that includes a reporting_status
+// outside ComplianceLevel: the 'Late' this fixture used to carry, which the
+// route never sent, no longer compiles.
 const LATE_ITEM = {
     id: 1,
     item_type: 'Rifle',
@@ -54,9 +54,9 @@ const LATE_ITEM = {
     designated_owner: 'Test Soldier',
     actual_location: 'Armory',
     serial_number: 'H1-3-PROBE',
-    // Anything but 'Reported' -- the status cell's `isReported ?` branch
-    // renders calculateDelay's output only when the row is not Reported.
-    reporting_status: 'Late',
+    // Anything but 'GOOD' -- the status cell's `isReported ?` branch
+    // renders calculateDelay's output only when the row is not GOOD.
+    reporting_status: 'WARNING',
     last_reporter: 'Test Soldier',
     last_verified_at: '2026-06-10T04:00:00Z',
 } satisfies InventoryReportItem;
@@ -194,5 +194,95 @@ describe('GeneralReportPage: Refresh twice, the latest load wins (FE-H5)', () =>
         expect(screen.getByText('RACE-NEW')).toBeInTheDocument();
         expect(screen.queryByText('RACE-OLD')).toBeNull();
         expect(error).not.toHaveBeenCalled();
+    });
+});
+
+// DATA-M7. The wire carries GOOD / WARNING / SEVERE; the page shows a Hebrew
+// label for each, in the table and in the CSV, and never the code. Each label
+// is checked on its own row, so two labels swapped would fail.
+describe('GeneralReportPage: reporting_status is shown as a Hebrew label (DATA-M7)', () => {
+    const GOOD_ROW = {
+        ...LATE_ITEM, id: 6, serial_number: 'M7-OK', reporting_status: 'GOOD',
+    } satisfies InventoryReportItem;
+    const WARNING_ROW = { ...LATE_ITEM, id: 7, serial_number: 'M7-LATE' } satisfies InventoryReportItem;
+    const SEVERE_ROW = { ...NEVER_VERIFIED_ITEM, id: 8, serial_number: 'M7-NEVER' } satisfies InventoryReportItem;
+    const LABELS = { 'M7-OK': '✓ דווח', 'M7-LATE': '⚠ דיווח באיחור', 'M7-NEVER': '✕ חריגת דיווח' };
+    // The serials avoid these words, so a match can only be a code.
+    const CODES = /\b(GOOD|WARNING|SEVERE|Reported)\b/;
+
+    async function renderRows() {
+        vi.spyOn(api, 'get').mockImplementation((url: string) => {
+            if (url === '/reports/query') return Promise.resolve({ data: [GOOD_ROW, WARNING_ROW, SEVERE_ROW] });
+            throw new Error(`unexpected URL in test: ${url}`);
+        });
+        const view = render(<GeneralReportPage />);
+        await screen.findByText('M7-OK');
+        return view;
+    }
+
+    const row = (serial: string) => screen.getByText(serial).closest('tr') as HTMLElement;
+
+    it('labels each row by its own code and prints no code', async () => {
+        const { container } = await renderRows();
+
+        for (const [serial, label] of Object.entries(LABELS)) {
+            expect(within(row(serial)).getByText(label)).toBeInTheDocument();
+        }
+        expect(container.querySelector('tbody')?.textContent).not.toMatch(CODES);
+    });
+
+    // The label alone cannot tell the two branches of the status cell apart:
+    // the issue branch would print the GOOD label too. Only the issue branch
+    // adds the delay line under it.
+    it('adds the delay line to WARNING and SEVERE rows only', async () => {
+        await renderRows();
+        const DELAY = /^(לפני \d+ (ימים|שעות)|הרגע|אין רשומה)$/;
+
+        expect(within(row('M7-OK')).queryByText(DELAY)).toBeNull();
+        expect(within(row('M7-LATE')).getByText(DELAY)).toBeInTheDocument();
+        expect(within(row('M7-NEVER')).getByText('אין רשומה')).toBeInTheDocument();
+    });
+
+    it("filters on the code: 'Issues' keeps WARNING and SEVERE, 'Reported' keeps GOOD", async () => {
+        await renderRows();
+        const select = screen.getByDisplayValue('כל הסטטוסים');
+
+        fireEvent.change(select, { target: { value: 'Issues' } });
+        expect(screen.queryByText('M7-OK')).toBeNull();
+        expect(screen.getByText('M7-LATE')).toBeInTheDocument();
+        expect(screen.getByText('M7-NEVER')).toBeInTheDocument();
+
+        fireEvent.change(select, { target: { value: 'Reported' } });
+        expect(screen.getByText('M7-OK')).toBeInTheDocument();
+        expect(screen.queryByText('M7-LATE')).toBeNull();
+        expect(screen.queryByText('M7-NEVER')).toBeNull();
+    });
+
+    it('writes the label, not the code, into the CSV export', async () => {
+        await renderRows();
+        const blobs: Blob[] = [];
+        const createObjectURL = vi.fn((blob: Blob) => { blobs.push(blob); return 'blob:report'; });
+        vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL }));
+        const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { });
+        try {
+            fireEvent.click(screen.getByText('📊 ייצוא Excel'));
+        } finally {
+            vi.unstubAllGlobals();
+        }
+
+        expect(click).toHaveBeenCalledTimes(1);
+        expect(blobs).toHaveLength(1);
+        // jsdom's Blob has no text(); its FileReader does read one.
+        const csv = await new Promise<string>(resolve => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsText(blobs[0]);
+        });
+        const lines = csv.split('\n');
+        for (const [serial, label] of Object.entries(LABELS)) {
+            const line = lines.find(l => l.includes(`"${serial}"`));
+            expect(line).toContain(`"${label}"`);
+        }
+        expect(lines.slice(1).join('\n')).not.toMatch(CODES);
     });
 });

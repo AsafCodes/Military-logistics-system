@@ -31,8 +31,8 @@ def test_a_reported_novel_type_can_be_approved_out_of_the_queue(
 ):
     """The whole loop, from a soldier's report to the dropdown.
 
-    u_soldier_a holds SA100 and no grant at all, so their new type is minted
-    pending (report_fault's may(REPORT_STATUS) says no). u_brig_cmdr holds
+    u_soldier_a holds SA100 and no grant at all, and their new type is minted
+    pending, as every reported novel type is (SEC-M14). u_brig_cmdr holds
     MANAGE_CATALOG and not MANAGE_PERSONNEL -- the account that needs the
     queue outside /admin, which it cannot reach.
     """
@@ -63,11 +63,11 @@ def test_a_reported_novel_type_can_be_approved_out_of_the_queue(
 
 
 def test_the_queue_is_closed_to_a_status_reporter(client, db_session, mock_matrix_db):
-    """The verb that decides who mints pending types does not open the queue.
+    """The verb that lets a commander report a fault does not open the queue.
 
-    u_cmdr_a holds REPORT_STATUS over Company A -- enough that their own new
-    types skip review -- and not MANAGE_CATALOG. Skipping review and
-    performing it are different authorities: a gate that accepted REPORT_STATUS
+    u_cmdr_a holds REPORT_STATUS over Company A -- enough, until SEC-M14, for
+    their own new types to skip review -- and not MANAGE_CATALOG. Reporting and
+    reviewing are different authorities: a gate that accepted REPORT_STATUS
     held anywhere would let a company commander approve a type into the
     vocabulary every unit shares.
     """

@@ -37,7 +37,7 @@ test_audit_trail.py, which asserts the bare literals on the columns.
 import pytest
 
 from backend import audit_trail, models
-from backend.enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from backend.enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus, VerificationType
 
 REPORT_FAULT = {"fault_name": "Vocabulary Fault", "description": "will not fire"}
 
@@ -61,7 +61,12 @@ def _open_ticket(client, token, equipment_id):
 # Every enum now reachable from a response field. A member leaking as its repr
 # would put one of these class names into the body, so the blanket check below
 # covers fields these tests do not name individually.
-LEAKED_REPRS = ("EquipmentStatus.", "TicketStatus.", "ChangeReason.", "Sensitivity.")
+LEAKED_REPRS = (
+    "EquipmentStatus.", "TicketStatus.", "ChangeReason.", "Sensitivity.",
+    # Could reach VerificationResponse through the column it is stored in, if
+    # a writer ever stored str(member) rather than the value (API-M5).
+    "VerificationType.",
+)
 
 
 def _assert_no_member_repr_leaked(response):
@@ -128,7 +133,7 @@ def test_the_verification_and_history_payloads_are_still_bare_strings(
         "/verifications/",
         json={
             "equipment_id": item_id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "cracked stock",
             "action_required": True,
@@ -243,11 +248,11 @@ def test_a_valid_ticket_status_still_filters(
 ):
     """Same pairing for the ticket list, plus the member no writer assigns.
 
-    IN_PROGRESS is accepted and answers empty on purpose. No backend path
-    assigns it -- report_fault writes OPEN and fix_equipment writes CLOSED --
-    so the emptiness is a true statement about the queue rather than a lie
-    about the query, and DATA-M22 is what gives it a writer. MaintenancePage.tsx
-    already renders the tab.
+    WAITING_PARTS is accepted and answers empty on purpose. No backend path
+    assigns it -- DATA-M22 gave IN_PROGRESS its writer and kept this one
+    without -- so the emptiness is a true statement about the queue rather
+    than a lie about the query. CLOSED and IN_PROGRESS have writers, and
+    answer empty here only because the one ticket is Open.
     """
     _open_ticket(client, token_master, _item(db_session).id)
 
@@ -259,16 +264,16 @@ def test_a_valid_ticket_status_still_filters(
     assert open_tickets.status_code == 200, open_tickets.text
     assert [t["status"] for t in open_tickets.json()] == ["Open"]
 
-    for unwritten in (TicketStatus.CLOSED, TicketStatus.IN_PROGRESS):
+    for absent in (TicketStatus.CLOSED, TicketStatus.IN_PROGRESS, TicketStatus.WAITING_PARTS):
         response = client.get(
             "/tickets/",
-            params={"status_filter": unwritten.value},
+            params={"status_filter": absent.value},
             headers=token_master,
         )
         assert response.status_code == 200, response.text
         assert response.json() == [], (
-            f"{unwritten.value!r} is in the vocabulary and must be accepted "
-            "even though nothing writes it"
+            f"{absent.value!r} is in the vocabulary and must be accepted "
+            "even when no ticket holds it"
         )
 
 
@@ -561,6 +566,8 @@ PINNED_ELSEWHERE = {
     ("EquipmentCreate", "sensitivity"),
     ("SetSensitivityRequest", "sensitivity"),
     ("VerificationCreate", "reported_status"),
+    # API-M5, pinned by tests/test_verification_types.py.
+    ("VerificationCreate", "verification_type"),
 }
 
 
@@ -585,7 +592,7 @@ def test_every_vocabulary_typed_field_in_the_file_is_accounted_for():
 
     from backend import schemas
 
-    vocabularies = (EquipmentStatus, TicketStatus, ChangeReason, Sensitivity)
+    vocabularies = (EquipmentStatus, TicketStatus, ChangeReason, Sensitivity, VerificationType)
     found = set()
     for model_name, obj in vars(schemas).items():
         if not (

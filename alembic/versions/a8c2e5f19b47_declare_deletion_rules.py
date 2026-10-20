@@ -147,9 +147,16 @@ def upgrade():
 
     for table in _tables():
         reflected = _reflected(inspector, table)
+        columns = {c['name'] for c in inspector.get_columns(table)}
         pending = []
         for fk_table, column, referred in FOREIGN_KEYS:
             if fk_table != table:
+                continue
+            # A column a LATER revision dropped, skipped for the reason
+            # f4d81b2c6a93 gives at the same check: b7e3d91c4f2a removes
+            # transaction_logs.involved_location_id, and this re-runs against
+            # create_all databases built after that.
+            if column not in columns:
                 continue
             existing = reflected.get(column)
             if (

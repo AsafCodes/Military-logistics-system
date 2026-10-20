@@ -23,7 +23,7 @@ from sqlalchemy import UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
-from backend import authz, database, migrations, models
+from backend import authz, clock, database, migrations, models
 from backend.database import Base
 from backend.enums import Capability, GroupKind
 from tests.conftest import recorded
@@ -89,7 +89,7 @@ def test_group_tables_are_registered_and_created(db_session):
 
 def test_unit_and_task_force_round_trip_as_groups(db_session):
     """Single-table inheritance: both kinds live in `groups` and come back typed."""
-    db_session.add_all([authz.Unit(name="Bn53"), authz.TaskForce(name="TF Sinai")])
+    db_session.add_all([authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE), authz.TaskForce(name="TF Sinai", timezone=clock.DEFAULT_TIMEZONE)])
     db_session.commit()
 
     by_name = {g.name: g for g in db_session.query(authz.Group).all()}
@@ -112,13 +112,13 @@ def test_the_polymorphic_base_cannot_be_persisted(db_session):
     would let kind='GROUP' persist -- a value outside GroupKind, which would
     make GroupKind(row.kind) unsafe for H1-2 and later.
     """
-    db_session.add(authz.Group(name="bare"))
+    db_session.add(authz.Group(name="bare", timezone=clock.DEFAULT_TIMEZONE))
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
 
     # Every value the mapper can actually write is a GroupKind member.
-    db_session.add_all([authz.Unit(name="u"), authz.TaskForce(name="t")])
+    db_session.add_all([authz.Unit(name="u", timezone=clock.DEFAULT_TIMEZONE), authz.TaskForce(name="t", timezone=clock.DEFAULT_TIMEZONE)])
     db_session.commit()
     assert {GroupKind(g.kind) for g in db_session.query(authz.Group).all()} == {
         GroupKind.UNIT,
@@ -129,9 +129,9 @@ def test_the_polymorphic_base_cannot_be_persisted(db_session):
 # --- constraints that SQLite does enforce --------------------------------
 
 def test_group_name_is_unique(db_session):
-    db_session.add(authz.Unit(name="Bn53"))
+    db_session.add(authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE))
     db_session.commit()
-    db_session.add(authz.Unit(name="Bn53"))
+    db_session.add(authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE))
     with pytest.raises(IntegrityError):
         db_session.commit()
 
@@ -139,7 +139,7 @@ def test_group_name_is_unique(db_session):
 def test_grant_triple_is_unique(db_session):
     """One row per (user, group, capability) -- re-granting must not duplicate."""
     user = models.User(personal_number="u1", full_name="One")
-    group = authz.Unit(name="Bn53")
+    group = authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add_all([user, group])
     db_session.commit()
 
@@ -151,7 +151,7 @@ def test_grant_triple_is_unique(db_session):
 
 
 def test_closure_depth_is_not_null(db_session):
-    group = authz.Unit(name="Bn53")
+    group = authz.Unit(name="Bn53", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add(group)
     db_session.commit()
 
@@ -170,8 +170,8 @@ def test_closure_depth_is_not_null(db_session):
 )
 def test_composite_primary_keys_reject_duplicate_pairs(db_session, table, columns, values):
     """A DAG diamond reaches the same descendant twice; the pair must stay unique."""
-    db_session.execute(text("INSERT INTO groups (id, name, kind) VALUES (1, 'a', 'UNIT')"))
-    db_session.execute(text("INSERT INTO groups (id, name, kind) VALUES (2, 'b', 'UNIT')"))
+    db_session.execute(text("INSERT INTO groups (id, name, kind, timezone) VALUES (1, 'a', 'UNIT', 'UTC')"))
+    db_session.execute(text("INSERT INTO groups (id, name, kind, timezone) VALUES (2, 'b', 'UNIT', 'UTC')"))
     db_session.execute(text("INSERT INTO users (id, personal_number) VALUES (1, 'u1')"))
 
     stmt = text(f"INSERT INTO {table} ({columns}) VALUES ({values})")
@@ -316,8 +316,8 @@ def test_the_ondelete_rules_depend_entirely_on_the_sqlite_pragma(tmp_path):
         conn = sqlite3.connect(path)
         if pragma_on:
             conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("INSERT INTO groups (id, name, kind) VALUES (1, 'p', 'UNIT')")
-        conn.execute("INSERT INTO groups (id, name, kind) VALUES (2, 'c', 'UNIT')")
+        conn.execute("INSERT INTO groups (id, name, kind, timezone) VALUES (1, 'p', 'UNIT', 'UTC')")
+        conn.execute("INSERT INTO groups (id, name, kind, timezone) VALUES (2, 'c', 'UNIT', 'UTC')")
         conn.execute("INSERT INTO group_edges (parent_id, child_id) VALUES (1, 2)")
         conn.execute("DELETE FROM groups WHERE id = 1")
         remaining = len(list(conn.execute("SELECT 1 FROM group_edges WHERE parent_id = 1")))
@@ -735,14 +735,27 @@ def test_a_missing_plain_index_is_not_drift(tmp_path):
     assert drift == [], f"a missing non-unique index was counted as drift: {drift}"
 
 
+def test_a_missing_column_that_a_later_revision_adds_is_not_drift(tmp_path):
+    """DATA-M8-1. migrations.ADDED_AFTER_BASELINE's columns are added by a
+    revision after the stamp, so a database without one is behind, not
+    broken -- the same reasoning as a missing plain index above."""
+    drift = _drift_after(tmp_path, "ALTER TABLE transaction_logs DROP COLUMN reason")
+
+    assert drift == [], f"a column a later revision adds was counted as drift: {drift}"
+
+
 @pytest.mark.parametrize(
     "statement, kind",
     [
         ("DROP INDEX ix_users_personal_number", "add_index"),
         ("ALTER TABLE fault_types DROP COLUMN severity", "add_column"),
         ("DROP TABLE daily_stats", "add_table"),
+        # Beside the columns ADDED_AFTER_BASELINE exempts, on the same table:
+        # an exemption that matched the table and not the column would pass
+        # every other case here.
+        ("ALTER TABLE transaction_logs DROP COLUMN user_status_at_time", "add_column"),
     ],
-    ids=["unique_index", "column", "table"],
+    ids=["unique_index", "column", "table", "column_beside_the_exempt_ones"],
 )
 def test_what_a_query_or_a_rule_depends_on_is_still_drift(tmp_path, statement, kind):
     """The other half: the exemption above must be exactly as wide as it says.
@@ -1065,6 +1078,71 @@ def test_a_legacy_row_holding_null_does_not_block_the_upgrade(tmp_path):
 
     assert survived == (None, None), "the migration rewrote a NULL it was asked to leave alone"
     assert "ck_equipment_status" in names, "the upgrade did not actually run"
+
+
+def test_the_columns_added_after_the_baseline_are_exactly_the_exempt_ones(tmp_path):
+    """migrations.ADDED_AFTER_BASELINE and TABLES_ADDED_AFTER_BASELINE, derived
+    from the chain rather than trusted.
+
+    describe_drift skips a missing column or table on those lists, because the
+    revision that adds it runs after the stamp. One missing from a list refuses
+    every pre-Alembic database that predates it; an extra entry hides real
+    drift. So: migrate one database to the stamp and one to head, and the
+    tables head has and the stamp lacks must be exactly the one list, and the
+    columns it adds to the tables both have exactly the other (DATA-M22-2:
+    a new table's columns come with it and are not listed).
+    """
+    at_stamp = create_engine(f"sqlite:///{tmp_path / 'stamp.db'}")
+    _upgrade(at_stamp, migrations.BASELINE_STAMP)
+    at_head = create_engine(f"sqlite:///{tmp_path / 'head.db'}")
+    _upgrade(at_head, "head")
+
+    def columns(engine, tables):
+        insp = inspect(engine)
+        return {
+            (table, column["name"])
+            for table in tables
+            for column in insp.get_columns(table)
+        }
+
+    stamp_tables = set(inspect(at_stamp).get_table_names())
+    added_tables = set(inspect(at_head).get_table_names()) - stamp_tables
+    added = columns(at_head, stamp_tables) - columns(at_stamp, stamp_tables)
+    at_stamp.dispose()
+    at_head.dispose()
+
+    assert added_tables == migrations.TABLES_ADDED_AFTER_BASELINE
+    assert added == migrations.ADDED_AFTER_BASELINE
+
+
+def test_a_pre_alembic_database_lacking_the_later_columns_is_stamped_and_given_them(
+    tmp_path, monkeypatch
+):
+    """The case ADDED_AFTER_BASELINE exists for, end to end: a create_all
+    database built just before DATA-M8-1, with no version table, is stamped
+    rather than refused and leaves run_migrations with every column head has.
+    """
+    path = tmp_path / "before_m8.db"
+    engine = create_engine(f"sqlite:///{path}")
+    _upgrade(engine, "a8c2e5f19b47")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE alembic_version")
+    engine.dispose()
+
+    engine = create_engine(f"sqlite:///{path}")
+    monkeypatch.setattr(migrations, "engine", engine)
+    migrations.run_migrations()
+
+    present = {(t, c) for t, c in migrations.ADDED_AFTER_BASELINE
+               if c in {col["name"] for col in inspect(engine).get_columns(t)}}
+    tables = set(inspect(engine).get_table_names())
+    with engine.connect() as conn:
+        version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    engine.dispose()
+
+    assert version == ScriptDirectory.from_config(migrations.alembic_config()).get_current_head()
+    assert present == migrations.ADDED_AFTER_BASELINE
+    assert migrations.TABLES_ADDED_AFTER_BASELINE <= tables
 
 
 def allowlisted_in_chain_order(script):

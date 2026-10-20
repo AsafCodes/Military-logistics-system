@@ -7,13 +7,11 @@ from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
 from typing import Optional
 
 from .database import get_db
 from .enums import Capability, Sensitivity
 from . import authz
-from . import clock
 from . import models
 from . import schemas
 from . import security
@@ -259,12 +257,16 @@ def scope_equipment_query(q, user: models.User):
 def scope_equipment_derived_query(q, model, user: models.User):
     """Restrict a query over rows that REFER to equipment.
 
-    Transaction logs and maintenance tickets are not scoped in their own
-    right: each is exactly as visible as the item it describes. Both routes
+    Maintenance tickets are not scoped in their own right: each is exactly as
+    visible as the item it describes. The ticket list and the movement report
     wrote that as the same join followed by the same scope call, which is one
     predicate in two places -- the DATA-H9 shape, and an odd one to leave in
     the entry closing SEC-H5, whose whole complaint was scoping written
     per-endpoint instead of once.
+
+    The movement report no longer calls this (DATA-M9-2). It is one group's
+    day, gated on VIEW over the group, and the group's history includes items
+    that have since left the caller's sight; see that route.
 
     The join is INNER, deliberately. A row whose equipment_id is NULL or
     dangling describes nothing, so there is no scope under which anyone is
@@ -407,16 +409,3 @@ def require_status_authority(db: Session, user: models.User, item: models.Equipm
     if item.holder_user_id == user.id:
         return
     authz.require(db, user.id, Capability.REPORT_STATUS, item.group_id)
-
-
-def get_daily_status(last_verified_at: Optional[datetime]) -> str:
-    now_utc = clock.utcnow()
-    if not last_verified_at:
-        return "SEVERE"
-    diff = now_utc - last_verified_at
-    if diff < timedelta(hours=24):
-        return "GOOD"
-    elif diff < timedelta(hours=48):
-        return "WARNING"
-    else:
-        return "SEVERE"

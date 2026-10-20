@@ -41,6 +41,32 @@ class EquipmentStatus(str, enum.Enum):
     MISSING = "Missing"
 
 
+class ComplianceLevel(str, enum.Enum):
+    """How recently an equipment record was verified.
+
+    Computed, never stored: models.Equipment.compliance_level derives it from
+    last_verified_at on every read, and that property is the only place these
+    three levels are computed. Under 24 hours is GOOD, 24 up to 48 is WARNING,
+    and 48 or more -- or never verified -- is SEVERE. Equipment.report_status
+    is a separate Hebrew text with a 24-hour rule of its own (DATA-L16).
+
+    DATA-M7 and DATA-M11. The report used to rename GOOD to "Reported" while
+    every other route sent GOOD, a schema comment promised a third vocabulary
+    ("Reported", "Late", "Missing") and the report page tested for the first.
+    And a helper in dependencies.py repeated the property's rules, with some
+    routes calling one and some the other. Now one vocabulary: this type is
+    EquipmentResponse.compliance_level and InventoryReportItem.reporting_status,
+    and ComplianceLevel in frontend/src/types/index.ts repeats its values,
+    held to this by tests/test_compliance_vocabulary.py.
+
+    The frontend's Equipment.compliance_level also admits "NEUTRAL", which no
+    backend code sends; it is not a member here.
+    """
+    GOOD = "GOOD"
+    WARNING = "WARNING"
+    SEVERE = "SEVERE"
+
+
 class Sensitivity(str, enum.Enum):
     """How restricted an equipment record is.
 
@@ -73,10 +99,12 @@ class Sensitivity(str, enum.Enum):
     ENFORCED, as of DATA-H3-3, and this is the member's whole point: a
     CLASSIFIED item is hidden from a caller who lacks VIEW_CLASSIFIED over its
     group. The filter lives in dependencies.scope_equipment_query, so it reaches
-    every listing, the maintenance and transaction-log listings built on
+    every listing, the maintenance listing built on
     scope_equipment_derived_query, and every 404 in the system through
     get_scoped_equipment_or_404 -- one definition rather than a rule each route
-    reimplements. A CLASSIFIED value is no longer merely a claim recorded about
+    reimplements. The one exception is the daily movement report, which since
+    DATA-M9-2 is scoped by group rather than through the item and applies the
+    same clause per row (routers/reports.py _day_arm). A CLASSIFIED value is no longer merely a claim recorded about
     the record; it is a restriction the server applies to it.
 
     Three deliberate limits on that guarantee, all load-bearing:
@@ -90,8 +118,8 @@ class Sensitivity(str, enum.Enum):
         scope, so an uncleared caller's total silently drops by one. Comparing
         totals with a cleared caller reveals that a classified item exists,
         though not which. Accepted rather than overlooked; see that route.
-      - AUDIT DISAPPEARS WITH THE ITEM. scope_equipment_derived_query filters on
-        the item's CURRENT sensitivity, so classifying one retroactively removes
+      - AUDIT DISAPPEARS WITH THE ITEM. The movement report filters on the
+        item's CURRENT sensitivity, so classifying one retroactively removes
         every transaction_logs row about it -- including the RECLASSIFY row
         recording the classification itself. The event that hides an item is
         hidden by the same act, from exactly the callers who would notice it had
@@ -114,30 +142,77 @@ class TicketStatus(str, enum.Enum):
     was not free to defer to it, because the delete half would have left the
     column exactly as free-text as it started.
 
-    All four members are admitted by the check constraint, and two of them are
-    written by nothing today. That is deliberate, and each is a different case:
+    All four members are admitted by the check constraint, and three of them
+    are written:
 
-      - IN_PROGRESS is offered as a filter tab by the maintenance page
-        (frontend MaintenancePage.tsx), so a client already asks for it. No
-        backend path assigns it, which makes the tab permanently empty -- a
-        product gap, not a vocabulary one. Admitting it means implementing that
-        tab is a route change rather than a migration.
-      - WAITING_PARTS appears nowhere else in this repository, frontend
-        included. It is kept because narrowing the vocabulary to what happens
-        to be written today would make the constraint a record of current
-        behaviour rather than of the domain, and because removing a member
-        later is a migration either way.
+      - OPEN: this column's default, report_fault, and release_ticket, which
+        puts a ticket someone took back in the queue (DATA-M22).
+      - IN_PROGRESS: start_ticket (DATA-M22). The maintenance page offered it
+        as a tab for a long time before anything wrote it; because the
+        constraint already admitted it, the status itself needed no migration
+        (the assignee columns did).
+      - CLOSED: maintenance._close_tickets, which close_ticket and
+        fix_equipment both call (DATA-M21), from any state that is not
+        closed.
 
-    The two that ARE written are OPEN (this column's default, and report_fault)
-    and CLOSED (fix_equipment). Both were bare string literals in
-    routers/maintenance.py until DATA-H12-2, which sources them from here --
-    along with the ticket-list filter, which is typed to this enum and so
-    answers 422 for a status outside it rather than 200 with an empty list.
+    WAITING_PARTS is written by nothing, and DATA-M22 kept it that way on
+    purpose rather than dropping it. It appears nowhere else in this
+    repository, frontend included. It is kept because narrowing the
+    vocabulary to what happens to be written today would make the constraint
+    a record of current behaviour rather than of the domain, and because
+    removing a member later is a migration either way.
+
+    Every status change goes through maintenance._update_tickets. The values were bare
+    string literals in routers/maintenance.py until DATA-H12-2, which sources
+    them from here -- along with the ticket-list filter, which is typed to this
+    enum and so answers 422 for a status outside it rather than 200 with an
+    empty list.
     """
     OPEN = "Open"
     IN_PROGRESS = "In Progress"
     WAITING_PARTS = "Waiting for Parts"
     CLOSED = "Closed"
+
+
+class ClaimOutcome(str, enum.Enum):
+    """How a ticket_claims row ended. DATA-M22-2.
+
+    A claim is one take of a ticket: start_ticket opens it, and it ends one
+    of two ways:
+
+      - RELEASED: release_ticket put the ticket back in the queue. ended_by is
+        whoever released it, who need not be the person who took it.
+      - CLOSED: the ticket was closed while it was taken, by close_ticket or
+        fix_equipment (both through maintenance._close_tickets). ended_by is
+        the closer.
+
+    An open claim has no outcome, and ck_ticket_claims_ended keeps the three
+    end columns empty or filled together. The column is `outcome`, not
+    `status`, so that test_audit_trail.py's guard, which reads every `status`
+    write as an equipment status, has nothing to say about it.
+    """
+    RELEASED = "Released"
+    CLOSED = "Closed"
+
+
+class VerificationType(str, enum.Enum):
+    """What POST /verifications/ accepts as a verification_type. API-M5.
+
+    One member, and on purpose no presence check. That route is
+    require_status_authority's, possession OR REPORT_STATUS, and it advances
+    the compliance clock. "I have this item" is equipment.verify_equipment_daily's
+    to record, and that route is the holder's alone (SYSTEM_MAP.md, the
+    possession note). The form used to offer "presence_check" here, by
+    default, which let a commander confirm presence of kit they do not hold
+    through the wider gate. "transfer_verification" went with it: read as
+    "the receiver has it", it was the same claim under another word, and
+    nothing read either value.
+
+    Input only. The column has no CHECK, and rows written before this hold
+    whatever the form or a caller sent ("presence_check", "daily", ...), so
+    VerificationResponse reads it back as a plain string.
+    """
+    CONDITION_REPORT = "condition_report"
 
 
 class EventType(str, enum.Enum):
@@ -163,8 +238,13 @@ class EventType(str, enum.Enum):
     asked for and what tests/test_audit_trail.py's guards keep true. The
     remaining gaps are structural rather than missed: users.update_user_group
     and setup.py's fault-type routes have no equipment to name, and a NULL
-    equipment_id is dropped by scope_equipment_derived_query's inner join, so a
-    row for them would be written and seen by nobody (DATA-M8).
+    equipment_id is dropped by the movement report's inner join on the item,
+    so a row for them would be written and seen by nobody.
+
+    The column holds these values and nothing else, NULL included, since
+    DATA-M8-1: models.TransactionLog constrains it with a CHECK built from this
+    enum and NOT NULL. A new member needs a revision that widens the CHECK;
+    tests/test_group_schema.py's schema comparison fails until one exists.
 
     Read by frontend DailyActivityTable.tsx, which lowercases and looks the
     value up in its EVENT_META map to pick a Hebrew label; a member with no
@@ -182,14 +262,17 @@ class EventType(str, enum.Enum):
     # equipment.verify_equipment_daily -- the daily presence confirmation,
     # NOT verifications.create_verification's condition report.
     FIX = "FIX"
-    # maintenance.fix_equipment.
+    # maintenance.fix_equipment, and maintenance.close_ticket when it closes
+    # the item's last open ticket. The V4.0 root main.py spelled this event
+    # 'REPAIR'; revision b7e3d91c4f2a (DATA-M8-1) renames those rows.
     ASSIGN = "ASSIGN"
     # equipment.assign_owner. DATA-H4's headline: a change of custody wrote
     # nothing at all and never reached the movement report.
     FAULT = "FAULT"
-    # maintenance.report_fault (DATA-H4-2). Like ASSIGN above it, a value with
-    # no legacy spelling to preserve -- nothing has ever written a fault to this
-    # table -- so it is uppercase only to match its neighbours.
+    # maintenance.report_fault (DATA-H4-2). Uppercase to match its neighbours.
+    # Not quite without a legacy spelling, as DATA-H4-2 believed: the V4.0
+    # root main.py wrote fault reports to this table as 'FAULT_REPORT', and
+    # revision b7e3d91c4f2a (DATA-M8-1) renames those rows to this value.
     #
     # Written UNCONDITIONALLY, unlike the history row the same route also
     # produces. A second fault report on an already-broken item moves no status,
@@ -198,20 +281,22 @@ class EventType(str, enum.Enum):
     RECLASSIFY = "RECLASSIFY"
     # equipment.set_sensitivity, via audit_trail.set_sensitivity (DATA-H4-3).
     #
-    # Records WHO reclassified WHICH item WHEN, and deliberately not what it
-    # changed to, because transaction_logs has nowhere honest to put it.
+    # Records WHO reclassified WHICH item WHEN, and, since DATA-M8-1, the
+    # reason they gave. Deliberately not what it changed to, because
+    # transaction_logs has nowhere honest to put it.
     #
-    # Two string columns exist and neither is free. `location` already means a
-    # place AND a person ("User:{name}"), so a third meaning in a column no
-    # reader can disambiguate is the exact drift record_event's docstring
-    # exists to prevent. `broken_description` is dead -- nothing has written or
-    # read it since the initial migration -- but it is named for FAULTS, so
-    # putting a classification in it buys accuracy about one event by making
-    # the column lie about every other. Reusing a misnamed empty column is the
-    # cheaper-looking half of the same mistake.
+    # No column is free. `location` already means a place AND a person
+    # ("User:{name}"), so a third meaning in a column no reader can
+    # disambiguate is the drift record_event exists to prevent.
+    # `broken_description` is dead -- nothing has written or read it since the
+    # initial migration -- but it is named for FAULTS, so putting a
+    # classification in it buys accuracy about one event by making the column
+    # lie about every other. `reason` is the actor's words, not a value. The
+    # from_/to_ columns DATA-M8-1 added are custody, and a reclassification
+    # moves none, so record_event leaves them NULL here.
     #
-    # The current value is on the equipment row; DATA-M8 is where the log gains
-    # a column that means what it says.
+    # The current value is on the equipment row. A column for the value
+    # itself is still to be added.
     #
     # Written UNCONDITIONALLY, for FAULT's reason above: re-asserting CLASSIFIED
     # on an already-classified item is somebody making a classification
@@ -224,7 +309,8 @@ class EventType(str, enum.Enum):
     CONDITION_REPORT = "CONDITION_REPORT"
     # verifications.create_verification (DATA-H4-3). NOT VERIFICATION, which is
     # taken four members up by the daily presence confirmation -- two acts with
-    # two gates do not share a string.
+    # two gates do not share a string. VerificationType above keeps the same
+    # line on the route's input: it accepts no presence check (API-M5).
     #
     # Unconditional, beside a set_status call that is not. Before DATA-H4-3 a
     # verification CONFIRMING the status wrote nothing into either audit table:
@@ -261,7 +347,8 @@ class ChangeReason(str, enum.Enum):
     FAULT_REPORT = "fault_report"
     # maintenance.report_fault.
     REPAIR = "repair"
-    # maintenance.fix_equipment.
+    # maintenance.fix_equipment, and maintenance.close_ticket when it closes
+    # the item's last open ticket.
 
 
 class GroupKind(str, enum.Enum):
@@ -309,6 +396,13 @@ class Capability(str, enum.Enum):
     is wrong about. H1-10 is where profiles.py stops being the source of truth
     and where this judgement should be confirmed or reversed on purpose.
 
+    Taking a ticket and releasing it (DATA-M22) also ask for RESOLVE_FAULT
+    rather than a verb of their own. Taking a ticket is the first half of
+    resolving it, and a separate verb would be held by exactly the seeded rows
+    that hold this one: two tables that differ only in name, the SEC-H4 shape.
+    Split it when some grant has to let an account take tickets without
+    closing them, or the reverse.
+
     MANAGE_CATALOG was declared absent here through H1-7, H1-8 and H1-9 on
     the argument that neither CatalogItem nor FaultType has a group, so the
     algebra had nothing to scope them by and the verb 'would not merely be
@@ -325,12 +419,43 @@ class Capability(str, enum.Enum):
     an expressiveness problem, only a missing call.
 
     One catalog verb rather than two, and the contrast with the pair above is
-    deliberate. can_add_category and can_remove_category name the IDENTICAL
+    deliberate. can_add_category and can_remove_category named the IDENTICAL
     set -- Master and Brigade Tech Commander. H1-9 split one column into two
     verbs because the split fell along a real difference; splitting these
     would produce two tables that differ only in name, which is the SEC-H4
-    shape this docstring opens by warning about. Split them the moment some
-    profile holds one without the other, and not before.
+    shape this docstring opens by warning about.
+
+    What the verb gates (SEC-M14): proposing a fault type through
+    setup.create_fault_type, reading the approval queue, approving someone
+    else's proposal, and deleting a type no ticket uses. It no longer lets
+    anything skip review. Every new fault type is pending, whether it came
+    from that route or from a fault report (maintenance.report_fault, open to
+    any reporter), and setup.approve_fault_type refuses the account that
+    proposed it. So proposing and approving are separated by that check on
+    requested_by_id, not by a second verb: both seeded holders would hold
+    both verbs, and a split that changes no answer is the SEC-H4 shape again.
+    The cost of that choice: an org chart with a single holder -- a
+    bootstrapped database, since no route issues grants -- can approve
+    everyone's proposals but its holder's own.
+
+    DATA-M6 adds one more thing the verb gates: a new catalog item name.
+    equipment.create_equipment asks for it only when the name it is given is
+    not already in the catalog. Unlike a fault type, the new name goes in with
+    no review step: it is in use as soon as the holder's request commits.
+
+    The trigger once written here -- split the moment some profile holds one
+    without the other -- died with profiles.py at H1-12, and SEC-M12 closed on
+    that as a deliberate no-op. What stands in for it: grant rows are written
+    by bootstrap_admin.py and seed_data.py and nowhere else, and both are
+    fixed tables that change only by a code edit. A request to grant the
+    review rights without deletion would most likely arrive as a new way of
+    issuing grants -- a route that lets an operator choose verbs -- and
+    tests/test_grant_writers.py fails on one. That is the moment to split,
+    with deletion taking the narrower verb, since removing vocabulary is
+    destructive and adding it is not. SEC-M14, which redesigned these routes,
+    kept deletion on this verb: DATA-H7's 409 already confines it to a type no
+    ticket has ever used, and the same two seeded accounts would hold a
+    narrower verb.
 
     SET_SENSITIVITY (DATA-H3-2) is the second judgement, and unlike
     RESOLVE_FAULT it did not come from splitting a column -- profiles.py has no
@@ -364,10 +489,10 @@ class Capability(str, enum.Enum):
     CREATE_EQUIPMENT = "CREATE_EQUIPMENT"
     # equipment.create_equipment, on the group the item will belong to.
     REPORT_STATUS = "REPORT_STATUS"
-    # maintenance.report_fault, verifications.create_verification -- and, as a
-    # question rather than a gate, report_fault's is_pending decision.
+    # maintenance.report_fault, verifications.create_verification.
     RESOLVE_FAULT = "RESOLVE_FAULT"
-    # maintenance.fix_equipment, on the group the item belongs to.
+    # maintenance.fix_equipment, close_ticket, start_ticket and release_ticket,
+    # on the group the item belongs to.
     SET_SENSITIVITY = "SET_SENSITIVITY"
     # equipment.set_sensitivity, and equipment.create_equipment when the
     # request names a sensitivity. On the group the item belongs to.
@@ -375,7 +500,8 @@ class Capability(str, enum.Enum):
     # dependencies.scope_equipment_query, as a widening of its VIEW arm rather
     # than a verb of its own. On the group the item belongs to.
     MANAGE_CATALOG = "MANAGE_CATALOG"
-    # setup.py's fault-type routes. Global vocabulary: held over every root.
+    # setup.py's fault-type routes, and equipment.create_equipment when the
+    # catalog name is new (DATA-M6). Global vocabulary: held over every root.
     MANAGE_PERSONNEL = "MANAGE_PERSONNEL"
     # users.create_user, update_user_group, setup.list_groups. Also every root.
 

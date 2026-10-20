@@ -181,6 +181,11 @@ def test_a_refused_creation_leaves_no_catalog_row(client, db_session, mock_matri
     here is a second way to reach a 403 on this route, and it has to be ordered
     ahead of the same commit -- otherwise a caller with no verb at all can still
     write a permanent row under a name of their choosing.
+
+    Since DATA-M6 a new name meets a third 403, MANAGE_CATALOG's, which this
+    caller would also fail. So the detail is asserted too: the refusal has to
+    be CREATE_EQUIPMENT's, or a CREATE_EQUIPMENT gate moved below the catalog
+    block would pass here unseen.
     """
     before = db_session.query(models.CatalogItem).count()
 
@@ -191,6 +196,7 @@ def test_a_refused_creation_leaves_no_catalog_row(client, db_session, mock_matri
     )
 
     assert res.status_code == 403, res.text
+    assert "CREATE_EQUIPMENT" in res.json()["detail"], res.text
     assert db_session.query(models.CatalogItem).count() == before
 
 

@@ -17,7 +17,33 @@ interface Ticket {
     status: string;
     opened_at?: string | null;
     closed_at?: string | null;
+    // DATA-M22. Who took the ticket and when; null while it is Open.
+    assigned_to_name?: string | null;
+    started_at?: string | null;
+    // DATA-M22-2. Every take, newest first, the open one included.
+    claims?: Claim[];
 }
+
+// One take of a ticket. The three end fields are null while it is open.
+interface Claim {
+    id: number;
+    user_id: number;
+    user_name?: string | null;
+    started_at: string;
+    ended_at?: string | null;
+    ended_by_id?: number | null;
+    ended_by_name?: string | null;
+    outcome?: 'Released' | 'Closed' | null;
+}
+
+// DATA-M22: start takes an Open ticket, release puts an In Progress one back.
+type TicketAction = 'start' | 'release' | 'close';
+
+const ACTION_FAILED: Record<TicketAction, string> = {
+    start: 'לקיחת הכרטיס לטיפול נכשלה',
+    release: 'שחרור הכרטיס נכשל',
+    close: 'סגירת הכרטיס נכשלה',
+};
 
 type FilterTab = 'all' | 'Open' | 'In Progress' | 'Closed';
 
@@ -67,17 +93,22 @@ const formatDate = (dateStr: string | null | undefined) => {
 // ============================================================
 
 export default function MaintenancePage() {
-    // SEC-H10-3. Same real gate as EquipmentPage's תקן button (both hit
-    // POST /maintenance/fix/{id}) -- see EquipmentPage.tsx for why this stays
-    // a bare capability check with no possession arm.
+    // SEC-H10-3. Same real gate as EquipmentPage's תקן button: these post
+    // POST /maintenance/tickets/{id}/close, /start and /release and that one
+    // POST /maintenance/fix/{id} (DATA-M21, DATA-M22), all behind
+    // RESOLVE_FAULT. See
+    // EquipmentPage.tsx for why this stays a bare capability check with no
+    // possession arm.
     const caps = useCapabilities();
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<FilterTab>('all');
-    const [fixingId, setFixingId] = useState<number | null>(null);
+    // The ticket an action is out for, and which action, so its button shows
+    // the spinner and the ticket's other buttons wait.
+    const [busy, setBusy] = useState<{ id: number; action: TicketAction } | null>(null);
 
-    // FE-H5: a reload after closing a ticket aborts the load still out, and
+    // FE-H5: a reload after a ticket action aborts the load still out, and
     // leaving the page aborts the last one. Refresh can't race a load: the
     // page is only a spinner while one is out.
     const next = useLatestRequest();
@@ -96,7 +127,7 @@ export default function MaintenancePage() {
         setLoading(false);
     }, [next]);
 
-    // Refresh, and the reload after closing a ticket. The first load needs
+    // Refresh, and the reload after a ticket action. The first load needs
     // neither call: loading starts true and error starts null.
     const reload = useCallback(() => {
         setLoading(true);
@@ -127,17 +158,20 @@ export default function MaintenancePage() {
         return tickets.filter(t => t.status === activeTab);
     }, [tickets, activeTab]);
 
-    // ── Close Ticket ──
-    const handleCloseTicket = async (ticket: Ticket) => {
-        setFixingId(ticket.id);
+    // ── Ticket Actions ──
+    // By the ticket's own id (DATA-M21: the item route closed every open
+    // ticket of the item). A failure, a 409 included, is one alert and no
+    // reload (FE-L15).
+    const act = async (ticket: Ticket, action: TicketAction) => {
+        setBusy({ id: ticket.id, action });
         try {
-            await api.post(`/maintenance/fix/${ticket.equipment_id}`);
+            await api.post(`/maintenance/tickets/${ticket.id}/${action}`);
             reload();
         } catch (err) {
             console.error(err);
-            alert('סגירת הכרטיס נכשלה');
+            alert(ACTION_FAILED[action]);
         }
-        setFixingId(null);
+        setBusy(null);
     };
 
     // ── Loading ──
@@ -265,6 +299,36 @@ export default function MaintenancePage() {
                                         </p>
                                     )}
 
+                                    {/* DATA-M22. <bdi>, so a Latin name keeps its place in the line. */}
+                                    {ticket.status === 'In Progress' && (
+                                        <p className="text-sm text-blue-700 dark:text-blue-400">
+                                            בטיפול אצל <bdi>{ticket.assigned_to_name ?? '—'}</bdi> מאז {formatDate(ticket.started_at)}
+                                        </p>
+                                    )}
+
+                                    {/* DATA-M22-2. The takes that have ended, newest first as
+                                        the list sends them; the open one is the line above. Each
+                                        name and date in a <bdi>, so a Latin name or a date's
+                                        digits cannot pull the dash or the next field across. */}
+                                    {endedClaims(ticket).length > 0 && (
+                                        <div className="text-xs text-muted-foreground">
+                                            <p className="font-medium">היסטוריית טיפול:</p>
+                                            <ul className="space-y-0.5">
+                                                {endedClaims(ticket).map(c => (
+                                                    <li key={c.id}>
+                                                        <bdi>{c.user_name ?? '—'}</bdi>
+                                                        {' · '}<bdi>{formatDate(c.started_at)}</bdi>
+                                                        {' – '}<bdi>{formatDate(c.ended_at)}</bdi>
+                                                        {' · '}{c.outcome === 'Closed' ? 'נסגר' : 'שוחרר'}
+                                                        {c.ended_by_id !== c.user_id && (
+                                                            <> ע״י <bdi>{c.ended_by_name ?? '—'}</bdi></>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
                                     {/* Dates */}
                                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                                         <span>📅 נפתח: {formatDate(ticket.opened_at)}</span>
@@ -278,27 +342,32 @@ export default function MaintenancePage() {
                                     gate is what actually decides this; this is now cosmetically
                                     narrowed to match, still not the enforcement. */}
                                 {ticket.status !== 'Closed' && hasAnywhere(caps, CAPABILITY.RESOLVE_FAULT) && (
-                                    <div className="px-5 py-3 border-t border-border/30 bg-accent/20">
-                                        <button
-                                            onClick={() => handleCloseTicket(ticket)}
-                                            disabled={fixingId === ticket.id}
-                                            className="w-full py-2 rounded-lg text-sm font-bold transition-colors
-                                                       bg-emerald-600 text-white hover:bg-emerald-700
-                                                       disabled:opacity-50 disabled:cursor-wait
-                                                       flex items-center justify-center gap-2"
-                                        >
-                                            {fixingId === ticket.id ? (
-                                                <>
-                                                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                                                    סוגר...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <CheckCircle size={14} />
-                                                    סגור כרטיס ותקן ציוד
-                                                </>
-                                            )}
-                                        </button>
+                                    <div className="px-5 py-3 border-t border-border/30 bg-accent/20 flex gap-2">
+                                        {ticket.status === 'Open' && (
+                                            <ActionButton
+                                                label="קח לטיפול" busyLabel="לוקח..." icon={<Clock size={14} />}
+                                                cls="bg-blue-600 text-white hover:bg-blue-700"
+                                                busy={busy?.id === ticket.id && busy.action === 'start'}
+                                                disabled={busy?.id === ticket.id}
+                                                onClick={() => act(ticket, 'start')}
+                                            />
+                                        )}
+                                        {ticket.status === 'In Progress' && (
+                                            <ActionButton
+                                                label="שחרר" busyLabel="משחרר..." icon={<RefreshCw size={14} />}
+                                                cls="bg-muted text-foreground hover:bg-accent"
+                                                busy={busy?.id === ticket.id && busy.action === 'release'}
+                                                disabled={busy?.id === ticket.id}
+                                                onClick={() => act(ticket, 'release')}
+                                            />
+                                        )}
+                                        <ActionButton
+                                            label="סגור כרטיס" busyLabel="סוגר..." icon={<CheckCircle size={14} />}
+                                            cls="bg-emerald-600 text-white hover:bg-emerald-700"
+                                            busy={busy?.id === ticket.id && busy.action === 'close'}
+                                            disabled={busy?.id === ticket.id}
+                                            onClick={() => act(ticket, 'close')}
+                                        />
                                     </div>
                                 )}
                             </div>
@@ -308,6 +377,11 @@ export default function MaintenancePage() {
             )}
         </div>
     );
+}
+
+// The claims that have ended, in the order the API sends them (newest first).
+function endedClaims(ticket: Ticket): Claim[] {
+    return (ticket.claims ?? []).filter(c => c.ended_at);
 }
 
 // ============================================================
@@ -327,5 +401,36 @@ function StatCard({ label, count, icon, accent }: {
                 <div className="text-xs text-muted-foreground">{label}</div>
             </div>
         </div>
+    );
+}
+
+// ============================================================
+// Action Button
+// ============================================================
+
+function ActionButton({ label, busyLabel, icon, cls, busy, disabled, onClick }: {
+    label: string; busyLabel: string; icon: React.ReactNode; cls: string;
+    busy: boolean; disabled: boolean; onClick: () => void;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${cls}
+                       disabled:opacity-50 disabled:cursor-wait
+                       flex items-center justify-center gap-2`}
+        >
+            {busy ? (
+                <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent" />
+                    {busyLabel}
+                </>
+            ) : (
+                <>
+                    {icon}
+                    {label}
+                </>
+            )}
+        </button>
     );
 }

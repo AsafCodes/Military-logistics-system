@@ -1,8 +1,30 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Annotated, Optional, List
+import datetime as dt
 from datetime import datetime
 
-from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from . import clock
+from .enums import (
+    ChangeReason, ClaimOutcome, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus,
+    VerificationType,
+)
+
+# --- Integers a request carries ---
+#
+# The range of a Postgres `integer`, which is what an `Integer` column is
+# there: no stored id can lie outside it. Every integer a request carries --
+# a path parameter, a query parameter or a body field -- is a DbInt, so a
+# value outside it is refused with 422, as a non-number is, before any query
+# runs.
+#
+# Unbounded, any value reached the database. Postgres compared it without
+# error and answered 404 at every size; SQLite answered 404 too until the
+# value passed 64 bits, where Python's sqlite3 cannot bind it and raised
+# OverflowError (500). tests/test_integer_inputs.py finds every integer input through the
+# OpenAPI schema and fails on one without the bound.
+DB_INT_MIN = -(2**31)
+DB_INT_MAX = 2**31 - 1
+DbInt = Annotated[int, Field(ge=DB_INT_MIN, le=DB_INT_MAX)]
 
 # --- Analytics ---
 class UnitReadinessResponse(BaseModel):
@@ -23,9 +45,29 @@ class GroupResponse(BaseModel):
     id: int
     name: str
     kind: str
+    # DATA-M9-1. The IANA zone the group's calendar day is kept in, as stored.
+    timezone: str
 
     class Config:
         from_attributes = True
+
+class GroupUpdate(BaseModel):
+    """DATA-M9-1. The body of PATCH /groups/{group_id}."""
+    timezone: str
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_zone(cls, v: str) -> str:
+        # clock.zone, the write-path check: a name outside the zone database
+        # is refused (422) and nothing is stored.
+        clock.zone(v)
+        return v
+
+    class Config:
+        # SEC-M2's precedent: a field this body does not name is refused
+        # rather than dropped, so `name` or `kind` sent here is not silently
+        # ignored by a route that changes neither.
+        extra = "forbid"
 
 class UserBase(BaseModel):
     personal_number: str
@@ -33,13 +75,19 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
-    is_active_duty: bool = True
     # Where the account sits, and required rather than derived: unlike
     # equipment creation, MANAGE_PERSONNEL is global (the personnel table
     # belongs to no unit), so there is no creator group to fall back to. H1-6
     # left create_user issuing no GroupMembership at all; this closes that gap
     # rather than carrying it forward again.
-    group_id: int
+    group_id: DbInt
+
+    class Config:
+        # SEC-M2. This body writes an account, so a field it does not name is
+        # refused (422) rather than dropped: `is_active_duty` is the server's
+        # to set, and a caller still sending it should be told, not ignored.
+        # Here only -- UserBase is also UserResponse's parent.
+        extra = "forbid"
 
 class UserResponse(UserBase):
     id: int
@@ -55,7 +103,7 @@ class UserLogin(BaseModel):
     password: str
 
 class UpdateUserGroupRequest(BaseModel):
-    group_id: int
+    group_id: DbInt
 
 class CapabilitiesResponse(BaseModel):
     """What the caller may do. SEC-H10 -- the frontend's first way to ask.
@@ -96,6 +144,11 @@ class CapabilitiesResponse(BaseModel):
     anywhere: List[str]
 
 # --- Equipment ---
+# DATA-M6. The longest catalog name a creation request may carry, counted
+# after normalization. The column itself is unbounded (models.CatalogItem).
+CATALOG_NAME_MAX = 100
+
+
 class EquipmentCreate(BaseModel):
     catalog_name: str # e.g. "M4"
     serial_number: Optional[str] = None
@@ -104,7 +157,7 @@ class EquipmentCreate(BaseModel):
     # own membership -- the ordinary case, and the only one a client needs.
     # Supplied, it is an explicit override that the route validates against the
     # creator's extent, because unlike the derived value it is attacker-chosen.
-    group_id: Optional[int] = None
+    group_id: Optional[DbInt] = None
 
     # DATA-H3-2. Optional and defaulting to None, NOT to UNCLASSIFIED, and the
     # difference is load-bearing rather than stylistic. None means "the client
@@ -120,6 +173,23 @@ class EquipmentCreate(BaseModel):
     # None at flush time, so this does NOT write NULL. Stated because the
     # opposite is the natural assumption and an earlier draft acted on it.
     sensitivity: Optional[Sensitivity] = None
+
+    # DATA-M6. Normalized here, before the route runs, so "Radio  710 " and
+    # "Radio 710" reach the catalog lookup as one name, and a refused name is a
+    # 422 that writes nothing. str.split() with no argument splits on every
+    # whitespace run -- tabs, newlines and Unicode spaces included -- so the
+    # join leaves single ASCII spaces and no leading or trailing ones. Case is
+    # left alone: create_equipment matches case-insensitively, and a new row
+    # keeps the caller's casing.
+    @field_validator("catalog_name")
+    @classmethod
+    def _normalize_catalog_name(cls, v: str) -> str:
+        name = " ".join(v.split())
+        if not name:
+            raise ValueError("catalog_name must not be blank")
+        if len(name) > CATALOG_NAME_MAX:
+            raise ValueError(f"catalog_name must be at most {CATALOG_NAME_MAX} characters")
+        return name
 
 class EquipmentResponse(BaseModel):
     id: int
@@ -185,7 +255,7 @@ class EquipmentResponse(BaseModel):
     # Smart fields
     item_name: str
     current_state_description: str
-    compliance_level: str
+    compliance_level: ComplianceLevel
     report_status: str
     compliance_check: str 
 
@@ -193,17 +263,45 @@ class EquipmentResponse(BaseModel):
         from_attributes = True
 
 # --- Actions ---
+
+# DATA-M8-1. The longest reason a transfer, an assignment or a reclassification
+# may carry into transaction_logs.reason.
+REASON_MAX = 500
+
+
+def normalize_reason(v: Optional[str]) -> Optional[str]:
+    """Trim a reason; a blank one is no reason at all, and a long one is a 422.
+
+    Shared by every request that takes one, so "no reason" is stored as NULL
+    and never as "" or "   ", and the movement report has one way to say it.
+    """
+    if v is None:
+        return None
+    reason = v.strip()
+    if not reason:
+        return None
+    if len(reason) > REASON_MAX:
+        raise ValueError(f"reason must be at most {REASON_MAX} characters")
+    return reason
+
+
 class TransferPossessionRequest(BaseModel):
-    equipment_id: int
-    to_holder_id: Optional[int] = None
+    equipment_id: DbInt
+    to_holder_id: Optional[DbInt] = None
     to_location: Optional[str] = None # e.g. "Armory"
+    reason: Optional[str] = None
+
+    _normalize_reason = field_validator("reason")(normalize_reason)
 
 class AssignOwnerRequest(BaseModel):
-    equipment_id: int
-    owner_id: int
+    equipment_id: DbInt
+    owner_id: DbInt
+    reason: Optional[str] = None
+
+    _normalize_reason = field_validator("reason")(normalize_reason)
 
 class ReportFaultRequest(BaseModel):
-    equipment_id: int
+    equipment_id: DbInt
     fault_name: str 
     description: str
 
@@ -214,10 +312,13 @@ class EquipmentVerifyRequest(BaseModel):
 class SetSensitivityRequest(BaseModel):
     """DATA-H3-2. The body of PATCH /equipment/{id}/sensitivity.
 
-    Required, not Optional, and the field stands alone. Declassifying is
-    UNCLASSIFIED -- an explicit value a caller states and the audit trail can
-    one day record -- never an omission. An Optional field here would make
-    "clear the classification" and "leave it alone" the same request.
+    `sensitivity` is required, not Optional. Declassifying is UNCLASSIFIED --
+    an explicit value a caller states and the audit trail can one day record
+    -- never an omission. An Optional field here would make "clear the
+    classification" and "leave it alone" the same request.
+
+    `reason` is optional (DATA-M8-1): why the caller decided, stored on the
+    RECLASSIFY row.
 
     No equipment_id, unlike the sibling *Request classes above: this route
     takes the id in the PATH, following equipment.verify_equipment_daily
@@ -225,6 +326,9 @@ class SetSensitivityRequest(BaseModel):
     identifies the resource being amended, which is what a path is for.
     """
     sensitivity: Sensitivity
+    reason: Optional[str] = None
+
+    _normalize_reason = field_validator("reason")(normalize_reason)
 
 # --- Setup ---
 class FaultTypeCreate(BaseModel):
@@ -238,6 +342,23 @@ class FaultTypeResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class TicketClaimResponse(BaseModel):
+    """One take of a ticket, as TicketResponse.claims lists it. DATA-M22-2.
+
+    The three end fields are null while the claim is open, and set together
+    once it ends (ck_ticket_claims_ended). The names are Optional because
+    users.full_name is nullable (DATA-L11).
+    """
+    id: int
+    user_id: int
+    user_name: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    ended_by_id: Optional[int] = None
+    ended_by_name: Optional[str] = None
+    outcome: Optional[ClaimOutcome] = None
+
+
 class TicketResponse(BaseModel):
     id: int
     equipment_id: int
@@ -247,11 +368,11 @@ class TicketResponse(BaseModel):
     fault_type: str
 
     # DATA-H12-2, and the one of the six that admits a value no backend path
-    # writes: TicketStatus carries IN_PROGRESS and WAITING_PARTS, which
-    # report_fault and fix_equipment between them never assign. That is
-    # deliberate on both sides -- ck_maintenance_logs_status admits all four so
-    # DATA-M22 stays a route change rather than a migration, and this field
-    # admits all four so it will not have to be widened on the same day.
+    # writes: TicketStatus carries WAITING_PARTS, which no route assigns
+    # (DATA-M22 gave IN_PROGRESS its writer, start_ticket, and left this one
+    # without). That is deliberate on both sides --
+    # ck_maintenance_logs_status admits all four, and this field admits all
+    # four, so a writer for it is a route change, not a migration.
     status: TicketStatus
     description: str
 
@@ -265,6 +386,22 @@ class TicketResponse(BaseModel):
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
 
+    # DATA-M21. Who closed the ticket. Optional: an open ticket has nobody,
+    # and so does every ticket closed before DATA-M21, when nothing wrote it.
+    technician_id: Optional[int] = None
+
+    # DATA-M22. Who took the ticket and when; none of the three while it is
+    # Open. A close keeps them. assigned_to_name is Optional as well as the
+    # id, because users.full_name is nullable (DATA-L11).
+    assigned_to_id: Optional[int] = None
+    assigned_to_name: Optional[str] = None
+    started_at: Optional[datetime] = None
+
+    # DATA-M22-2. Every take of the ticket, newest first, the open one
+    # included. The three fields above are the open claim's, kept on the
+    # ticket so the list needs no join to say who has it.
+    claims: List[TicketClaimResponse] = []
+
     # DATA-H2, named not fixed: neither exists on MaintenanceLog and neither is
     # ever passed, so both are constants presented as data -- the same falsehood
     # as the aliases removed above. Outside this ticket's stated fix.
@@ -274,35 +411,72 @@ class TicketResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class DailyActivityItem(BaseModel):
+class MovementReportItem(BaseModel):
+    # One row of /reports/daily_movement, its response_model since DATA-M8-2.
+    # Mirrored by MovementReportItem in frontend/src/types/index.ts
+    # (tests/test_movement_report.py). Every key is always sent.
+    #
+    # timestamp is required: the route filters on it, and a NULL is in no
+    # day. The names are null where the column is NULL --
+    # every custody column on a non-custody event and on a row from before
+    # DATA-M8-1 -- and also where the person's full_name is NULL, which is
+    # sent as it is rather than coalesced (DATA-L11).
+    id: int
     timestamp: datetime
-    event_type: str
-    description: str
-    reporter_name: str
-    serial_number: str
+    event_type: EventType
+    serial_number: Optional[str]
+    reporter_name: Optional[str]
+    from_holder_name: Optional[str]
+    to_holder_name: Optional[str]
+    from_owner_name: Optional[str]
+    to_owner_name: Optional[str]
+    from_group_name: Optional[str]
+    to_group_name: Optional[str]
+    from_location: Optional[str]
+    to_location: Optional[str]
+    reason: Optional[str]
+    # The after state as one string, on rows written before DATA-M8-2 only.
+    location: Optional[str]
 
-    class Config:
-        from_attributes = True
+class MovementReport(BaseModel):
+    # /reports/daily_movement's response_model since DATA-M9-2: one group's
+    # calendar day. Mirrored by MovementReport in frontend/src/types/index.ts
+    # (tests/test_movement_report.py).
+    #
+    # `timezone` is the zone that bounded the day, the one a client formats
+    # times in: the group's own, or clock.DEFAULT_TIMEZONE when the stored
+    # name is not one tzdata lists (clock.zone_or_default). `start` and `end`
+    # are that day's half-open range in UTC.
+    group_id: int
+    group_name: str
+    timezone: str
+    date: dt.date
+    start: datetime
+    end: datetime
+    items: List[MovementReportItem]
 
 class InventoryReportItem(BaseModel):
+    # One row of /reports/query, its response_model since DATA-M7. Every key
+    # is always sent; last_verified_at alone is null, for an item never
+    # verified. Mirrored by InventoryReportItem in frontend/src/types/index.ts
+    # (tests/test_report_item_contract.py).
     id: int
     item_type: str
-    serial_number: Optional[str]
-    unit_association: Optional[str]
+    serial_number: str
+    unit_association: str
     designated_owner: str
     actual_location: str
-    reporting_status: str  # "Reported", "Late", "Missing"
+    reporting_status: ComplianceLevel
     last_reporter: str
     last_verified_at: Optional[datetime]
-
-    class Config:
-        from_attributes = True
 
 
 # --- Verification & Status History ---
 class VerificationCreate(BaseModel):
-    equipment_id: int
-    verification_type: str
+    equipment_id: DbInt
+    # API-M5. A closed list with one member, so it may be left out; anything
+    # else, a presence check above all, is refused with 422. See the enum.
+    verification_type: VerificationType = VerificationType.CONDITION_REPORT
     reported_status: EquipmentStatus
     findings: Optional[str] = None
     action_required: bool = False
@@ -311,6 +485,7 @@ class VerificationCreate(BaseModel):
 class VerificationResponse(BaseModel):
     id: int
     equipment_id: int
+    # A str, not VerificationType: rows from before API-M5 hold other values.
     verification_type: str
     # DATA-H12-2. VerificationCreate.reported_status above has been the enum
     # since DATA-H3-1 and this was still `str`, so one route validated a

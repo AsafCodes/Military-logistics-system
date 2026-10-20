@@ -49,9 +49,11 @@ AUDIT_TABLES = ("TransactionLog", "EquipmentStatusHistory")
 #
 # DATA-H4-1 left two of these carrying `DATA-H4-2`, on report_fault's and
 # fix_equipment's bare assignments; DATA-H4-2 cut both routes onto the helper
-# and deleted them. The one that remains is fix_equipment's ticket-closing bulk
-# update, and it is permanent -- a ticket's Open/Closed is not an equipment
-# status and equipment_status_history has no row shape for it.
+# and deleted them. The one that remains is the ticket-status bulk update in
+# maintenance._update_tickets (fix_equipment's until DATA-M21 moved it into a
+# helper for close_ticket to share, and DATA-M22 widened it to every ticket
+# status for start and release), and it is permanent -- a ticket's status is
+# not an equipment status and equipment_status_history has no row shape for it.
 #
 # DATA-H4-3 added a second guarded column and no fourth pragma: set_sensitivity
 # had one assignment and it moved into the writer whole. A guard arriving with
@@ -137,9 +139,10 @@ def column_assignments(tree, column):
     are not hits -- verified against both.
 
     The second is `query(...).update({"status": ...})`, which issues UPDATE
-    without ever touching an attribute. Not hypothetical: fix_equipment uses
-    exactly this idiom on MaintenanceLog four lines from its own status write,
-    so it is live house style, and an author reaching for it on equipment would
+    without ever touching an attribute. Not hypothetical: maintenance's
+    _update_tickets uses exactly this idiom on MaintenanceLog, in the routes
+    that also write the item's status, so it is live house style, and an
+    author reaching for it on equipment would
     move a status past a guard that only watched attributes.
 
     EVERY model, not just Equipment. An earlier version required the name
@@ -316,7 +319,8 @@ def test_only_audit_trail_assigns_equipment_status():
     there is no prior status for a history row to record.
 
     An intended bypass marks its own line with the pragma above. The one that
-    exists is fix_equipment's ticket-closing bulk update, which is permanent.
+    exists is maintenance._update_tickets' ticket-status bulk update, which is
+    permanent.
 
     The match is on the NAME `status`, with no idea whose. An unrelated class
     doing `self.status = "ok"` under backend/ would be flagged, and the right
@@ -435,6 +439,34 @@ def test_every_setter_declares_the_column_it_owns():
     )
 
 
+def test_every_bypass_pragma_sits_on_a_write_the_guard_sees():
+    """A pragma waives a hit. One on a line the guard does not flag waives
+    nothing, and says a bypass is accounted for when the guard can no longer
+    see it at all.
+
+    DATA-M22 did exactly that on the way in: the ticket-status update took its
+    dict as a variable, `.update(values)`, which column_assignments cannot
+    read, so the one pragma in the backend sat on a statement the guard had
+    stopped seeing, and every test stayed green. Any ticket status written
+    through it would have passed unseen, pragma or not.
+    """
+    decorative = []
+    for relpath, source, tree in backend_sources():
+        flagged = {
+            node.lineno
+            for column in audit_trail.OWNED_COLUMNS
+            for node in column_assignments(tree, column)
+        }
+        for number, line in enumerate(source.splitlines(), start=1):
+            if BYPASS_PRAGMA in line and number not in flagged:
+                decorative.append(f"{relpath}:{number}")
+
+    assert decorative == [], (
+        "a bypass pragma sits on a line the guard does not flag, so it waives "
+        f"nothing and the write beside it is invisible to the guard: {decorative}"
+    )
+
+
 @pytest.mark.parametrize("column", audit_trail.OWNED_COLUMNS)
 @pytest.mark.parametrize("shape", sorted(SYNTHETIC), ids=lambda s: s.replace(" ", "_"))
 def test_the_guard_detects_a_planted_write(column, shape):
@@ -517,15 +549,17 @@ def test_assigning_ownership_writes_a_log_that_reaches_the_movement_report(
 
     report = client.get(
         "/reports/daily_movement", headers=create_auth_header("u_cmdr_a")
-    ).json()
+    ).json()["items"]
     rows = [r for r in report if r["serial_number"] == "SA100"]
 
     assert len(rows) == 1, f"expected exactly one movement row, got {rows}"
     assert rows[0]["event_type"] == "ASSIGN"
-    assert rows[0]["location"] == f"User:{target.full_name}", (
+    assert rows[0]["to_owner_name"] == target.full_name, (
         "the new owner must be recoverable from the row; involved_user_id "
-        "records the ACTOR, so this column is the only place they appear"
+        "records the ACTOR, which the report sends as reporter_name"
     )
+    assert rows[0]["reporter_name"] == mock_matrix_db["company_cmdr_a"].full_name
+    assert rows[0]["location"] is None
     assert rows[0]["timestamp"] is not None
 
 
@@ -579,7 +613,7 @@ def test_a_verification_that_moves_nothing_writes_no_history_row(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
             "findings": "all good",
             "action_required": False,
@@ -618,7 +652,7 @@ def test_a_status_change_records_both_ends_and_its_verification(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "cracked stock",
             "action_required": True,
@@ -756,17 +790,18 @@ def test_a_rolled_back_change_takes_its_audit_row_with_it(db_session, mock_matri
     what makes that handler safe.
     """
     item = item_named(db_session, "SA100")
-    before = db_session.query(models.TransactionLog).count()
+    logs_before = db_session.query(models.TransactionLog).count()
 
     audit_trail.record_event(
         db_session,
         equipment=item,
         actor=mock_matrix_db["master"],
         event_type=EventType.ASSIGN,
+        before=audit_trail.custody_of(item),
     )
     db_session.rollback()
 
-    assert db_session.query(models.TransactionLog).count() == before
+    assert db_session.query(models.TransactionLog).count() == logs_before
 
 
 def test_every_event_type_has_a_writer():
@@ -1024,7 +1059,7 @@ def test_an_absent_status_is_refused_however_it_is_spelled(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "x",
             "action_required": False,
@@ -1048,7 +1083,7 @@ def test_verifying_an_unchanged_status_still_advances_the_clock(
 
     last_verified_at is advanced by set_last_verified_at, called unconditionally
     beside set_status in create_verification, and a refactor that tucked it
-    inside the status-changed branch would make a clean daily verification stop
+    inside the status-changed branch would make a clean condition report stop
     counting as a verification -- silently degrading compliance for every item
     that is working correctly, which is most of them.
     """
@@ -1063,7 +1098,7 @@ def test_verifying_an_unchanged_status_still_advances_the_clock(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
             "findings": None,
             "action_required": False,
@@ -1108,29 +1143,6 @@ def test_set_status_refuses_an_empty_new_status(db_session, mock_matrix_db, empt
 
     assert db_session.query(models.EquipmentStatusHistory).count() == before
     assert item.status == "Functional", "the status moved despite the refusal"
-
-
-def test_record_event_refuses_a_location_and_a_recipient_together(
-    db_session, mock_matrix_db
-):
-    """One column, one meaning.
-
-    location is a place and recipient is a person, and transaction_logs has a
-    single string to hold whichever it is. Accepting both would silently drop
-    one -- and which one it dropped would be an implementation detail of the
-    order two lines happen to run in.
-    """
-    item = item_named(db_session, "SA100")
-
-    with pytest.raises(ValueError, match="not both"):
-        audit_trail.record_event(
-            db_session,
-            equipment=item,
-            actor=mock_matrix_db["master"],
-            event_type=EventType.ASSIGN,
-            location="Armory",
-            recipient=mock_matrix_db["soldier_a"],
-        )
 
 
 # --- 7. Fault and repair (DATA-H4-2) -----------------------------------------
@@ -1532,9 +1544,10 @@ def create_item(client, who, serial, **extra):
 
 
 def movement_report(client, who):
+    """The rows of the caller's one group's day (DATA-M9-2)."""
     res = client.get("/reports/daily_movement", headers=create_auth_header(who))
     assert res.status_code == 200, res.text
-    return res.json()
+    return res.json()["items"]
 
 
 def test_classifying_an_item_records_who_decided_it(
@@ -1619,7 +1632,8 @@ def test_the_reclassify_row_is_hidden_by_the_act_it_records(
 ):
     """Sensitivity's third named limit, executable.
 
-    scope_equipment_derived_query filters on the item's CURRENT sensitivity, so
+    The movement report filters on the item's CURRENT sensitivity (through
+    scope_equipment_derived_query until DATA-M9-2, per row since), so
     classifying an item retroactively removes every transaction_logs row about
     it -- including the row that records the classification. The caller who
     would most want to know why the item vanished is exactly the caller who
@@ -1651,7 +1665,7 @@ def test_the_reclassify_row_is_hidden_by_the_act_it_records(
     )
     assert reclassify_rows("u_cmdr_a") == [], (
         "an uncleared caller can see the RECLASSIFY row for a classified item; "
-        "scope_equipment_derived_query is not inheriting the clause"
+        "the movement report is not applying the classification clause"
     )
 
 
@@ -1663,8 +1677,8 @@ def test_a_created_item_is_born_with_a_log_that_reaches_the_report(
     ASSERTED THROUGH THE REPORT, and that is the whole design of this test.
     record_event reads equipment.id, which is None until the INSERT runs, so
     dropping create_equipment's db.flush() writes a TransactionLog with a NULL
-    equipment_id -- which scope_equipment_derived_query's inner join discards
-    silently. Nothing raises. The row exists. A count of transaction_logs still
+    equipment_id -- which the movement report's inner join on the item
+    discards silently. Nothing raises. The row exists. A count of transaction_logs still
     goes up by one. Only asking the endpoint tells the two apart.
     """
     res = create_item(client, "u_master", "NEW-001")
@@ -1717,8 +1731,9 @@ def test_record_event_refuses_an_equipment_that_has_no_id_yet(
     """The one failure in this module that no assertion could otherwise see.
 
     A pending equipment has id None, so the row would carry a NULL
-    equipment_id -- and scope_equipment_derived_query joins INNER, so it is
-    dropped from the movement report and every listing built on it. Nothing
+    equipment_id -- and the movement report joins the item INNER, as every
+    listing built on scope_equipment_derived_query does, so it is dropped from
+    all of them. Nothing
     raises, the row exists, and a count of transaction_logs still goes up by
     one. Written, committed, visible to nobody.
 
@@ -1869,7 +1884,7 @@ def test_a_condition_report_is_not_the_daily_verification(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
             "findings": "no change",
             "action_required": False,
@@ -1913,7 +1928,7 @@ def test_a_refused_condition_report_writes_neither_table(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "should not be recorded",
             "action_required": True,

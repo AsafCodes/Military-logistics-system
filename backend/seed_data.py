@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from .database import DATABASE_URL, SessionLocal, engine
 from . import authz
+from . import clock
 from . import models
 from . import security
 from .enums import Capability, EquipmentStatus
@@ -109,7 +110,12 @@ def seed_group_graph():
     closure agreeing with the edges when it returns. It rebuilds the closure
     once per call, which over four groups costs nothing.
     """
-    groups = {name: authz.Unit(name=name) for name in GROUP_TREE}
+    # Every seeded unit gets the default zone: no branch of this org chart
+    # sits in another one.
+    groups = {
+        name: authz.Unit(name=name, timezone=clock.DEFAULT_TIMEZONE)
+        for name in GROUP_TREE
+    }
     db.add_all(list(groups.values()))
     db.flush()  # add_edge needs the ids, and this session does not autoflush
 

@@ -53,10 +53,9 @@ describe('FaultTypeQueuePage', () => {
     });
 
     it('renders a hostile type name as text, not markup', async () => {
-        // These names are free text from accounts holding no grant -- an
-        // item's holder reporting a fault, or anyone at all through
-        // POST /setup/fault_types -- and this page shows them to the most
-        // privileged accounts there are.
+        // These names are free text from accounts that may hold no grant --
+        // an item's holder reporting a fault -- and this page shows them to
+        // the most privileged accounts there are.
         // React escapes them; this pins that nothing here opts out.
         const HOSTILE = '<img src=x onerror="window.__pwned=1">';
         serving([{ id: 3, name: HOSTILE, is_pending: true }]);
@@ -169,6 +168,26 @@ describe('FaultTypeQueuePage', () => {
         expect(screen.getByText('Cracked Housing')).toBeInTheDocument();
         // And it can be tried again.
         await waitFor(() => expect(approveButtonFor('Cracked Housing')).not.toBeDisabled());
+    });
+
+    it('keeps the row and names the proposer rule when an approval is refused (403)', async () => {
+        // SEC-M14: the backend refuses the account that proposed the type. The
+        // generic failure text would read as "try again", which never helps.
+        serving(PENDING);
+        vi.spyOn(api, 'put').mockRejectedValue({ response: { status: 403 } });
+        const failed = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const alerted = vi.spyOn(window, 'alert').mockImplementation(() => { });
+
+        render(<FaultTypeQueuePage />);
+        await screen.findByText('Cracked Housing');
+        fireEvent.click(approveButtonFor('Cracked Housing'));
+
+        await waitFor(() => expect(alerted).toHaveBeenCalledWith(
+            'אין באפשרותך לאשר סוג תקלה זה. ייתכן שהצעת אותו בעצמך: סוג תקלה מאשר מי שלא הציע אותו.'));
+        expect(alerted).toHaveBeenCalledTimes(1);
+        expect(failed).not.toHaveBeenCalled();
+        expect(screen.getByText('Cracked Housing')).toBeInTheDocument();
+        expect(screen.getByText('Frayed Strap')).toBeInTheDocument();
     });
 
     it('shows a real permission refusal on a 403, with no retry', async () => {

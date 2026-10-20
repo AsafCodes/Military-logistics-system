@@ -7,7 +7,6 @@ from ..database import get_db
 from ..dependencies import (
     EQUIPMENT_RESPONSE_LOADS,
     get_current_active_user,
-    get_daily_status,
     scope_user_query,
 )
 from ..enums import Capability
@@ -40,7 +39,10 @@ def create_user(user: schemas.UserCreate, current_user: models.User = Depends(ge
         personal_number=user.personal_number,
         full_name=user.full_name,
         password_hash=security.get_password_hash(user.password),
-        is_active_duty=user.is_active_duty,
+        # SEC-M2: always on duty. No route changes the flag afterwards and
+        # login refuses an inactive account, so the caller choosing False made
+        # an account that could never log in or be activated over HTTP.
+        is_active_duty=True,
     )
     db.add(new_user)
     db.flush()
@@ -50,7 +52,7 @@ def create_user(user: schemas.UserCreate, current_user: models.User = Depends(ge
     return new_user
 
 @router.put("/users/{user_id}/group", response_model=schemas.UserResponse)
-def update_user_group(user_id: int, req: schemas.UpdateUserGroupRequest, current_user: models.User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def update_user_group(user_id: schemas.DbInt, req: schemas.UpdateUserGroupRequest, current_user: models.User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     # Reassigning where someone sits is a personnel act, gated the same as
     # creating them -- H1-12 replaces the old profile-assignment route with
     # this one, same MANAGE_PERSONNEL gate, same replace-not-add shape.
@@ -91,7 +93,7 @@ def get_my_equipment(current_user: models.User = Depends(get_current_active_user
     return [schemas.EquipmentResponse(
         id=item.id, type=item.item_name, item_name=item.item_name, status=item.status,
         current_state_description=item.current_state_description, compliance_check=item.report_status,
-        report_status=item.report_status, compliance_level=get_daily_status(item.last_verified_at),
+        report_status=item.report_status, compliance_level=item.compliance_level,
         holder_user_id=item.holder_user_id, custom_location=item.custom_location,
         actual_location_id=item.actual_location_id, serial_number=item.serial_number,
         sensitivity=item.sensitivity  # DATA-H3-1

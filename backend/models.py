@@ -1,7 +1,7 @@
 import enum
 from datetime import timedelta
 
-from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import relationship
 
 # Imported for its side effect: it registers the group algebra tables on
@@ -15,7 +15,15 @@ from . import (
     clock,
 )
 from .database import Base  # Use shared Base from backend package
-from .enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from .enums import (
+    ChangeReason,
+    ClaimOutcome,
+    ComplianceLevel,
+    EquipmentStatus,
+    EventType,
+    Sensitivity,
+    TicketStatus,
+)
 
 
 def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
@@ -266,17 +274,20 @@ class Equipment(Base):
         return f"במלאי ללא בעלים (יתום), כרגע: {location_desc}"
 
     @property
-    def compliance_level(self):
+    def compliance_level(self) -> ComplianceLevel:
+        # The only implementation of the three levels (DATA-M11): every route
+        # that sends a ComplianceLevel reads this property. report_status
+        # below is a separate text with its own 24-hour rule (DATA-L16).
         if not self.last_verified_at:
-            return "SEVERE"
-        
+            return ComplianceLevel.SEVERE
+
         diff = clock.utcnow() - self.last_verified_at
         if diff < timedelta(hours=24):
-            return "GOOD"
+            return ComplianceLevel.GOOD
         elif diff < timedelta(hours=48):
-            return "WARNING"
+            return ComplianceLevel.WARNING
         else:
-            return "SEVERE"
+            return ComplianceLevel.SEVERE
 
     @property
     def report_status(self):
@@ -289,34 +300,108 @@ class Equipment(Base):
         return "דיווח תקין"
 
 # --- Logs & History ---
+def _custody_column(column: str, referred: str, index: bool = True) -> Column:
+    """One of TransactionLog's from_/to_ id columns. DATA-M8-1."""
+    return Column(
+        Integer,
+        _restrict('transaction_logs', column, referred),
+        nullable=True,
+        index=index,
+    )
+
+
 class TransactionLog(Base):
     __tablename__ = 'transaction_logs'
+
+    # DATA-M8-1. Every member of EventType, and nothing else. NOT NULL as well
+    # (below), so NULL is refused too: a log row that does not say what
+    # happened says nothing. The one writer, audit_trail.record_event, passes
+    # a member; the root main.py that predated it did not always (see the
+    # revision b7e3d91c4f2a).
+    #
+    # DATA-M9-2. The daily movement report selects a group's day in two arms,
+    # one over group_id and one over from_group_id, each a range on the
+    # timestamp; each arm has its composite index. The second leads with
+    # from_group_id, so it also serves that foreign key, and the single-column
+    # index it replaced would only repeat its prefix. The report was the one
+    # reader of the timestamp index, which went with it.
+    __table_args__ = (
+        _one_of('event_type', EventType, 'ck_transaction_logs_event_type'),
+        Index('ix_transaction_logs_group_id_timestamp', 'group_id', 'timestamp'),
+        Index('ix_transaction_logs_from_group_id_timestamp', 'from_group_id', 'timestamp'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     equipment_id = Column(Integer, _restrict('transaction_logs', 'equipment_id', 'equipment'), index=True)
+    # DATA-M9-2. The item's group when the event happened: the group whose
+    # calendar day the row belongs to. Written by audit_trail.record_event for
+    # every event, so a past day keeps its rows when the item moves on. NULL
+    # only on a row with no item.
+    group_id = Column(
+        Integer,
+        _restrict('transaction_logs', 'group_id', 'groups'),
+        nullable=True,
+    )
+    # The ACTOR: whoever made the change, not whoever received the item.
     involved_user_id = Column(
         Integer,
         _restrict('transaction_logs', 'involved_user_id', 'users'),
         nullable=True,
         index=True,
     )
-    involved_location_id = Column(
-        Integer,
-        _restrict('transaction_logs', 'involved_location_id', 'locations'),
-        nullable=True,
-        index=True,
-    )
-    timestamp = Column(clock.UtcDateTime, default=clock.utcnow, index=True)
+    timestamp = Column(clock.UtcDateTime, default=clock.utcnow)
     user_status_at_time = Column(Boolean, nullable=True)
-    event_type = Column(String) 
-    
+    event_type = Column(String, nullable=False)
+
     # Faults
     is_returned_broken = Column(Boolean, default=False)
     broken_description = Column(String, nullable=True)
-    
-    # Location Traceability (CRITICAL)
+
+    # --- Custody before and after (DATA-M8-1) ---
+    #
+    # The item's custody as the event found it (from_) and as it left it
+    # (to_), written by audit_trail.record_event for the events in its
+    # CUSTODY_EVENTS and left NULL by every other event. The four parts are
+    # Equipment's own: holder_user_id, owner_user_id, group_id, custom_location.
+    #
+    # NULL in a row written before this revision, for every event: names are
+    # not unique, so the old "User:<name>" strings in `location` cannot be
+    # turned back into ids, and a guessed before state is worse in an audit
+    # trail than an empty one.
+    from_holder_user_id = _custody_column('from_holder_user_id', 'users')
+    to_holder_user_id = _custody_column('to_holder_user_id', 'users')
+    from_owner_user_id = _custody_column('from_owner_user_id', 'users')
+    to_owner_user_id = _custody_column('to_owner_user_id', 'users')
+    # Indexed by ix_transaction_logs_from_group_id_timestamp above, not here.
+    from_group_id = _custody_column('from_group_id', 'groups', index=False)
+    to_group_id = _custody_column('to_group_id', 'groups')
+    from_location = Column(String, nullable=True)
+    to_location = Column(String, nullable=True)
+
+    # Free text the actor gave for a transfer, an assignment or a
+    # reclassification. Optional; schemas.normalize_reason trims it, turns a
+    # blank into NULL and caps its length.
+    reason = Column(String, nullable=True)
+
+    # The after state as one string: a place, or "User:<name>" for a person.
+    # Legacy only. Every row before DATA-M8-1 has only this; nothing writes it
+    # since DATA-M8-2, when the movement report moved onto the to_ columns. It
+    # is kept, and still sent by the report, for the rows that have nothing
+    # else.
     location = Column(String, nullable=True)
 
     equipment = relationship("Equipment")
+
+    # DATA-M8-2. Read by the movement report for the names it sends. viewonly,
+    # so the ids above stay the one way in: audit_trail.record_event writes
+    # those, and a relationship assignment cannot write past it.
+    actor = relationship("User", foreign_keys=[involved_user_id], viewonly=True)
+    from_holder = relationship("User", foreign_keys=[from_holder_user_id], viewonly=True)
+    to_holder = relationship("User", foreign_keys=[to_holder_user_id], viewonly=True)
+    from_owner = relationship("User", foreign_keys=[from_owner_user_id], viewonly=True)
+    to_owner = relationship("User", foreign_keys=[to_owner_user_id], viewonly=True)
+    from_group = relationship("Group", foreign_keys=[from_group_id], viewonly=True)
+    to_group = relationship("Group", foreign_keys=[to_group_id], viewonly=True)
 
 # --- Maintenance ---
 class FaultType(Base):
@@ -345,9 +430,75 @@ class MaintenanceLog(Base):
     closed_at = Column(clock.UtcDateTime, nullable=True)
     
     technician_id = Column(Integer, _restrict('maintenance_logs', 'technician_id', 'users'), nullable=True, index=True)
-    
+
+    # DATA-M22. Who took the ticket, and when. Set by start, cleared by
+    # release, and left alone by a close, so a closed ticket says who worked
+    # it (here) and who closed it (technician_id). The current claim only:
+    # every take, released ones included, is a row in ticket_claims
+    # (DATA-M22-2), and the routes write the two in one transaction.
+    assigned_to_id = Column(
+        Integer, _restrict('maintenance_logs', 'assigned_to_id', 'users'), nullable=True, index=True
+    )
+    started_at = Column(clock.UtcDateTime, nullable=True)
+
     equipment = relationship("Equipment")
     fault_type = relationship("FaultType")
+    # foreign_keys, because technician_id is a second key to users.
+    assignee = relationship("User", foreign_keys=[assigned_to_id])
+    # Newest first, the order the API returns them in. id breaks a tie
+    # between two takes in the same instant.
+    claims = relationship(
+        "TicketClaim",
+        order_by=lambda: (TicketClaim.started_at.desc(), TicketClaim.id.desc()),
+        viewonly=True,
+    )
+
+
+class TicketClaim(Base):
+    """One take of a maintenance ticket. DATA-M22-2.
+
+    start_ticket inserts the row; release_ticket ends it as RELEASED, and a
+    close (close_ticket or fix_equipment) ends it as CLOSED. So a ticket that
+    changed hands keeps who held it, from when to when, and who ended each
+    take, which maintenance_logs.assigned_to_id alone could not: a release
+    cleared it.
+
+    At most one claim of a ticket is open (ended_at IS NULL), enforced by
+    uq_ticket_claims_open_ticket, a partial unique index. While a ticket is In
+    Progress its open claim's user_id is the ticket's assigned_to_id; the
+    routes keep the two in step, and tests/test_ticket_claims.py checks it
+    after each of them.
+    """
+    __tablename__ = 'ticket_claims'
+
+    __table_args__ = (
+        _one_of('outcome', ClaimOutcome, 'ck_ticket_claims_outcome'),
+        CheckConstraint(
+            "(ended_at IS NULL AND ended_by_id IS NULL AND outcome IS NULL)"
+            " OR (ended_at IS NOT NULL AND ended_by_id IS NOT NULL AND outcome IS NOT NULL)",
+            name='ck_ticket_claims_ended',
+        ),
+        Index(
+            'uq_ticket_claims_open_ticket', 'ticket_id', unique=True,
+            sqlite_where=text('ended_at IS NULL'),
+            postgresql_where=text('ended_at IS NULL'),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(
+        Integer, _restrict('ticket_claims', 'ticket_id', 'maintenance_logs'), nullable=False, index=True
+    )
+    # Who took it.
+    user_id = Column(Integer, _restrict('ticket_claims', 'user_id', 'users'), nullable=False, index=True)
+    started_at = Column(clock.UtcDateTime, nullable=False)
+    ended_at = Column(clock.UtcDateTime, nullable=True)
+    # Who released or closed it, who need not be user_id.
+    ended_by_id = Column(Integer, _restrict('ticket_claims', 'ended_by_id', 'users'), nullable=True, index=True)
+    outcome = Column(String, nullable=True)
+
+    user = relationship("User", foreign_keys=[user_id])
+    ended_by = relationship("User", foreign_keys=[ended_by_id])
 
 # --- Solution Types ---
 class SolutionType(Base):

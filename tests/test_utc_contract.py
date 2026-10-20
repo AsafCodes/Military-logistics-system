@@ -77,7 +77,7 @@ def test_round_trip_is_aware_and_storage_format_is_unchanged(db_session):
     # TransactionLog.timestamp carries the same UtcDateTime column type as
     # every other converted column and has no NOT NULL FKs to satisfy, so it
     # is the simplest fixture for a pure round-trip check.
-    log = models.TransactionLog(event_type="TEST")
+    log = models.TransactionLog(event_type="HANDOVER")
     db_session.add(log)
     db_session.commit()
     log_id = log.id
@@ -102,7 +102,7 @@ def test_naive_legacy_rows_read_back_aware(db_session):
     naive-UTC text, and the decorator must keep interpreting them as UTC
     rather than, say, refusing them or treating them as local time.
     """
-    log = models.TransactionLog(event_type="LEGACY")
+    log = models.TransactionLog(event_type="HANDOVER")
     db_session.add(log)
     db_session.commit()
     log_id = log.id
@@ -186,7 +186,7 @@ def test_bind_param_converts_a_non_utc_offset_rather_than_stripping_it(db_sessio
     plus_three = timezone(timedelta(hours=3))
     local_noon = datetime(2026, 6, 15, 12, 0, 0, tzinfo=plus_three)  # == 09:00 UTC
 
-    log = models.TransactionLog(event_type="OFFSET_TEST", timestamp=local_noon)
+    log = models.TransactionLog(event_type="HANDOVER", timestamp=local_noon)
     db_session.add(log)
     db_session.commit()
     log_id = log.id
@@ -230,7 +230,7 @@ def _make_equipment(db_session, last_verified_at):
 
     unique = uuid.uuid4().hex
     cat = models.CatalogItem(name=f"Arithmetic Test Item {unique}")
-    group = authz.Unit(name=f"arithmetic-test-group-{unique}")
+    group = authz.Unit(name=f"arithmetic-test-group-{unique}", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add_all([cat, group])
     db_session.commit()
 
@@ -285,44 +285,19 @@ def test_compliance_level_at_the_exact_24_and_48_hour_boundaries(db_session):
     assert at_48h.compliance_level == "SEVERE"
 
 
-def test_get_daily_status_agrees_with_compliance_level(db_session):
-    """dependencies.get_daily_status is a second implementation of the same
-    boundaries (models.Equipment.compliance_level); both must still agree
-    now that both go through clock.utcnow() instead of datetime.utcnow().
+def test_a_never_verified_item_is_severe(db_session):
+    """The None arm of compliance_level. This was pinned on
+    dependencies.get_daily_status, a second implementation of the same rules,
+    until DATA-M11 deleted it; the property is the only one now.
     """
-    from backend.dependencies import get_daily_status
-
-    now = clock.utcnow()
-    assert get_daily_status(now - timedelta(hours=1)) == "GOOD"
-    assert get_daily_status(now - timedelta(hours=30)) == "WARNING"
-    assert get_daily_status(now - timedelta(hours=72)) == "SEVERE"
-    assert get_daily_status(now - timedelta(hours=24)) == "WARNING"
-    assert get_daily_status(now - timedelta(hours=48)) == "SEVERE"
-    assert get_daily_status(None) == "SEVERE"
-
-
-def test_iso_z_handles_none_naive_and_non_utc_input():
-    """clock.iso_z() directly, at its three input shapes.
-
-    The endpoint-level contract test below only ever feeds it values that
-    came back through UtcDateTime (already aware UTC), so it cannot catch a
-    regression in iso_z()'s own None/naive/offset handling -- this does.
-    """
-    assert clock.iso_z(None) is None
-
-    naive = datetime(2026, 3, 1, 8, 0, 0)
-    assert clock.iso_z(naive) == "2026-03-01T08:00:00Z"
-
-    plus_five = timezone(timedelta(hours=5))
-    offset = datetime(2026, 3, 1, 13, 0, 0, tzinfo=plus_five)  # == 08:00 UTC
-    assert clock.iso_z(offset) == "2026-03-01T08:00:00Z"
+    assert _make_equipment(db_session, None).compliance_level == "SEVERE"
 
 
 # --- 5. The three non-plain-substitution sites -------------------------------
 
 
 def test_bulk_update_writes_an_aware_correct_closed_at(client, mock_matrix_db, token_master, db_session):
-    """maintenance.py:152 writes closed_at through Query.update(), not an ORM
+    """maintenance._close_tickets writes closed_at through Query.update(), not an ORM
     attribute assignment -- a different path through the bind processor than
     every other site here, and worth its own pin.
     """
@@ -352,31 +327,40 @@ def test_bulk_update_writes_an_aware_correct_closed_at(client, mock_matrix_db, t
     assert before <= log.closed_at <= after
 
 
-def test_cutoff_comparison_selects_the_right_side_of_the_boundary(
+def test_the_day_s_bounds_select_the_right_side_of_each_edge(
     client, db_session, mock_matrix_db, token_master
 ):
-    """reports.py:91's `cutoff` is a comparison bind against TransactionLog.timestamp,
-    not a write -- the aware cutoff must convert correctly or the 24h filter on
-    /reports/daily_movement compares an aware value against naive storage.
+    """The movement report's day ends (DATA-M9-2) are comparison binds against
+    TransactionLog.timestamp, not writes -- the aware bounds must convert
+    correctly or the filter on /reports/daily_movement compares an aware
+    value against naive storage.
+
+    One microsecond either side of both edges, on a day that has passed so
+    both edges are behind the clock. The range is half-open: its first
+    instant is in and the next day's is not.
     """
     item = db_session.query(models.Equipment).filter_by(serial_number="SA100").one()
+    tz = clock.zone(clock.DEFAULT_TIMEZONE)
+    day = clock.today_in(tz) - timedelta(days=2)
+    start, end = clock.day_bounds(tz, day)
+    tick = timedelta(microseconds=1)
 
-    inside = models.TransactionLog(
-        equipment_id=item.id, event_type="INSIDE_WINDOW",
-        timestamp=clock.utcnow() - timedelta(hours=1),
-    )
-    outside = models.TransactionLog(
-        equipment_id=item.id, event_type="OUTSIDE_WINDOW",
-        timestamp=clock.utcnow() - timedelta(hours=48),
-    )
-    db_session.add_all([inside, outside])
+    def row(at):
+        return models.TransactionLog(
+            equipment_id=item.id, group_id=item.group_id, event_type="HANDOVER", timestamp=at,
+        )
+
+    inside = [row(start), row(end - tick)]
+    outside = [row(start - tick), row(end)]
+    db_session.add_all(inside + outside)
     db_session.commit()
 
-    res = client.get("/reports/daily_movement", headers=token_master)
+    res = client.get(f"/reports/daily_movement?date={day.isoformat()}", headers=token_master)
     assert res.status_code == 200, res.text
-    event_types = {row["event_type"] for row in res.json()}
-    assert "INSIDE_WINDOW" in event_types
-    assert "OUTSIDE_WINDOW" not in event_types
+    # Told apart by id: event_type holds the EventType vocabulary only
+    # (DATA-M8-1), so it can no longer carry a marker.
+    ids = {r["id"] for r in res.json()["items"]}
+    assert ids == {r.id for r in inside}
 
 
 def test_jwt_exp_claim_is_byte_identical_before_and_after(monkeypatch):
@@ -433,7 +417,7 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "Routine",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
         },
         headers=token_master,
@@ -446,6 +430,12 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         headers=token_master,
     )
     assert report.status_code == 200, report.text
+    # DATA-M22-2: taken before the fix, so the ticket carries a claim with
+    # both ends set.
+    take = client.post(
+        f"/maintenance/tickets/{report.json()['ticket_id']}/start", headers=token_master
+    )
+    assert take.status_code == 200, take.text
     fix = client.post(f"/maintenance/fix/{item.id}", headers=token_master)
     assert fix.status_code == 200, fix.text
 
@@ -467,7 +457,10 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
 
     daily_movement = client.get("/reports/daily_movement", headers=token_master)
     assert daily_movement.status_code == 200
-    collected += [row["timestamp"] for row in daily_movement.json() if row["timestamp"]]
+    movement = daily_movement.json()
+    collected += [row["timestamp"] for row in movement["items"] if row["timestamp"]]
+    # DATA-M9-2: the day's two ends.
+    collected += [movement["start"], movement["end"]]
 
     verifications = client.get(f"/verifications/equipment/{item.id}", headers=token_master)
     assert verifications.status_code == 200
@@ -484,6 +477,11 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
     # TicketResponse declared two aliases for the column and not the column.
     collected += [t["closed_at"] for t in tickets.json() if t["closed_at"]]
     collected += [t["opened_at"] for t in tickets.json() if t["opened_at"]]
+    collected += [t["started_at"] for t in tickets.json() if t["started_at"]]
+    claims = [c for t in tickets.json() for c in t["claims"]]
+    assert claims, "the taken ticket's claim is missing from the sweep"
+    collected += [c["started_at"] for c in claims]
+    collected += [c["ended_at"] for c in claims if c["ended_at"]]
 
     assert len(collected) >= 8, f"expected timestamps from every endpoint, got {collected}"
 
@@ -491,10 +489,13 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         _parse_and_check_aware_utc(value)
 
     # Every collected string must use the same ZONE DESIGNATOR ('Z' vs
-    # '+00:00'), proving the un-modelled reports.py dicts (clock.iso_z) and
-    # the Pydantic response_model routes agree on one wire format rather than
-    # shipping two. Extracted with a regex rather than a fixed slice, since
-    # fractional-second digits legitimately differ per timestamp.
+    # '+00:00'), proving the endpoints agree on one wire format rather than
+    # shipping two. Both reports used to format their timestamps with a
+    # helper of their own (clock.iso_z); each has had a response_model since,
+    # /reports/query from DATA-M7 and /reports/daily_movement from DATA-M8-2,
+    # and the helper is gone. Extracted
+    # with a regex rather than a fixed slice, since fractional-second digits
+    # legitimately differ per timestamp.
     designators = {
         re.search(r"(Z|[+-]\d{2}:\d{2})$", value).group(1) for value in collected
     }

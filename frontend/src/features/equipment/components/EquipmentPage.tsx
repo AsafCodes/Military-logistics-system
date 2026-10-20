@@ -112,6 +112,33 @@ function ReportFaultModal({
     );
 }
 
+/* ---------- Reason (DATA-M8-2) ---------- */
+// The backend's cap on a reason (schemas.REASON_MAX).
+const REASON_MAX = 500;
+
+// The optional reason a transfer or an assignment carries into the movement
+// log. Sent only when it holds something besides whitespace, so a request
+// with no reason is the request it was before. The backend trims it again
+// and caps it on the trimmed text.
+function withReason<T extends object>(body: T, reason: string): T & { reason?: string } {
+    return reason.trim() ? { ...body, reason } : body;
+}
+
+function ReasonInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+    return (
+        <input
+            type="text"
+            aria-label="סיבה"
+            value={value}
+            maxLength={REASON_MAX}
+            onChange={e => onChange(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-border/50 bg-background text-foreground
+                       focus:ring-2 focus:ring-primary/50 outline-none"
+            placeholder="סיבה (לא חובה)"
+        />
+    );
+}
+
 /* ---------- Transfer Modal ---------- */
 function TransferModal({
     item, onClose, onSuccess
@@ -125,6 +152,7 @@ function TransferModal({
     const [searchResults, setSearchResults] = useState<User[]>([]);
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [locationName, setLocationName] = useState('');
+    const [reason, setReason] = useState('');
     const [loading, setLoading] = useState(false);
 
     // FE-H5: the cleanup cancels the timer and aborts a request already sent,
@@ -168,7 +196,7 @@ function TransferModal({
         const target = mode === 'person' ? { to_holder_id: selectedUserId } : { to_location: locationName };
         setLoading(true);
         try {
-            await api.post('/equipment/transfer', { equipment_id: item.id, ...target });
+            await api.post('/equipment/transfer', withReason({ equipment_id: item.id, ...target }, reason));
             onSuccess();
             onClose();
         } catch (err) {
@@ -239,6 +267,8 @@ function TransferModal({
                         />
                     )}
 
+                    <ReasonInput value={reason} onChange={setReason} />
+
                     <div className="flex gap-3 pt-2">
                         <button onClick={onClose}
                             className="flex-1 px-4 py-2 rounded-lg border border-border/50 text-foreground hover:bg-accent transition-colors">
@@ -268,6 +298,7 @@ function AssignOwnerModal({
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState<User[]>([]);
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+    const [reason, setReason] = useState('');
     const [loading, setLoading] = useState(false);
 
     // FE-H5 / FE-L6: the same abort-on-cleanup and encoded term as
@@ -303,10 +334,10 @@ function AssignOwnerModal({
         if (!selectedUserId) return;
         setLoading(true);
         try {
-            await api.post('/equipment/assign_owner/', {
+            await api.post('/equipment/assign_owner/', withReason({
                 equipment_id: item.id,
                 owner_id: selectedUserId,
-            });
+            }, reason));
             onSuccess();
             onClose();
         } catch (err) {
@@ -349,6 +380,7 @@ function AssignOwnerModal({
                             </div>
                         )}
                     </div>
+                    <ReasonInput value={reason} onChange={setReason} />
                     <div className="flex gap-3 pt-2">
                         <button onClick={onClose}
                             className="flex-1 px-4 py-2 rounded-lg border border-border/50 text-foreground hover:bg-accent transition-colors">
@@ -489,6 +521,8 @@ export default function EquipmentPage() {
         }
     };
 
+    // Repairs the whole item, so the backend closes every open ticket of it.
+    // MaintenancePage closes one ticket by its own id (DATA-M21).
     const handleRepair = async (item: Equipment) => {
         try {
             await api.post(`/maintenance/fix/${item.id}`);

@@ -30,7 +30,7 @@ from sqlalchemy import event, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import Select
 
-from backend import authz, models
+from backend import authz, clock, models
 from backend.enums import Capability
 
 # --- helpers --------------------------------------------------------------
@@ -73,7 +73,7 @@ def org(db_session):
     ungranted - nothing
     """
     names = ["Bde188", "Bn53", "Bn71", "CoA", "CoB", "CoZ"]
-    groups = {name: authz.Unit(name=name) for name in names}
+    groups = {name: authz.Unit(name=name, timezone=clock.DEFAULT_TIMEZONE) for name in names}
     db_session.add_all(groups.values())
     db_session.flush()
     for parent, child in [
@@ -496,7 +496,7 @@ def test_a_group_outside_the_closure_does_not_displace_a_real_membership(db_sess
     in primary_group_id would stop it. That is the whole of the edge, and the
     fix belongs wherever groups are created, not here.
     """
-    stranded = authz.Unit(name="Stranded")
+    stranded = authz.Unit(name="Stranded", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add(stranded)
     db_session.flush()
     db_session.add(authz.GroupMembership(

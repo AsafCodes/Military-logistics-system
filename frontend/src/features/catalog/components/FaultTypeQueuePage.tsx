@@ -3,10 +3,10 @@ import api from '@/lib/axios';
 import { useLatestRequest } from '@/lib/useLatestRequest';
 import type { FaultType } from '@/types';
 
-// API-H6. The other end of report_fault's is_pending: a reporter without
-// REPORT_STATUS over the item's group mints a fault type that EquipmentPage's
-// dropdown hides until someone approves it. Before this page nothing in the
-// interface could, so the queue only ever grew.
+// API-H6. The other end of report_fault's is_pending: a report naming a new
+// fault type mints it pending, whoever reports (SEC-M14), and EquipmentPage's
+// dropdown hides it until someone other than its reporter approves it. Before
+// this page nothing in the interface could, so the queue only ever grew.
 //
 // Approve only, deliberately. Every pending type the shipped UI can mint comes
 // from a fault report, and in practice that report opens a ticket under it --
@@ -95,6 +95,12 @@ export default function FaultTypeQueuePage() {
                 // Gone already (deleted). Approve answers 404 for nothing else,
                 // so the type is no longer in the queue, and neither is its row.
                 dropRow(fault.id);
+            } else if (status === 403) {
+                // SEC-M14: the account that proposed a type may not approve it,
+                // and the queue cannot tell this page which rows those are. A
+                // lost grant answers 403 too, so the message covers both. The
+                // row stays: it is still pending, for someone else to approve.
+                alert('אין באפשרותך לאשר סוג תקלה זה. ייתכן שהצעת אותו בעצמך: סוג תקלה מאשר מי שלא הציע אותו.');
             } else {
                 console.error('Failed to approve fault type', err);
                 alert('אישור סוג התקלה נכשל.');

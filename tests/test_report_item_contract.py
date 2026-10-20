@@ -1,7 +1,8 @@
 """API-H4. /reports/query and the frontend type that describes it, held together.
 
-The route builds plain dicts with no response model, so nothing generated
-from the backend can describe its rows (API-M2). The shared frontend type was
+The route built plain dicts with no response model, so nothing generated
+from the backend could describe its rows (API-M2); DATA-M7 gave it one,
+schemas.InventoryReportItem. The shared frontend type was
 written by hand, and it drifted until it matched the route on two of its
 seven fields, while the page that actually renders the report declared a
 private, nearly-correct copy of its own. Two definitions of one wire shape,
@@ -14,7 +15,9 @@ compare it with rows the real route returns:
 - optionality: the route always sends every key, so no field may be `?`;
 - nullability, both ways: null on the wire only where the type admits it,
   and every field the type declares nullable seen null at least once;
-- the scalar type of every non-null value;
+- the scalar type of every non-null value, or, for a field typed by a local
+  alias of string literals (reporting_status: ComplianceLevel, DATA-M7),
+  membership in that alias;
 - uniqueness: no other flat interface or type alias under frontend/src
   declares a report row, so a copy shaped like the old private one cannot
   come back unnoticed (see that test for what it cannot see).
@@ -66,6 +69,23 @@ def declared_fields(source, name):
     return fields
 
 
+def literal_alias(source, name):
+    """The members of `export type <name> = 'a' | 'b' ...;`, as a set.
+
+    Refuses rather than guesses, like declared_fields: an alias it cannot
+    find, or one with an alternative that is not a quoted string literal,
+    fails the test.
+    """
+    match = re.search(rf"export\s+type\s+{re.escape(name)}\s*=\s*(?P<body>[^;]*);", strip_comments(source))
+    assert match, f"no `export type {name} = ...;` in {TYPES_FILE}"
+    members = set()
+    for alternative in match["body"].split("|"):
+        literal = re.fullmatch(r"\s*'(?P<value>[^']*)'\s*", alternative)
+        assert literal, f"{name} has a member that is not a string literal: {alternative.strip()!r}"
+        members.add(literal["value"])
+    return members
+
+
 def report_rows(client, db_session, token_master):
     """The seeded rows plus one item with nothing set that can be left unset.
 
@@ -110,7 +130,8 @@ def test_the_shared_type_declares_exactly_the_keys_every_row_carries(
 def test_null_appears_on_the_wire_exactly_where_the_type_admits_it(
     client, db_session, token_master
 ):
-    fields = declared_fields(TYPES_FILE.read_text(encoding="utf-8"), INTERFACE)
+    source = TYPES_FILE.read_text(encoding="utf-8")
+    fields = declared_fields(source, INTERFACE)
     rows = report_rows(client, db_session, token_master)
 
     for row in rows:
@@ -122,9 +143,17 @@ def test_null_appears_on_the_wire_exactly_where_the_type_admits_it(
                 )
                 continue
             scalars = [alt for alt in alternatives if alt != "null"]
-            assert len(scalars) == 1 and scalars[0] in SCALARS, (
-                f"{INTERFACE}.{key} is {' | '.join(alternatives)}; this test reads only one scalar"
+            assert len(scalars) == 1, (
+                f"{INTERFACE}.{key} is {' | '.join(alternatives)}; this test reads only one type"
             )
+            if scalars[0] not in SCALARS:
+                # Not a scalar, so it must be a local alias of string
+                # literals; literal_alias refuses anything else.
+                members = literal_alias(source, scalars[0])
+                assert type(value) is str and value in members, (
+                    f"{key}={value!r} on the wire, {INTERFACE} says one of {sorted(members)}"
+                )
+                continue
             expected = SCALARS[scalars[0]]
             # bool is an int subclass; a number field must not accept one.
             assert type(value) is expected, (

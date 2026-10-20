@@ -39,3 +39,9 @@ bcrypt==5.0.0
 # `class Config` blocks, and version 2 warns that version 3 will not read
 # them.
 pydantic==2.14.0
+# DATA-M9. The zone database that backend/clock.py reads through zoneinfo.
+# zoneinfo reads the system's zone files first and falls back to this package
+# for a zone they lack, so a machine with none at all -- Windows -- still has
+# every zone. clock.py also takes the list of names it accepts from this
+# package, so that list is the same on every machine.
+tzdata==2026.5

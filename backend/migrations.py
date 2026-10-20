@@ -98,7 +98,67 @@ BASELINE_STAMP = "e5f1b8d24a07"
 # database whose rules are all still RESTRICT, that leaves nothing in the
 # result to tell the two apart, so a re-run is asserted to emit no DDL, on both
 # dialects.
-IDEMPOTENT_SCHEMA_REVISIONS = frozenset({"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47"})
+#
+# DATA-M8-1's movement-history revision adds columns, keys, indexes and a
+# CHECK and drops a column, each checked by name before it is done. It adds
+# keys rather than re-ruling existing ones, so DATA-H13-2's quiet shape is
+# not among them; a re-run is still asserted to emit no DDL.
+#
+# DATA-M9-1's group time zone adds one column, checked by name.
+#
+# DATA-M9-2's movement-log group adds a column, a key and two indexes and
+# drops two indexes, each checked by name.
+#
+# DATA-M22's ticket assignee adds two columns, a key and an index, each
+# checked by name.
+#
+# DATA-M22-2's ticket claims add a table and its indexes, each checked by
+# name, and backfill it with INSERTs that skip a ticket already claimed.
+IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
+    {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a", "9d4e2b7c1a60",
+     "3c6a0f8e2d71", "7a2f5c9d1e38", "5e8b1d4f7c29"}
+)
+
+# (table, column) for every column a revision after BASELINE_STAMP adds.
+#
+# describe_drift gates the baseline path on the models of today, and a
+# pre-Alembic database built before such a revision lacks its columns by
+# definition -- the revision that adds them runs only after the stamp. So
+# without this a column added after the stamp would refuse every database
+# the baseline path exists for. DATA-M8-1 is the first revision after the
+# stamp to add one, DATA-M9-1 (groups.timezone) the second, DATA-M9-2
+# (transaction_logs.group_id) the third, DATA-M22
+# (maintenance_logs.assigned_to_id and started_at, who took a ticket and when)
+# the fourth.
+#
+# Kept in step with the chain by a test rather than by hand:
+# tests/test_group_schema.py migrates one database to the stamp and another to
+# head and asserts that the columns head adds are exactly these.
+ADDED_AFTER_BASELINE = frozenset(
+    ("transaction_logs", column)
+    for column in (
+        "from_holder_user_id", "to_holder_user_id",
+        "from_owner_user_id", "to_owner_user_id",
+        "from_group_id", "to_group_id",
+        "from_location", "to_location",
+        "reason", "group_id",
+    )
+) | {
+    ("groups", "timezone"),
+    ("maintenance_logs", "assigned_to_id"),
+    ("maintenance_logs", "started_at"),
+}
+
+# Every table a revision after BASELINE_STAMP creates, for the reason
+# ADDED_AFTER_BASELINE lists columns: a pre-Alembic database lacks such a
+# table by definition, and the revision that creates it runs only after the
+# stamp, so describe_drift would otherwise refuse every database the baseline
+# path exists for. DATA-M22-2 (ticket_claims, one row per take of a ticket)
+# is the first.
+#
+# Kept in step with the chain by the same test as ADDED_AFTER_BASELINE, which
+# compares the tables head has and the stamp lacks with this list.
+TABLES_ADDED_AFTER_BASELINE = frozenset({"ticket_claims"})
 
 
 def alembic_config() -> Config:
@@ -137,11 +197,21 @@ def describe_drift(conn) -> list:
     A missing UNIQUE index is still drift. It is a rule about the data rather
     than a way of finding it, and a database without one accepts rows the
     models promise cannot exist.
+
+    A missing column in ADDED_AFTER_BASELINE is not counted either, for the
+    reason the index is not: the revision that adds it runs after the stamp.
+    See that constant. Nor is a missing table in TABLES_ADDED_AFTER_BASELINE,
+    or an index of one: compare_metadata reports the indexes of a missing
+    table as missing too, and the unique one would count.
     """
     context = MigrationContext.configure(conn)
     return [
         d for d in compare_metadata(context, models.Base.metadata)
-        if d[0] in BEHIND and not (d[0] == "add_index" and not d[1].unique)
+        if d[0] in BEHIND
+        and not (d[0] == "add_index" and not d[1].unique)
+        and not (d[0] == "add_column" and (d[2], d[3].name) in ADDED_AFTER_BASELINE)
+        and not (d[0] == "add_table" and d[1].name in TABLES_ADDED_AFTER_BASELINE)
+        and not (d[0] == "add_index" and d[1].table.name in TABLES_ADDED_AFTER_BASELINE)
     ]
 
 

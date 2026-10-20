@@ -92,8 +92,9 @@ Section 5 below. One filter, in dependencies.scope_equipment_query, qualifying
 its VIEW arm: a CLASSIFIED row is visible through that arm only to a caller
 whose VIEW_CLASSIFIED extent covers the item's group. Because that function
 also backs get_scoped_equipment_or_404 and scope_equipment_derived_query, the
-rule reaches every listing, every by-id 404, and the maintenance and
-transaction-log listings without any of those routes naming it.
+rule reaches every listing, every by-id 404, and the maintenance listing
+without any of those routes naming it. The daily movement report is scoped by
+group since DATA-M9-2 and names the same clause per row.
 
 The two tests worth protecting here are the mirror of -2's pair. company_cmdr_a
 holds VIEW over the item's company and NOT VIEW_CLASSIFIED, so a classified
@@ -603,6 +604,10 @@ def test_creating_a_classified_item_needs_the_verb_and_writes_nothing_without_it
     block would answer 403 and still leave a permanent row behind under an
     attacker-chosen catalog name -- which is why the check sits with the
     CREATE_EQUIPMENT one, above the commit.
+
+    Since DATA-M6 the name, which is not in the catalog, also needs
+    MANAGE_CATALOG, and company_tech_a lacks it. That 403 would hide a missing
+    or misplaced SET_SENSITIVITY gate, so the detail must name SET_SENSITIVITY.
     """
     before = db_session.query(models.Equipment).count()
 
@@ -620,6 +625,7 @@ def test_creating_a_classified_item_needs_the_verb_and_writes_nothing_without_it
         f"got {response.status_code}: CREATE_EQUIPMENT alone created a "
         "CLASSIFIED item -- the conditional gate is not being asked"
     )
+    assert "SET_SENSITIVITY" in response.json()["detail"], response.text
 
     db_session.expire_all()
     assert db_session.query(models.Equipment).count() == before, "a refused creation wrote a row"
@@ -1111,11 +1117,12 @@ def test_derived_listings_inherit_the_rule(
 ):
     """Maintenance tickets and transaction logs follow the item.
 
-    Neither route mentions sensitivity. Both scope through
-    scope_equipment_derived_query, which joins to Equipment and defers to the
-    same filter, so classifying the ITEM must remove the rows ABOUT it. This is
-    the blast radius that made enforcement its own ticket rather than a clause
-    in DATA-H3-2 -- asserted here rather than assumed.
+    The ticket list scopes through scope_equipment_derived_query, which joins
+    to Equipment and defers to the same filter. The movement report is scoped
+    by group since DATA-M9-2 and applies the clause per row. Either way,
+    classifying the ITEM must remove the rows ABOUT it. This is the blast
+    radius that made enforcement its own ticket rather than a clause in
+    DATA-H3-2 -- asserted here rather than assumed.
     """
     item = _item(db_session, "SA100")
     db_session.add(models.MaintenanceLog(
@@ -1124,29 +1131,30 @@ def test_derived_listings_inherit_the_rule(
         description="visible before classification",
         status="Open",
     ))
-    db_session.add(models.TransactionLog(
-        equipment_id=item.id, event_type="TEST_EVENT",
-    ))
+    log = models.TransactionLog(
+        equipment_id=item.id, group_id=item.group_id, event_type="HANDOVER",
+    )
+    db_session.add(log)
     db_session.commit()
 
     tickets = _get(client, "/tickets/", token_company_cmdr)
-    logs = _get(client, "/reports/daily_movement", token_company_cmdr)
+    logs = _get(client, "/reports/daily_movement", token_company_cmdr)["items"]
     assert any(t["equipment_id"] == item.id for t in tickets), (
         "the ticket was not visible before classification -- this test cannot "
         "detect anything from that starting state"
     )
-    assert logs, "no transaction logs visible before classification"
+    assert log.id in {row["id"] for row in logs}, "the transaction log was not visible before classification"
 
     _classify(db_session)
 
     tickets_after = _get(client, "/tickets/", token_company_cmdr)
-    logs_after = _get(client, "/reports/daily_movement", token_company_cmdr)
+    logs_after = _get(client, "/reports/daily_movement", token_company_cmdr)["items"]
     assert not any(t["equipment_id"] == item.id for t in tickets_after), (
         "a maintenance ticket for a classified item stayed visible to an "
         "uncleared caller -- scope_equipment_derived_query is not inheriting "
         "the classification clause"
     )
-    assert len(logs_after) < len(logs), (
+    assert log.id not in {row["id"] for row in logs_after}, (
         "a transaction log for a classified item stayed visible to an "
         "uncleared caller"
     )

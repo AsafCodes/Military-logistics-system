@@ -20,7 +20,7 @@ reported at all).
 """
 import pytest
 
-from backend import authz
+from backend import authz, clock
 from backend.enums import Capability
 from tests.conftest import create_auth_header
 
@@ -174,7 +174,7 @@ def test_a_grant_on_a_group_with_no_closure_rows_is_not_reported(client, mock_ma
     mode as "verb absent", not surface it as an unhandled error or, worse,
     silently report the verb present.
     """
-    orphan = authz.Unit(name="orphan-no-closure")
+    orphan = authz.Unit(name="orphan-no-closure", timezone=clock.DEFAULT_TIMEZONE)
     db_session.add(orphan)
     db_session.commit()  # no authz.rebuild_closure(db_session) -- the point of the test
 

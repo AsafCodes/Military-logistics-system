@@ -39,4 +39,32 @@ describe('StatsGrid', () => {
         unmount();
         expect(vi.getTimerCount()).toBe(0);
     });
+
+    // DATA-M22. A ticket someone took is still an unresolved fault, so the
+    // card counts every ticket that is not Closed, not status Open alone.
+    it('counts every ticket that is not closed as an open fault', async () => {
+        const get = vi.spyOn(api, 'get').mockResolvedValue({
+            data: [
+                { id: 1, status: 'Open' },
+                { id: 2, status: 'In Progress' },
+                { id: 3, status: 'Waiting for Parts' },
+                { id: 4, status: 'Closed' },
+                { id: 5, status: 'Closed' },
+            ],
+        });
+
+        const { getByText } = render(
+            <StatsGrid stats={{ readiness_percentage: 80, total_items: 5, functional_items: 4 }} />,
+        );
+        await waitFor(() => expect(vi.getTimerCount()).toBe(4));
+        // Past the counter's 1200 ms, one 16 ms frame at a time.
+        for (let i = 0; i < 100; i++) {
+            act(() => { vi.advanceTimersByTime(16); });
+        }
+
+        expect(get).toHaveBeenCalledTimes(1);
+        expect(get.mock.calls[0][0]).toBe('/tickets/');
+        const card = getByText('תקלות פתוחות').closest('.glass-card');
+        expect(card?.querySelector('.text-3xl')?.textContent).toBe('3');
+    });
 });

@@ -75,6 +75,32 @@ def _ruled(rule="RESTRICT"):
     }
 
 
+# b7e3d91c4f2a (DATA-M8-1) drops this column, with its key, on the way to head,
+# and adds keys of its own to transaction_logs; tests/test_movement_history.py
+# holds that revision. 3c6a0f8e2d71 (DATA-M9-2) adds one more
+# (tests/test_daily_movement_day.py), and 7a2f5c9d1e38 (DATA-M22) one on
+# maintenance_logs (tests/test_ticket_claim.py).
+DROPPED_AT_HEAD = ("transaction_logs", "involved_location_id")
+
+
+def _ruled_at_head():
+    """What _foreign_keys returns at head: _ruled(), less DROPPED_AT_HEAD, plus
+    the keys b7e3d91c4f2a, 3c6a0f8e2d71 and 7a2f5c9d1e38 add, read off those
+    revisions. Exact, so a stray key or a later key without its rule is caught
+    here too."""
+    history = _script().get_revision("b7e3d91c4f2a").module
+    day = _script().get_revision("3c6a0f8e2d71").module
+    assignee = _script().get_revision("7a2f5c9d1e38").module
+    ruled = {key: value for key, value in _ruled().items() if key != DROPPED_AT_HEAD}
+    ruled.update({
+        ("transaction_logs", column): (f"fk_transaction_logs_{column}", referred, "RESTRICT")
+        for column, referred in history.ID_COLUMNS
+    })
+    ruled[("transaction_logs", day.COLUMN)] = (day.FK_NAME, "groups", "RESTRICT")
+    ruled[(assignee.TABLE, assignee.COLUMN)] = (assignee.FK_NAME, "users", "RESTRICT")
+    return ruled
+
+
 def _foreign_keys(engine):
     """(table, column) -> (name, referenced table, ondelete), for the tables the revision touches.
 
@@ -121,8 +147,8 @@ def _seed(conn):
         "VALUES (1, 1, 1, 'Open', 1)"
     )
     conn.exec_driver_sql(
-        "INSERT INTO transaction_logs (id, equipment_id, involved_user_id, involved_location_id) "
-        "VALUES (1, 1, 1, 1)"
+        "INSERT INTO transaction_logs (id, equipment_id, involved_user_id, involved_location_id, event_type) "
+        "VALUES (1, 1, 1, 1, 'HANDOVER')"
     )
     conn.exec_driver_sql(
         "INSERT INTO verifications (id, equipment_id, verification_type, reported_status, created_by) "
@@ -142,6 +168,30 @@ def _rows(engine):
             table: conn.execute(text(f"SELECT * FROM {table} ORDER BY id")).all()
             for table in TABLES
         }
+
+
+def _without_dropped_column(rows):
+    """_rows' result with transaction_logs cut to the columns head still has,
+    and maintenance_logs to the columns it had before 7a2f5c9d1e38 (DATA-M22)
+    added two, NULL on every old row.
+
+    Rows come back as tuples in table order, so the surviving columns are
+    picked by name: id, equipment_id, involved_user_id, event_type.
+    """
+    kept = ("id", "equipment_id", "involved_user_id", "event_type")
+    added = ("assigned_to_id", "started_at")
+
+    def cut(table, row):
+        if table == "transaction_logs":
+            return tuple(row._mapping[c] for c in kept)
+        if table == "maintenance_logs":
+            return tuple(v for c, v in row._mapping.items() if c not in added)
+        return row
+
+    return {
+        table: [cut(table, row) for row in table_rows]
+        for table, table_rows in rows.items()
+    }
 
 
 def _replace_foreign_keys(engine, table, columns, *, name, ondelete):
@@ -264,8 +314,10 @@ def test_a_pre_alembic_database_is_carried_to_the_rules_with_its_rows(tmp_path, 
     engine.dispose()
 
     assert version == _script().get_current_head()
-    assert keys == _ruled()
-    assert after == before
+    # Head is past b7e3d91c4f2a: see DROPPED_AT_HEAD. What this test holds is
+    # every other key and every row.
+    assert keys == _ruled_at_head()
+    assert _without_dropped_column(after) == _without_dropped_column(before)
 
 
 # --- the states a real database can already be in ---------------------------

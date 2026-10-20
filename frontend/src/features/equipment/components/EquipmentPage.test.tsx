@@ -242,6 +242,73 @@ describe('EquipmentPage transfer modal: switching to a location mid-search (FE-H
     });
 });
 
+/**
+ * DATA-M8-2. Both modals carry an optional reason into the movement log.
+ * It goes in the body only when it holds something besides whitespace, so a
+ * move with no reason sends the body it always sent.
+ */
+describe.each([
+    {
+        opens: 'העבר', placeholder: 'חפש משתמש...', submit: 'אשר העברה', url: '/equipment/transfer',
+        body: { equipment_id: MALFUNCTIONING_ITEM.id, to_holder_id: 7 },
+    },
+    {
+        opens: 'שייך', placeholder: 'חפש משתמש לשיוך...', submit: 'שייך בעלים', url: '/equipment/assign_owner/',
+        body: { equipment_id: MALFUNCTIONING_ITEM.id, owner_id: 7 },
+    },
+])('EquipmentPage $opens modal: the reason (DATA-M8-2)', ({ opens, placeholder, submit, url, body }) => {
+    async function moveWithReason(reason: string | null) {
+        const { held } = holdGets(api, PAGE_LOADS);
+        const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+        render(withCapabilities(<EquipmentPage />, GRANTED));
+        fireEvent.click(await screen.findByText(opens));
+
+        fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: 'Ta' } });
+        await waitFor(() => expect(held).toHaveLength(1));
+        held[0].resolve([{ id: 7, full_name: 'Target Person', personal_number: 'u_target' }]);
+        fireEvent.click(await screen.findByText('Target Person'));
+
+        const field = screen.getByLabelText('סיבה');
+        expect(field).toHaveAttribute('maxLength', '500');
+        if (reason !== null) fireEvent.change(field, { target: { value: reason } });
+
+        fireEvent.click(screen.getByText(submit));
+        await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+        return post;
+    }
+
+    it('sends the reason that was typed', async () => {
+        const post = await moveWithReason('יציאה לשטח');
+        expect(post).toHaveBeenCalledWith(url, { ...body, reason: 'יציאה לשטח' });
+    });
+
+    it.each([
+        ['left empty', null],
+        ['only whitespace', '   '],
+    ])('sends no reason key when the field is %s', async (_case, reason) => {
+        const post = await moveWithReason(reason);
+        expect(post).toHaveBeenCalledWith(url, body);
+    });
+});
+
+describe('EquipmentPage transfer modal: a move to a location carries the reason too (DATA-M8-2)', () => {
+    it('keeps the reason typed before switching mode, and sends it with the place', async () => {
+        holdGets(api, PAGE_LOADS);
+        const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+        render(withCapabilities(<EquipmentPage />, GRANTED));
+        fireEvent.click(await screen.findByText('העבר'));
+
+        fireEvent.change(screen.getByLabelText('סיבה'), { target: { value: 'לבדיקה' } });
+        fireEvent.click(screen.getByText('📍 העבר למיקום'));
+        fireEvent.change(screen.getByPlaceholderText('שם מיקום...'), { target: { value: 'נשקייה' } });
+        fireEvent.click(screen.getByText('אשר העברה'));
+
+        await waitFor(() => expect(post).toHaveBeenCalledWith('/equipment/transfer', {
+            equipment_id: MALFUNCTIONING_ITEM.id, to_location: 'נשקייה', reason: 'לבדיקה',
+        }));
+    });
+});
+
 // The expand toggle is an icon-only button; its chevron is the handle.
 function expandToggle(container: HTMLElement) {
     const button = container.querySelector('.lucide-chevron-down, .lucide-chevron-up')?.closest('button');

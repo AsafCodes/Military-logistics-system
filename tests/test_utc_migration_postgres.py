@@ -396,7 +396,7 @@ def test_orm_reads_back_utc_even_when_the_session_is_not(pg_schema):
     psycopg2 returns a TIMESTAMPTZ in the session's timezone, so under
     WRONG_TIMEZONE the raw driver value is aware +05:30. Passing that through
     unchanged -- which the H1-1 implementation did -- would serialize as
-    '+05:30' through Pydantic while clock.iso_z emits 'Z', splitting the single
+    '+05:30' through Pydantic where a UTC value emits 'Z', splitting the single
     wire format H1-1 exists to establish. Nothing on SQLite can observe this:
     its DATETIME never returns an aware value at all.
     """
@@ -420,17 +420,21 @@ def test_orm_reads_back_utc_even_when_the_session_is_not(pg_schema):
             f"session TimeZone did not take effect; raw value was {raw!r}"
         )
 
+        # The timestamp column alone, not the whole entity: at REVISION the
+        # table has none of the columns DATA-M8-1 added later, and the entity
+        # would select them. The column's own type is what decodes the value,
+        # so this reads through the same decorator.
         session = sessionmaker(bind=conn)()
-        log = (
-            session.query(models.TransactionLog)
-            .filter_by(event_type="H1_2_PROBE")
-            .one()
+        stamp = (
+            session.query(models.TransactionLog.timestamp)
+            .filter(models.TransactionLog.event_type == "H1_2_PROBE")
+            .scalar()
         )
-        assert log.timestamp.tzinfo is not None
-        assert log.timestamp.utcoffset() == timezone.utc.utcoffset(None), (
-            f"read back in the session's zone, not UTC: {log.timestamp!r}"
+        assert stamp.tzinfo is not None
+        assert stamp.utcoffset() == timezone.utc.utcoffset(None), (
+            f"read back in the session's zone, not UTC: {stamp!r}"
         )
-        assert log.timestamp == SEEDED.replace(tzinfo=timezone.utc)
+        assert stamp == SEEDED.replace(tzinfo=timezone.utc)
         session.close()
 
 
@@ -448,14 +452,17 @@ def test_orm_write_of_an_aware_value_stores_the_instant_not_the_wall_clock(pg_sc
     zone instead of sending it and Postgres reads the naive result as
     WRONG_TIMEZONE, storing an instant 05:30 off.
     """
-    _migrate(pg_schema, REVISION)
+    # head, not REVISION: an ORM insert names every column the model declares,
+    # and DATA-M8-1 added columns REVISION's table lacks. The timestamp column
+    # is TIMESTAMPTZ at both.
+    _migrate(pg_schema, "head")
     hostile = _hostile_engine(pg_schema)
     try:
         plus_three = timezone(timedelta(hours=3))
         local_noon = datetime(2026, 6, 15, 12, 0, tzinfo=plus_three)  # == 09:00 UTC
 
         session = sessionmaker(bind=hostile)()
-        session.add(models.TransactionLog(event_type="BIND_PROBE", timestamp=local_noon))
+        session.add(models.TransactionLog(event_type="HANDOVER", timestamp=local_noon))
         session.commit()
         session.close()
 
@@ -463,7 +470,7 @@ def test_orm_write_of_an_aware_value_stores_the_instant_not_the_wall_clock(pg_sc
             stored = conn.execute(
                 text(
                     "SELECT timestamp AT TIME ZONE 'UTC' FROM transaction_logs"
-                    " WHERE event_type = 'BIND_PROBE'"
+                    " WHERE event_type = 'HANDOVER'"
                 )
             ).scalar_one()
         assert stored == datetime(2026, 6, 15, 9, 0), (  # noqa: DTZ001
@@ -482,11 +489,12 @@ def test_orm_write_of_a_naive_value_is_still_treated_as_utc(pg_schema):
     as the session's local time, so dropping the `replace(tzinfo=utc)` line
     would silently reinterpret every such write as WRONG_TIMEZONE.
     """
-    _migrate(pg_schema, REVISION)
+    # head, not REVISION: see the test above.
+    _migrate(pg_schema, "head")
     hostile = _hostile_engine(pg_schema)
     try:
         session = sessionmaker(bind=hostile)()
-        session.add(models.TransactionLog(event_type="NAIVE_PROBE", timestamp=SEEDED))
+        session.add(models.TransactionLog(event_type="HANDOVER", timestamp=SEEDED))
         session.commit()
         session.close()
 
@@ -494,7 +502,7 @@ def test_orm_write_of_a_naive_value_is_still_treated_as_utc(pg_schema):
             stored = conn.execute(
                 text(
                     "SELECT timestamp AT TIME ZONE 'UTC' FROM transaction_logs"
-                    " WHERE event_type = 'NAIVE_PROBE'"
+                    " WHERE event_type = 'HANDOVER'"
                 )
             ).scalar_one()
         assert stored == SEEDED, f"naive input was read as local time, not UTC: {stored}"
@@ -520,6 +528,10 @@ def test_null_survives_the_migration_and_both_directions_of_the_decorator(pg_sch
         )
 
     _migrate(pg_schema, REVISION, session_timezone=WRONG_TIMEZONE)
+    # On to head before the ORM reads it: the model is head's, and 7a2f5c9d1e38
+    # (DATA-M22) adds maintenance_logs columns it selects. No later revision
+    # touches these two timestamps.
+    _migrate(pg_schema, "head")
 
     hostile = _hostile_engine(pg_schema)
     try:
@@ -671,19 +683,36 @@ def test_the_index_revision_builds_re_runs_and_reverses_on_postgres(pg_schema):
 
     script = ScriptDirectory.from_config(migrations.alembic_config())
     expected = _expected_indexes()
+    # b7e3d91c4f2a (DATA-M8-1) drops one of these with its column on the way
+    # to head, and adds indexes of its own, which its downgrade removes.
+    # 3c6a0f8e2d71 (DATA-M9-2) replaces another with a composite, and its
+    # downgrade puts it back. 7a2f5c9d1e38 (DATA-M22) adds one on
+    # maintenance_logs. 5e8b1d4f7c29 (DATA-M22-2) creates ticket_claims with
+    # its indexes, and its downgrade drops the table.
+    dropped = {"ix_transaction_logs_involved_location_id", "ix_transaction_logs_timestamp"}
+    history = script.get_revision("b7e3d91c4f2a").module
+    day = script.get_revision("3c6a0f8e2d71").module
+    assignee = script.get_revision("7a2f5c9d1e38").module
+    claims = script.get_revision("5e8b1d4f7c29").module
+    added_later = {f"ix_transaction_logs_{column}" for column, _referred in history.ID_COLUMNS}
+    added_later |= set(day.NEW_INDEXES)
+    added_later.add(assignee.INDEX_NAME)
+    added_later |= set(claims.INDEXES) | {claims.OPEN_INDEX}
 
     _migrate(pg_schema, "head")
     at_head = _indexes(pg_schema)
-    assert {name: at_head.get(name) for name in expected} == {
-        name: (table, (column,), False) for name, (table, column) in expected.items()
+    assert {name: at_head.get(name) for name in expected if name not in dropped} == {
+        name: (table, (column,), False)
+        for name, (table, column) in expected.items() if name not in dropped
     }
+    assert not dropped & set(at_head)
 
     with pg_schema.begin() as conn:
         _rerun_upgrade(conn, script, INDEX_REVISION)
     assert _indexes(pg_schema) == at_head
 
     _migrate(pg_schema, PARENT_REVISION, backwards=True)
-    assert set(_indexes(pg_schema)) == set(at_head) - set(expected)
+    assert set(_indexes(pg_schema)) == set(at_head) - set(expected) - added_later
 
     _migrate(pg_schema, "head")
     assert _indexes(pg_schema) == at_head
@@ -717,6 +746,7 @@ def test_the_deletion_rules_build_re_run_and_reverse_on_postgres(pg_schema):
         RULES_REVISION,
         _expected_foreign_keys,
         _foreign_keys,
+        _ruled_at_head,
     )
     from tests.test_group_schema import _rerun_upgrade
 
@@ -726,20 +756,217 @@ def test_the_deletion_rules_build_re_run_and_reverse_on_postgres(pg_schema):
         (table, column): (f"fk_{table}_{column}", referred, "RESTRICT")
         for (table, column), referred in expected.items()
     }
+    # Head is past b7e3d91c4f2a (DATA-M8-1), which drops one of these keys
+    # with its column and adds its own; see tests/test_deletion_rules.py's
+    # DROPPED_AT_HEAD and _ruled_at_head.
+    at_head = _ruled_at_head()
 
     _migrate(pg_schema, "head")
-    assert _foreign_keys(pg_schema) == ruled
+    assert _foreign_keys(pg_schema) == at_head
 
     with recorded(pg_schema) as statements, pg_schema.begin() as conn:
         _rerun_upgrade(conn, script, RULES_REVISION)
     ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
     assert ddl == [], f"re-running the revision changed constraints that were already right: {ddl}"
-    assert _foreign_keys(pg_schema) == ruled
+    assert _foreign_keys(pg_schema) == at_head
 
+    # Down past b7e3d91c4f2a as well, whose downgrade restores the dropped key
+    # with its rule; this revision's downgrade then takes every rule.
     _migrate(pg_schema, PARENT_REVISION, backwards=True)
     assert _foreign_keys(pg_schema) == {
         key: (name, referred, None) for key, (name, referred, _rule) in ruled.items()
     }
 
     _migrate(pg_schema, "head")
-    assert _foreign_keys(pg_schema) == ruled
+    assert _foreign_keys(pg_schema) == at_head
+
+
+def test_the_movement_history_revision_refuses_builds_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-M8-1 (b7e3d91c4f2a), on the dialect where it is plain ALTERs.
+
+    tests/test_movement_history.py covers this revision on SQLite, where it is
+    one batch rebuild. Here, in order: a bad row is refused and nothing moves,
+    the V4 spellings included; they are renamed once the bad rows are gone;
+    after the upgrade the columns, keys, indexes, CHECK and NOT NULL are all
+    there and the CHECK bites; a second run emits no DDL; the downgrade brings
+    involved_location_id back with its rule and its index; and the upgrade
+    starts again from there.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.conftest import recorded
+    from tests.test_group_schema import _rerun_upgrade
+
+    revision, parent = "b7e3d91c4f2a", "a8c2e5f19b47"
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+    history = script.get_revision(revision).module
+
+    def shape():
+        with pg_schema.connect() as conn:
+            insp = inspect(conn)
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+            return {
+                "version": version,
+                "columns": {c["name"]: c["nullable"] for c in insp.get_columns("transaction_logs")},
+                "keys": {
+                    fk["name"]: (fk["constrained_columns"], fk["referred_table"], fk["options"].get("ondelete"))
+                    for fk in insp.get_foreign_keys("transaction_logs")
+                },
+                "indexes": {ix["name"] for ix in insp.get_indexes("transaction_logs")},
+                "checks": {c["name"] for c in insp.get_check_constraints("transaction_logs")},
+            }
+
+    _migrate(pg_schema, parent)
+    with pg_schema.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO transaction_logs (id, event_type) VALUES "
+            "(1, 'HANDOVER'), (2, NULL), (3, 'TRANSFER'), (4, 'FAULT_REPORT'), (5, 'REPAIR')"
+        ))
+    at_parent = shape()
+
+    with pytest.raises(RuntimeError, match=r"2 transaction_logs row\(s\)") as refused:
+        _migrate(pg_schema, revision)
+    assert "#2 holds None" in str(refused.value) and "#3 holds 'TRANSFER'" in str(refused.value)
+    assert shape() == at_parent
+    with pg_schema.connect() as conn:
+        assert conn.execute(text("SELECT event_type FROM transaction_logs WHERE id >= 4 ORDER BY id")).scalars().all() == [
+            "FAULT_REPORT", "REPAIR"
+        ], "a refused upgrade renamed rows"
+
+    with pg_schema.begin() as conn:
+        conn.execute(text("DELETE FROM transaction_logs WHERE id IN (2, 3)"))
+    _migrate(pg_schema, revision)
+    upgraded = shape()
+
+    assert upgraded["version"] == revision
+    with pg_schema.connect() as conn:
+        assert conn.execute(text("SELECT id, event_type FROM transaction_logs ORDER BY id")).all() == [
+            (1, "HANDOVER"), (4, "FAULT"), (5, "FIX")
+        ]
+    assert "involved_location_id" not in upgraded["columns"]
+    assert upgraded["columns"]["event_type"] is False
+    assert {"from_location", "to_location", "reason"} <= set(upgraded["columns"])
+    assert history.CHECK_NAME in upgraded["checks"]
+    for column, referred in history.ID_COLUMNS:
+        assert upgraded["columns"][column] is True
+        assert upgraded["keys"][f"fk_transaction_logs_{column}"] == ([column], referred, "RESTRICT")
+        assert f"ix_transaction_logs_{column}" in upgraded["indexes"]
+    with pytest.raises(IntegrityError), pg_schema.begin() as conn:
+        conn.execute(text("INSERT INTO transaction_logs (event_type) VALUES ('handover')"))
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, revision)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision did its work again: {ddl}"
+    assert shape() == upgraded
+
+    _migrate(pg_schema, parent, backwards=True)
+    downgraded = shape()
+    assert downgraded["columns"] == at_parent["columns"]
+    assert downgraded["checks"] == at_parent["checks"]
+    assert downgraded["indexes"] == at_parent["indexes"]
+    assert downgraded["keys"]["fk_transaction_logs_involved_location_id"] == (
+        ["involved_location_id"], "locations", "RESTRICT"
+    )
+    assert downgraded == at_parent
+
+    _migrate(pg_schema, "head")
+    assert shape()["version"] == script.get_current_head()
+
+
+def test_the_group_time_zone_revision_fills_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-M9-1 (9d4e2b7c1a60), on the dialect where it is two ALTERs.
+
+    tests/test_group_timezones.py covers it on SQLite, where dropping the
+    default rebuilds the table. Here: existing groups get the default zone,
+    the column is NOT NULL with no default left (so a group written without a
+    zone is refused), a second run emits no DDL, and the downgrade drops the
+    column.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.conftest import recorded
+    from tests.test_group_schema import _rerun_upgrade
+
+    revision, parent = "9d4e2b7c1a60", "b7e3d91c4f2a"
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+
+    def column():
+        with pg_schema.connect() as conn:
+            return {c["name"]: c for c in inspect(conn).get_columns("groups")}.get("timezone")
+
+    _migrate(pg_schema, parent)
+    with pg_schema.begin() as conn:
+        conn.execute(text("INSERT INTO groups (id, name, kind) VALUES (1, '188', 'UNIT'), (2, '188/53', 'UNIT')"))
+    assert column() is None
+
+    _migrate(pg_schema, revision)
+    with pg_schema.connect() as conn:
+        assert conn.execute(text("SELECT id, timezone FROM groups ORDER BY id")).all() == [
+            (1, "Asia/Jerusalem"), (2, "Asia/Jerusalem")
+        ]
+    upgraded = column()
+    assert upgraded["nullable"] is False
+    assert upgraded["default"] is None
+    with pytest.raises(IntegrityError), pg_schema.begin() as conn:
+        conn.execute(text("INSERT INTO groups (id, name, kind) VALUES (3, 'nowhere', 'UNIT')"))
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, revision)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision did its work again: {ddl}"
+
+    _migrate(pg_schema, parent, backwards=True)
+    assert column() is None
+
+    _migrate(pg_schema, "head")
+    assert column()["nullable"] is False
+
+
+def test_the_movement_log_group_revision_files_re_runs_and_reverses_on_postgres(pg_schema):
+    """DATA-M9-2 (3c6a0f8e2d71). tests/test_daily_movement_day.py covers it on
+    SQLite, where adding the key rebuilds the table. Here: old rows are filed
+    under a group (exact for a custody row, the item's group for the rest,
+    NULL with no item), the key is RESTRICT -- an item with a logged event
+    cannot be deleted -- two indexes are traded for two, a second run emits
+    no DDL, and the downgrade puts the old indexes back.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.conftest import recorded
+    from tests.test_daily_movement_day import LEGACY_ROWS, NEW_INDEXES, OLD_INDEXES
+    from tests.test_group_schema import _rerun_upgrade
+
+    revision, parent = "3c6a0f8e2d71", "9d4e2b7c1a60"
+    script = ScriptDirectory.from_config(migrations.alembic_config())
+
+    def indexes():
+        with pg_schema.connect() as conn:
+            return {ix["name"] for ix in inspect(conn).get_indexes("transaction_logs")}
+
+    _migrate(pg_schema, parent)
+    with pg_schema.begin() as conn:
+        for statement in LEGACY_ROWS:
+            conn.execute(text(statement))
+    before = indexes()
+
+    _migrate(pg_schema, revision)
+    with pg_schema.connect() as conn:
+        rows = conn.execute(text("SELECT id, group_id FROM transaction_logs ORDER BY id")).all()
+        keys = {fk["name"]: fk for fk in inspect(conn).get_foreign_keys("transaction_logs")}
+    assert rows == [(1, 3), (2, 2), (3, 2), (4, None)]
+    assert indexes() == (before - OLD_INDEXES) | NEW_INDEXES
+    assert keys["fk_transaction_logs_group_id"]["options"].get("ondelete") == "RESTRICT"
+    with pytest.raises(IntegrityError), pg_schema.begin() as conn:
+        conn.execute(text("DELETE FROM equipment WHERE id = 1"))
+
+    with recorded(pg_schema) as statements, pg_schema.begin() as conn:
+        _rerun_upgrade(conn, script, revision)
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "CREATE", "DROP"))]
+    assert ddl == [], f"re-running the revision did its work again: {ddl}"
+
+    _migrate(pg_schema, parent, backwards=True)
+    assert indexes() == before
+
+    _migrate(pg_schema, "head")
+    assert NEW_INDEXES <= indexes()

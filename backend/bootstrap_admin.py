@@ -6,6 +6,10 @@ BOOTSTRAP_ADMIN_ENABLED=1 set:
 
     BOOTSTRAP_ADMIN_ENABLED=1 python -m backend.bootstrap_admin <personal_number> "<full name>"
 
+On a database with no groups it also creates the root group, in the zone
+BOOTSTRAP_ROOT_TIMEZONE names (an IANA name such as Europe/Vienna), or in
+backend.clock.DEFAULT_TIMEZONE when it is unset or empty.
+
 It creates the MASTER user and grants it root authority. The password is
 generated here and printed once. It is never read from an argument or an
 environment variable, and it is never stored in plaintext.
@@ -13,7 +17,7 @@ environment variable, and it is never stored in plaintext.
 import os
 import sys
 
-from . import authz, models, security
+from . import authz, clock, models, security
 from .database import SessionLocal
 from .enums import Capability
 from .migrations import run_migrations
@@ -22,6 +26,9 @@ from .migrations import run_migrations
 # at all. Named rather than derived: there is nothing to derive it from, and a
 # real deployment renames it or builds its own tree above it.
 ROOT_GROUP_NAME = "ROOT"
+
+# DATA-M9-1. Where the root group created above keeps its calendar day.
+ROOT_TIMEZONE_ENV = "BOOTSTRAP_ROOT_TIMEZONE"
 
 # Every capability the bootstrapped MASTER receives over each root, named one
 # by one on purpose. This used to be `for capability in Capability`, which
@@ -120,7 +127,29 @@ def already_bootstrapped(db) -> bool:
     )
 
 
-def grant_root_authority(db, user: models.User) -> list[str]:
+def root_timezone_from_env() -> str:
+    """The zone a root created here gets, checked; SystemExit if unknown.
+
+    Read and checked before bootstrap_admin writes anything, migrations
+    included, so a mistyped name stops the run with nothing changed.
+    Checked even when the database already has roots and the name will go
+    unused: a run that silently ignores a bad setting teaches nothing.
+    """
+    name = os.getenv(ROOT_TIMEZONE_ENV) or clock.DEFAULT_TIMEZONE
+    try:
+        clock.zone(name)
+    except ValueError:
+        raise SystemExit(
+            f"Refusing to run: {ROOT_TIMEZONE_ENV}={name!r} is not a time zone "
+            "in the zone database. Use an IANA name such as Asia/Jerusalem or "
+            "Europe/Vienna."
+        ) from None
+    return name
+
+
+def grant_root_authority(
+    db, user: models.User, root_zone: str = clock.DEFAULT_TIMEZONE
+) -> list[str]:
     """Place the new MASTER at the top of the graph and grant it everything there.
 
     Not optional, and not a convenience. Before H1-8 the equipment routes
@@ -147,6 +176,9 @@ def grant_root_authority(db, user: models.User) -> list[str]:
     desc(G) is carried by -- so it would be reachable by no grant, including the
     direct one issued below, and this function would appear to succeed while
     granting nothing.
+
+    `root_zone` is the zone of the root created when there is none, and is
+    not looked at otherwise: an existing root keeps the zone it has.
     """
     # authz.root_groups rather than the query this used to inline. H1-10 gave
     # require_global a second need for the same predicate, and one definition
@@ -154,7 +186,7 @@ def grant_root_authority(db, user: models.User) -> list[str]:
     roots = authz.root_groups(db)
 
     if not roots:
-        root = authz.Unit(name=ROOT_GROUP_NAME)
+        root = authz.Unit(name=ROOT_GROUP_NAME, timezone=root_zone)
         db.add(root)
         db.flush()
         authz.rebuild_closure(db)
@@ -179,6 +211,8 @@ def bootstrap_admin(personal_number: str, full_name: str) -> None:
             "intentional, out-of-band bootstrap."
         )
 
+    root_zone = root_timezone_from_env()
+
     run_migrations()
 
     db = SessionLocal()
@@ -200,7 +234,7 @@ def bootstrap_admin(personal_number: str, full_name: str) -> None:
         db.add(admin)
         db.commit()
 
-        roots = grant_root_authority(db, admin)
+        roots = grant_root_authority(db, admin, root_zone)
 
         print("MASTER account created.")
         print(f"  commands:        {', '.join(roots)} (every capability)")

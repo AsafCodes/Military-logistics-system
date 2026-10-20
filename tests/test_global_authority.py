@@ -168,6 +168,9 @@ def test_catalog_routes_refuse_everyone_without_the_verb(
 ):
     """The four Profile reads that were the last ones in any router.
 
+    All four are gates since SEC-M14; create used to be a question, which let
+    every caller through with a pending row.
+
     bat_cmdr is the sharp choice here: they hold five verbs including
     CREATE_EQUIPMENT and RESOLVE_FAULT, and command the whole battalion. They
     do not hold MANAGE_CATALOG, because can_add_category is on Master and
@@ -176,6 +179,7 @@ def test_catalog_routes_refuse_everyone_without_the_verb(
     """
     fault = a_fault(db_session)
 
+    assert create_fault(client, "u_bat_cmdr", "BAT-NOVEL").status_code == 403
     assert pending_faults(client, "u_bat_cmdr").status_code == 403
     assert approve_fault(client, "u_bat_cmdr", fault.id).status_code == 403
     assert delete_fault(client, "u_bat_cmdr", fault.id).status_code == 403
@@ -183,6 +187,7 @@ def test_catalog_routes_refuse_everyone_without_the_verb(
     db_session.refresh(fault)
     assert fault.is_pending is True
     assert db_session.query(models.FaultType).filter_by(id=fault.id).first() is not None
+    assert db_session.query(models.FaultType).filter_by(name="BAT-NOVEL").first() is None
 
 
 def test_the_catalog_verb_holder_acts(client, db_session, mock_matrix_db):
@@ -355,33 +360,52 @@ def test_an_empty_graph_grants_nobody_global_authority(
     assert create_user(client, "u_master", db_session, group_id=1).status_code == 403
 
 
-# --- is_pending: a question, not a gate ------------------------------------
+# --- creating a fault type: a gate, and never a skip (SEC-M14) ------------
 
 
-@pytest.mark.parametrize(
-    "who,expected_pending",
-    [("u_master", False), ("u_soldier_a", True)],
-    ids=["holder", "non_holder"],
-)
-def test_proposing_vocabulary_is_open_and_skipping_review_is_not(
-    client, db_session, mock_matrix_db, who, expected_pending
+@pytest.mark.parametrize("who", ["u_soldier_a", "u_bat_cmdr"], ids=["soldier", "bat_cmdr"])
+def test_creating_vocabulary_through_setup_needs_the_verb(
+    client, db_session, mock_matrix_db, who
 ):
-    """create_fault_type is deliberately ungated, and that is not an oversight.
+    """create_fault_type used to be open to every authenticated user.
 
-    It is the front door of the approval workflow: anyone may PROPOSE a fault
-    type, and holding MANAGE_CATALOG is what lets the proposal skip review. So
-    the verb is consulted with may_global rather than require_global, and a "no"
-    narrows the write instead of refusing it -- exactly the shape report_fault's
-    is_pending took in H1-9.
+    It asked may_global and let a "no" narrow the write to a pending row, so
+    any account could insert rows without limit. It is a gate now. bat_cmdr is
+    the sharp case for the same reason as above: five verbs, the whole
+    battalion, and no say over the vocabulary every unit shares. Refused
+    before anything is written, so the count is the assertion that matters.
+    """
+    before = db_session.query(models.FaultType).count()
 
-    Both callers get 200. The difference is one column, which is why a test that
-    only checked status codes would see nothing here.
+    assert create_fault(client, who, "NOVEL-TYPE").status_code == 403
+    # The gate comes before the duplicate check, so a refused caller gets the
+    # same answer for a name that exists: the verb decides the reply, not the
+    # vocabulary.
+    existing = a_fault(db_session, name="EXISTING-TYPE", pending=False)
+    assert create_fault(client, who, existing.name).status_code == 403
+
+    assert db_session.query(models.FaultType).count() == before + 1
+
+
+@pytest.mark.parametrize("who", ["u_master", "u_brig_cmdr"])
+def test_a_holders_proposal_still_waits_for_review(
+    client, db_session, mock_matrix_db, who
+):
+    """Holding MANAGE_CATALOG used to let a proposal skip review.
+
+    The same verb approves, so that was one account proposing and approving.
+    Both holders get 200 and a PENDING row naming them as its proposer, which
+    is what approve_fault_type's two-person rule reads
+    (tests/test_catalog_review.py).
     """
     res = create_fault(client, who, "NOVEL-TYPE")
     assert res.status_code == 200, res.text
+    assert res.json()["is_pending"] is True
 
     fault = db_session.query(models.FaultType).filter_by(name="NOVEL-TYPE").one()
-    assert fault.is_pending is expected_pending
+    assert fault.is_pending is True
+    assert fault.requested_by_id == db_session.query(models.User).filter_by(
+        personal_number=who).one().id
 
 
 def test_the_group_list_is_gated_on_the_personnel_verb(

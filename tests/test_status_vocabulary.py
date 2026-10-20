@@ -23,7 +23,13 @@ from sqlalchemy.orm import Session
 
 from backend import models
 from backend.database import Base
-from backend.enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from backend.enums import (
+    ChangeReason,
+    ClaimOutcome,
+    EquipmentStatus,
+    Sensitivity,
+    TicketStatus,
+)
 
 # (table, column, constraint name, the enum the column carries)
 CONSTRAINED = (
@@ -37,6 +43,7 @@ CONSTRAINED = (
      'ck_equipment_status_history_new_status', EquipmentStatus),
     ('equipment_status_history', 'change_reason',
      'ck_equipment_status_history_change_reason', ChangeReason),
+    ('ticket_claims', 'outcome', 'ck_ticket_claims_outcome', ClaimOutcome),
 )
 
 # The columns a row needs before it can be inserted at all, so that what fails
@@ -56,6 +63,18 @@ ROW_TEMPLATE = {
         'new_status': EquipmentStatus.FUNCTIONAL.value,
         'change_reason': 'verification',
         'created_by': 1,
+    },
+    # An ENDED claim (DATA-M22-2): ck_ticket_claims_ended wants the outcome
+    # filled whenever these two are, so the outcome CHECK is the one that
+    # decides. Not in NULLABLE for the same reason: a NULL outcome here is
+    # refused by the other constraint, and an open claim's NULL is
+    # tests/test_ticket_claims.py's.
+    'ticket_claims': {
+        'ticket_id': 1,
+        'user_id': 1,
+        'started_at': '2026-10-19 08:00:00.000000',
+        'ended_at': '2026-10-19 09:00:00.000000',
+        'ended_by_id': 1,
     },
 }
 
@@ -258,7 +277,7 @@ def test_the_column_default_satisfies_its_own_constraint(schema, build, column):
     # needs covering: the others are fixed UI vocabularies, while these are
     # lowercase English written for readers, where an apostrophe is a plausible
     # future value rather than a contrived one.
-    [EquipmentStatus, Sensitivity, TicketStatus, ChangeReason],
+    [EquipmentStatus, Sensitivity, TicketStatus, ChangeReason, ClaimOutcome],
     ids=lambda e: e.__name__,
 )
 def test_every_value_is_safe_to_inline_in_ddl(enum_class):

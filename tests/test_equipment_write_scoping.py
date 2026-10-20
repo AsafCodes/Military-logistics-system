@@ -195,6 +195,10 @@ def test_a_refused_override_leaves_no_catalog_item_behind(
     leave a permanent row under an attacker-chosen name -- a write performed by
     a request the route answered "denied". The ordering is the fix; this is
     what holds it in place.
+
+    Since DATA-M6 a new name also needs MANAGE_CATALOG, which this caller
+    lacks as well, so the 403 alone no longer says which gate answered. The
+    detail does: it has to be CREATE_EQUIPMENT's.
     """
     before = db_session.query(models.CatalogItem).count()
 
@@ -209,6 +213,7 @@ def test_a_refused_override_leaves_no_catalog_item_behind(
     )
 
     assert res.status_code == 403
+    assert "CREATE_EQUIPMENT" in res.json()["detail"], res.text
     assert db_session.query(models.CatalogItem).count() == before
     assert db_session.query(models.CatalogItem).filter_by(
         name="SMUGGLED_CATALOG_NAME"

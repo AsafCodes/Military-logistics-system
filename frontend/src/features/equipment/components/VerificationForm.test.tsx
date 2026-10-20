@@ -36,7 +36,7 @@ describe('VerificationForm: submitting (FE-H6-2)', () => {
         expect(posts[0].url).toBe('/verifications/');
         expect(posts[0].body).toEqual({
             equipment_id: 7,
-            verification_type: 'presence_check',
+            verification_type: 'condition_report',
             reported_status: 'Functional',
             findings: '',
             action_required: false,
@@ -68,5 +68,24 @@ describe('VerificationForm: submitting (FE-H6-2)', () => {
         expect(posts).toHaveLength(2);
         expect(screen.getByText(BUSY)).toBeDisabled();
         expect(screen.queryByText(FAILED)).toBeNull();
+    });
+});
+
+describe('VerificationForm: a condition report and nothing else (API-M5)', () => {
+    it('offers no report type, so no presence check', () => {
+        holdPosts(api);
+        const { container } = render(
+            <VerificationForm equipmentId={7} currentStatus="Functional" isOpen
+                onSuccess={vi.fn()} onClose={vi.fn()} />,
+        );
+
+        expect(screen.queryByText('סוג דיווח')).toBeNull();
+        expect(screen.queryByText('בדיקת נוכחות')).toBeNull();
+        expect(screen.queryByText('אימות העברה')).toBeNull();
+        // The one select left is the reported status.
+        const values = Array.from(container.querySelectorAll('option'), (o) => o.value);
+        expect(values).not.toContain('presence_check');
+        expect(values).not.toContain('transfer_verification');
+        expect(container.querySelectorAll('select')).toHaveLength(1);
     });
 });

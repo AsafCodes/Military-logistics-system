@@ -26,7 +26,7 @@ Marker_System/
 ├── backend/                    # FastAPI Python package
 │   ├── main.py                 # App entry point, CORS, router registration
 │   ├── database.py             # SQLAlchemy engine + session (SQLite/PostgreSQL)
-│   ├── models.py               # Core ORM models (11 tables)
+│   ├── models.py               # Core ORM models (12 tables)
 │   ├── schemas.py              # All Pydantic request/response schemas
 │   ├── security.py             # JWT + password hashing + password generation
 │   ├── dependencies.py         # Auth deps + Matrix Security scoping + compliance helper
@@ -71,8 +71,9 @@ Marker_System/
 │       │   │   │   ├── DashboardPage.tsx    # Welcome + stats + equipment preview
 │       │   │   │   ├── StatsGrid.tsx        # 4 stat cards with animated counters (readiness inside a ring)
 │       │   │   │   ├── EquipmentTable.tsx   # Top-5 equipment preview table
-│       │   │   │   ├── DailyActivityTable.tsx # Recent event feed
+│       │   │   │   ├── DailyActivityTable.tsx # Recent event feed: reporter, from ← to, reason
 │       │   │   │   └── AdminPanel.tsx       # User search, group assignment
+│       │   │   ├── describeMove.ts          # What a movement row moved, for DailyActivityTable
 │       │   │   └── hooks/                   # Dashboard-specific hooks
 │       │   │       ├── useDashboardData.ts  # Readiness + accessible-equipment fetch
 │       │   │       └── useAnimatedCounter.ts # StatsGrid's eased counter, cancels its frame
@@ -123,29 +124,31 @@ Marker_System/
 - **⚠️ Non-Obvious Detail:** There is no cascade and no first-match-wins any more. The path strings this used to compare (`unit_hierarchy`, `unit_path`) were **dropped in H1-11**; the profile-flag ladder (`can_view_all` → `can_view_battalion` → `can_view_company`) stopped being read at H1-10 and the MASTER bypass was deleted there. This section is a summary — `TODO-SEC-H1.md` is the specification.
 
 ### Module B: Compliance Engine
-- **Files:** `dependencies.py` → `get_daily_status()`, `models.py` → `Equipment.compliance_level`
-- **Responsibility:** Flags equipment as "GOOD" / "WARNING" / "SEVERE" based on time since last verification.
-- **Rules:** <24h = GOOD, 24-48h = WARNING, >48h = SEVERE.
-- **⚠️ Non-Obvious Detail:** `compliance_level` is a **computed property**, not stored in the DB. It recalculates on every read using `datetime.utcnow()`. You cannot query or filter by it in SQL.
+- **Files:** `enums.py` → `ComplianceLevel`, `models.py` → `Equipment.compliance_level`
+- **Responsibility:** Flags equipment as "GOOD" / "WARNING" / "SEVERE" based on time since last verification. The property is the only implementation of these three levels (DATA-M11), and the inventory report's `reporting_status` is the same value (DATA-M7). `Equipment.report_status`, a Hebrew text sent as `report_status` and `compliance_check`, has a 24-hour rule of its own (DATA-L16).
+- **Rules:** <24h = GOOD, 24h up to 48h = WARNING, 48h or more (or never verified) = SEVERE.
+- **⚠️ Non-Obvious Detail:** `compliance_level` is a **computed property**, not stored in the DB. It recalculates on every read using `clock.utcnow()`. You cannot query or filter by it in SQL.
 
 ### Module C: Ownership vs. Possession Model
 - **Files:** `models.py` → `Equipment` (fields: `owner_user_id`, `holder_user_id`, `custom_location`, `actual_location_id`)
 - **Responsibility:** Separates WHO OWNS an item (`owner_user_id`) from WHO HAS IT RIGHT NOW (`holder_user_id`) from WHERE IT IS (`custom_location` / `actual_location_id`).
 - **⚠️ Non-Obvious Detail:** Transfer to a person clears location. Transfer to a location clears holder. These are mutually exclusive (XOR validation in `equipment.py`). Don't try to set both at once.
-- **Audit (DATA-H4-3):** every route in `equipment.py` that mutates a row now writes a `transaction_logs` entry — `create_equipment` emits `CREATE`, `set_sensitivity` emits `RECLASSIFY` through `audit_trail.set_sensitivity` (which owns the column assignment, as `set_status` owns `.status`), alongside the `ASSIGN`/`HANDOVER`/`HANDOVER_LOC`/`VERIFICATION` writers already there. `CREATE` sits behind a `db.flush()` because `record_event` reads `equipment.id`: without it the row would carry a NULL `equipment_id`, which `scope_equipment_derived_query`'s inner join discards — written, committed, visible to nobody. `record_event` **refuses** an unflushed equipment rather than flushing it itself (the writer owns no transaction operation, by H4-1's ruling), so that failure is loud rather than silent. A `RECLASSIFY` row records who and when, **not** from-what-to-what — `transaction_logs` has nowhere honest to put it: `location` already means a place *and* a person, and `broken_description` is dead but named for faults (DATA-M8).
+- **Audit (DATA-H4-3):** every route in `equipment.py` that mutates a row now writes a `transaction_logs` entry — `create_equipment` emits `CREATE`, `set_sensitivity` emits `RECLASSIFY` through `audit_trail.set_sensitivity` (which owns the column assignment, as `set_status` owns `.status`), alongside the `ASSIGN`/`HANDOVER`/`HANDOVER_LOC`/`VERIFICATION` writers already there. `CREATE` sits behind a `db.flush()` because `record_event` reads `equipment.id`: without it the row would carry a NULL `equipment_id`, which the movement report's inner join on the item discards — written, committed, visible to nobody. `record_event` **refuses** an unflushed equipment rather than flushing it itself (the writer owns no transaction operation, by H4-1's ruling), so that failure is loud rather than silent. A `RECLASSIFY` row records who and when, **not** from-what-to-what — `transaction_logs` has nowhere honest to put it: `location` already means a place *and* a person, and `broken_description` is dead but named for faults. DATA-M8-1 added custody columns and a `reason`, which the `RECLASSIFY` row carries when one is given, and still no column for the value itself.
+- **Catalog names (DATA-M6):** `create_equipment` takes the item type as free text, `catalog_name`. `EquipmentCreate` normalizes it first: whitespace runs collapse to one space, leading and trailing ones go, and a blank name or one over 100 characters is a 422. The route then matches the catalog **without case** (`_find_catalog_item`, oldest row first), so "radio 710" links to "Radio 710". A name with no match is a new catalog row and needs `MANAGE_CATALOG` on top of `CREATE_EQUIPMENT`; without it the answer is 403 and nothing is written. The unique constraint on `catalog_items.name` is still case-sensitive, so the case-insensitive rule lives in the route only.
 
 ### Module D: Fault & Ticket Pipeline
 - **Files:** `routers/maintenance.py`
-- **Responsibility:** `report_fault` → creates `FaultType` (if new) → creates `MaintenanceLog` ticket → marks equipment "Malfunctioning". `fix_equipment` → sets "Functional" → closes all open tickets → logs the fix.
-- **Audit (DATA-H4-2):** neither route writes a status or an audit row itself — both go through `audit_trail.set_status` / `record_event`, which own the `equipment.status` assignment. `report_fault` emits `FAULT` + a `fault_report` history row; `fix_equipment` emits `FIX` + a `repair` one. Both writes sit **below** the find-or-create `db.commit()` and inside the ticket's flush, so an audit row cannot outlive the ticket it explains. A **repeat** report on an already-broken item logs the event and adds no history row — that table records transitions, not assertions.
-- **Authority (H1-9):** both writes resolve through `get_scoped_equipment_or_404` and then gate. `report_fault` uses `require_status_authority` (**holder or `REPORT_STATUS`**); `fix_equipment` uses `require(RESOLVE_FAULT)` and deliberately has **no possession arm** — a soldier holding a broken item may report it and may not declare it fixed, and a company commander may report on their company and may not close the ticket.
-- **⚠️ Non-Obvious Detail:** whoever creates a new fault type without holding `REPORT_STATUS` over the item's group gets `is_pending=True` — approval is needed before it shows up in the general list. That is now a grant question rather than a profile boolean, and it is the one place `may()` is called instead of `require()`, because a "no" here narrows the write rather than refusing it. "The general list" means the Report Fault dropdown: `GET /setup/fault_types` returns pending types too, and `EquipmentPage` is what filters them out. A report naming a pending type by name reuses it. The queue is drained from `/catalog` (`FaultTypeQueuePage`, API-H6), which offers Approve only, because a report-minted type in practice has a ticket and `DELETE` refuses those (DATA-H7). Not always: `report_fault` commits the type before the ticket, so a report that fails in between leaves a ticketless pending type.
+- **Responsibility:** `report_fault` → creates `FaultType` (if new) → creates `MaintenanceLog` ticket → marks equipment "Malfunctioning". `fix_equipment` → sets "Functional" → closes all open tickets → logs the fix. `close_ticket` (DATA-M21, the maintenance page's button) → closes one ticket → sets "Functional" and logs the fix only when it was the item's last open ticket. Both close through `_close_tickets`, which records the closer in `technician_id`. `start_ticket` (DATA-M22) takes an Open ticket: In Progress, `assigned_to_id` = the caller, `started_at` = now; `release_ticket` puts an In Progress ticket back to Open and clears both. A close keeps them, so a closed ticket says who worked it and who closed it. Those two columns are the current claim only: every take is a `ticket_claims` row (DATA-M22-2), opened by `start_ticket` and ended by `release_ticket` (Released) or by a close (Closed, in `_close_tickets`), with who ended it. Every ticket status change goes through `_update_tickets`, and all five routes take the item's row lock (`_lock_item`, `SELECT … FOR UPDATE` on Postgres) before they write a ticket or the item (`report_fault` after its fault-type commit).
+- **Audit (DATA-H4-2):** none of the routes writes a status or an audit row itself — all go through `audit_trail.set_status` / `record_event`, which own the `equipment.status` assignment. `report_fault` emits `FAULT` + a `fault_report` history row; `fix_equipment` emits `FIX` + a `repair` one, and so does `close_ticket` when it closes the item's last open ticket (DATA-M21). `start_ticket` and `release_ticket` write neither: the item does not change (DATA-M22). Who held a ticket is in `ticket_claims` instead (DATA-M22-2). `report_fault`'s two writes sit **below** the find-or-create `db.commit()` and inside the ticket's flush, so an audit row cannot outlive the ticket it explains. A **repeat** report on an already-broken item logs the event and adds no history row — that table records transitions, not assertions.
+- **Authority (H1-9):** `report_fault` and `fix_equipment` resolve the item through `get_scoped_equipment_or_404`, `close_ticket`, `start_ticket` and `release_ticket` resolve the ticket through `scope_equipment_derived_query` (404 "Ticket not found"), and each then gates. `report_fault` uses `require_status_authority` (**holder or `REPORT_STATUS`**); `fix_equipment`, `close_ticket`, `start_ticket` and `release_ticket` use `require(RESOLVE_FAULT)` and deliberately have **no possession arm** — a soldier holding a broken item may report it and may not declare it fixed, and a company commander may report on their company and may not close the ticket.
+- **⚠️ Non-Obvious Detail:** a new fault type created by a report gets `is_pending=True` whoever reports, and so does one created through `POST /setup/fault_types` (SEC-M14): nothing skips review, and the account that proposed a type cannot approve it. Approval is needed before it shows up in the general list. "The general list" means the Report Fault dropdown: `GET /setup/fault_types` returns pending types too, and `EquipmentPage` is what filters them out. A report naming a pending type by name reuses it. The queue is drained from `/catalog` (`FaultTypeQueuePage`, API-H6), which offers Approve only, because a report-minted type in practice has a ticket and `DELETE` refuses those (DATA-H7). Not always: `report_fault` commits the type before the ticket, so a report that fails in between leaves a ticketless pending type.
 - **Scoping (H1-10.5):** `GET /tickets/` runs through `dependencies.scope_equipment_derived_query` — a ticket is exactly as visible as the item it is about. The join is **inner**, so a ticket whose `equipment_id` is NULL or dangling disappears rather than rendering as "Unknown"; that is a behaviour change for such rows, not merely a narrowing.
 
 ### Module E: Verification & Audit Trail
 - **Files:** `routers/verifications.py` (2 sub-routers: `router` + `history_router`)
 - **Responsibility:** Records detailed equipment condition reports. If the reported status differs from current status, automatically creates an `EquipmentStatusHistory` entry linked to the verification. **No longer the only writer of that table** (DATA-H4-2): the maintenance routes above write it too, so `GET /equipment/{id}/history` is now the item's whole condition history rather than its verification history.
 - **Audit (DATA-H4-3):** `create_verification` also emits `CONDITION_REPORT` into `transaction_logs`, **unconditionally**, beside the conditional `set_status` call. Before this a verification that *confirmed* the existing status wrote nothing into either audit table — `set_status` correctly declines a transition that did not happen, and nothing recorded that anyone had looked. `CONDITION_REPORT`, **not** `VERIFICATION`: that value means `equipment.verify_equipment_daily`'s presence check, gated on possession alone, and these are two acts with two gates.
+- **Type (API-M5):** `verification_type` takes one value on input, `condition_report` (`enums.VerificationType`), and may be left out; anything else is a 422. The form used to offer a "presence check" here, by default, which let a caller with `REPORT_STATUS` confirm presence of kit they do not hold through the wider gate (see the possession note below). Rows from before this keep whatever they were sent, so the response field stays a string.
 - **Endpoints:** `POST /verifications/` (create), `GET /verifications/equipment/{id}` (list), `GET /equipment/{id}/history` (status changes).
 - **Authority (H1-9):** all three resolve through `get_scoped_equipment_or_404`. The write then gates on `require_status_authority` (holder or `REPORT_STATUS`); the two reads gate on **nothing further** — they are reads, so the resolver *is* the VIEW gate. Until H1-9 all three took the raw id, so any authenticated account could read any asset's full observation history and status audit trail by counting.
 - **Active duty (H1-10.5):** all three routes are on `get_current_active_user`, and `login_for_access_token` refuses an inactive account outright — the per-route check only declines a credential that was already issued, so the login gate is what closes the class rather than the instances. The refusal reuses the wrong-password 401 verbatim so the form is not an oracle for which military IDs have been deactivated.
@@ -158,18 +161,18 @@ Marker_System/
 - **Files:** `backend/dependencies.py` → `scope_equipment_query`, `scope_equipment_derived_query`, `scope_user_query`
 - **Responsibility:** every list endpoint answers *what may you see*, never *are you an administrator*. Three helpers, and which one applies is decided by what the rows ARE:
   - **equipment** → `scope_equipment_query` (group in `extent(VIEW)`, or you hold it)
-  - **rows that refer to equipment** — transaction logs, maintenance tickets → `scope_equipment_derived_query`, which joins `Equipment` and defers to the above
+  - **rows that refer to equipment** — maintenance tickets → `scope_equipment_derived_query`, which joins `Equipment` and defers to the above. The daily movement report is scoped by group instead since DATA-M9-2 (VIEW over the group, the classification clause per row)
   - **people** → `scope_user_query`: membership in a group inside `extent(VIEW)`, **or** yourself, **or** — for `MANAGE_PERSONNEL` holders — anyone belonging to no group at all
 - **⚠️ Non-Obvious Detail:** that third arm on `scope_user_query` is load-bearing, and was found by probing rather than by reading, at a time when `create_user` issued no membership at all — a fresh account was a member of nothing and invisible to **everyone including the master who just created it**. H1-12 closed that at the source: `create_user` now requires a `group_id` and places the account in the same transaction that creates it. The arm stays regardless — a `Group` can still be deleted out from under a member, since `GroupMembership` cascades on the group's `ondelete` — so an unplaced account remains reachable, just rarer.
-- **⚠️ Non-Obvious Detail:** `GET /groups` (H1-12 — replaces `GET /profiles`) is *gated* (`MANAGE_PERSONNEL`) rather than scoped, because the personnel table belongs to no unit. That is the same reason `authz.require_global` exists.
+- **⚠️ Non-Obvious Detail:** `GET /groups` (H1-12 — replaces `GET /profiles`) is *gated* (`MANAGE_PERSONNEL`) rather than scoped, because the personnel table belongs to no unit; so is `PATCH /groups/{group_id}`, which sets a group's zone. That is the same reason `authz.require_global` exists.
 
 ### Module F2: The Group Access Model
 - **Files:** `backend/authz.py`, `backend/enums.py` → `Capability`, `backend/dependencies.py`
 - **Responsibility:** The single relation every access question reduces to. `may(P, C, R)` — may principal `P` exercise capability `C` over a resource in group `R` — answered by asking whether the resource's group lies in `extent(P, C)`, the union of the subtrees under `P`'s grants carrying `C`.
 - **Primitives:** `Group` (polymorphic on `kind`), `GroupEdge` (direct containment), `GroupClosure` (materialised transitive closure, `depth` = shortest path, depth-0 self-rows), `GroupMembership` (a user is *in* a group), `Grant` (a user holds a capability *over* a group). **Membership is not a grant** — a private is a member of their company and commands none of it.
-- **Capabilities:** `VIEW` (all listings), `TRANSFER` (`assign_owner`, `transfer_equipment`), `CREATE_EQUIPMENT` (`create_equipment`), `REPORT_STATUS` (`report_fault`, `create_verification`), `RESOLVE_FAULT` (`fix_equipment`), `MANAGE_CATALOG` (`setup.py`'s fault-type routes), `MANAGE_PERSONNEL` (`users.py`'s `create_user` and `update_user_group`, plus `setup.list_groups`). Every member is read by a router; none is declared ahead of its gate.
+- **Capabilities:** `VIEW` (all listings), `TRANSFER` (`assign_owner`, `transfer_equipment`), `CREATE_EQUIPMENT` (`create_equipment`), `REPORT_STATUS` (`report_fault`, `create_verification`), `RESOLVE_FAULT` (`fix_equipment`, `close_ticket`, `start_ticket`, `release_ticket`), `MANAGE_CATALOG` (`setup.py`'s fault-type routes, and `create_equipment` when the catalog name is new), `MANAGE_PERSONNEL` (`users.py`'s `create_user` and `update_user_group`, plus `setup.list_groups`). Every member is read by a router; none is declared ahead of its gate.
 - **⚠️ Non-Obvious Detail:** two of those verbs are **global**. `CatalogItem` and `FaultType` have no group and never will -- they are one namespace shared by every unit -- and neither does the personnel table. `authz.require_global` asks the verb over **every root**, which reads as authority over the whole graph: holding it on a node below the top authorises nothing, and an empty graph authorises nobody (`all()` over an empty sequence would say the opposite). This corrects a claim `Capability`'s docstring carried from H1-7 to H1-9, that a catalog verb was *unenforceable* here. *Has no group* is not *has no place in the graph*.
-- **⚠️ Non-Obvious Detail:** **possession is a second, independent arm, and it is not everywhere.** `dependencies.require_status_authority` lets an item's holder report a fault on it without any grant — you can always speak about what you are carrying, the same reasoning `scope_equipment_query` applies to VIEW. `fix_equipment` deliberately does not use it: closing a fault is authority, so a soldier holding a broken item may report it and may not declare it fixed. `verify_equipment_daily` is narrower still — holder only — because it records "I am carrying this" and possession-or-grant would let a commander confirm presence of kit they do not hold.
+- **⚠️ Non-Obvious Detail:** **possession is a second, independent arm, and it is not everywhere.** `dependencies.require_status_authority` lets an item's holder report a fault on it without any grant — you can always speak about what you are carrying, the same reasoning `scope_equipment_query` applies to VIEW. `fix_equipment`, `close_ticket`, `start_ticket` and `release_ticket` deliberately do not use it: closing a fault is authority, so a soldier holding a broken item may report it and may not declare it fixed. `verify_equipment_daily` is narrower still — holder only — because it records "I am carrying this" and possession-or-grant would let a commander confirm presence of kit they do not hold.
 - **⚠️ Non-Obvious Detail:** a grant over a group the holder cannot **see** authorises nothing, because the resolver asks VIEW first. H1-9 found several profiles in that state and H1-10 resolved it by granting the tech soldiers sight of the unit they maintain -- the rule being *you see what you may maintain*. Still read a grant table together with the VIEW table: the two are independent, and only convention keeps them aligned.
 - **⚠️ Non-Obvious Detail:** **MASTER is no longer special anywhere in the backend.** `is_master` is deleted. Its sight is a `VIEW` grant on the root -- issued by `seed_data`, the test fixture and `bootstrap_admin.grant_root_authority` alike -- so a master is bounded by the graph and cannot see a disconnected tree nobody granted them. `models.UserRole` is deleted entirely (H1-12) — there is no longer even a dead column to remain as.
 - **⚠️ Non-Obvious Detail:** authority is **positional and points down**. The same grant means "the entire force" on the root group and "one company" on a leaf, which is how the ladder of visibility booleans collapsed into where a single grant sits.
@@ -228,7 +231,7 @@ Marker_System/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/equipment/accessible` | **Matrix-filtered** equipment list |
-| `POST` | `/equipment/` | Add new equipment (by catalog name) |
+| `POST` | `/equipment/` | Add new equipment (by catalog name; a new name needs `MANAGE_CATALOG`) |
 | `PATCH` | `/equipment/{equipment_id}/sensitivity` | Classify or declassify one item (`SET_SENSITIVITY` over the item's group; holding the item is not enough) |
 | `POST` | `/equipment/assign_owner/` | Assign permanent owner |
 | `POST` | `/equipment/transfer` | Transfer possession (person XOR location) |
@@ -239,7 +242,10 @@ Marker_System/
 |--------|------|-------------|
 | `GET` | `/tickets/` | List tickets (optional status filter) |
 | `POST` | `/maintenance/report` | Report fault → create ticket |
-| `POST` | `/maintenance/fix/{equipment_id}` | Fix equipment → close tickets |
+| `POST` | `/maintenance/fix/{equipment_id}` | Fix equipment → close all its tickets |
+| `POST` | `/maintenance/tickets/{ticket_id}/close` | Close one ticket; last one → item Functional |
+| `POST` | `/maintenance/tickets/{ticket_id}/start` | Take an Open ticket → In Progress, assigned to the caller |
+| `POST` | `/maintenance/tickets/{ticket_id}/release` | Put an In Progress ticket back → Open, unassigned |
 
 ### Verifications (`routers/verifications.py`)
 | Method | Path | Description |
@@ -252,17 +258,18 @@ Marker_System/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/groups` | List all groups (`MANAGE_PERSONNEL`) |
+| `PATCH` | `/groups/{group_id}` | Set a group's time zone (`MANAGE_PERSONNEL`; no page calls it) |
 | `GET` | `/setup/fault_types` | List all fault types, pending included |
 | `GET` | `/setup/fault_types/pending` | List pending fault types (`MANAGE_CATALOG`) |
-| `POST` | `/setup/fault_types` | Create fault type (any user; pending without `MANAGE_CATALOG`) |
-| `PUT` | `/setup/fault_types/{fault_id}/approve` | Approve pending fault type (`MANAGE_CATALOG`) |
+| `POST` | `/setup/fault_types` | Create fault type (`MANAGE_CATALOG`; always pending) |
+| `PUT` | `/setup/fault_types/{fault_id}/approve` | Approve pending fault type (`MANAGE_CATALOG`; not by its proposer) |
 | `DELETE` | `/setup/fault_types/{fault_id}` | Delete fault type (`MANAGE_CATALOG`; 409 while any ticket uses it) |
 
 ### Reports (`routers/reports.py`)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/reports/query` | Inventory report (matrix-filtered + user filters) |
-| `GET` | `/reports/daily_movement` | Last 24h transaction log |
+| `GET` | `/reports/daily_movement` | One group's calendar day in the group's own zone (`?group_id=&date=`, defaults: the caller's one top VIEW group, today; 400 listing them when there are several): reporter, from/to holder, owner, unit and place, reason (`MovementReport` of `MovementReportItem`) |
 
 ### Analytics (`routers/analytics.py`)
 | Method | Path | Description |
@@ -296,7 +303,7 @@ BOOTSTRAP_ADMIN_ENABLED=1 python -m backend.bootstrap_admin <personal_number> "<
 ```
 
 It applies migrations, creates the MASTER user, then places it at the top of the group graph
-(creating a `ROOT` group if none exists) with a `GroupMembership` and every `Capability` granted
+(creating a `ROOT` group if none exists, in the zone `BOOTSTRAP_ROOT_TIMEZONE` names, else `Asia/Jerusalem`) with a `GroupMembership` and every `Capability` granted
 on each root — `bootstrap_admin.grant_root_authority()`, not a profile — and prints a generated
 password **once**: it is not stored in plaintext and cannot be recovered. It refuses if root
 authority is already held by anyone (`already_bootstrapped()` checks group membership on the
@@ -329,7 +336,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | Table | Purpose |
 |-------|---------| 
 | `users` | Credentials, active-duty flag |
-| `groups` | `Group` (polymorphic on `kind`) — nodes in the org DAG |
+| `groups` | `Group` (polymorphic on `kind`) — nodes in the org DAG. Each stores its own IANA `timezone` (NOT NULL, never inherited) |
 | `group_edges` | `GroupEdge` — direct containment |
 | `group_closure` | `GroupClosure` — materialised transitive closure |
 | `group_memberships` | `GroupMembership` — who sits where |
@@ -338,8 +345,9 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 | `catalog_items` | Equipment type definitions (Radio 710, Ceramic Vest, etc.) |
 | `locations` | Physical storage (Armory, Container, etc.) |
 | `fault_types` | Known fault categories + pending approval flag |
-| `transaction_logs` | Append-only log of every movement/handover/verification, and since DATA-H4-3 of every equipment mutation: creation, reclassification and condition reports too. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction |
-| `maintenance_logs` | Fault tickets (Open → In Progress → Closed) |
+| `transaction_logs` | Append-only log of every movement/handover/verification, and since DATA-H4-3 of every equipment mutation: creation, reclassification and condition reports too. **Written only by `audit_trail.record_event`** (DATA-H4) — an AST guard in `tests/test_audit_trail.py` fails any other construction. `involved_user_id` is the actor. Since DATA-M8-1 a custody event (`HANDOVER`, `HANDOVER_LOC`, `ASSIGN`) also records the custody it left and the one it went to (`from_`/`to_` holder, owner, group and location), and a transfer, an assignment or a reclassification can carry an optional `reason`; other events leave the custody columns NULL. `event_type` is NOT NULL and held to `EventType` by a CHECK. Rows from before DATA-M8-1 have only `location` (`User:<name>` or a place); nothing writes it since DATA-M8-2, when the movement report moved onto the new columns. Since DATA-M9-2 every row records `group_id`, the item's group as the event left it (for a custody event, its `to_group_id`): the movement report files a row under a group's day by it or by `from_group_id`, over the composite indexes `(group_id, timestamp)` and `(from_group_id, timestamp)` |
+| `maintenance_logs` | Fault tickets (Open ⇄ In Progress → Closed; Closed from either) |
+| `ticket_claims` | One row per take of a ticket: who, from, to, who ended it, Released or Closed; at most one open per ticket (DATA-M22-2) |
 | `verifications` | Detailed condition reports |
 | `equipment_status_history` | Audit: old_status → new_status with reason + verification link. **Written only by `audit_trail.set_status`**, which owns the `equipment.status` assignment too — the record and the change are one operation. Records **transitions**, so a no-op write adds nothing; `transaction_logs` is where the act still shows up |
 | `daily_stats` | Cached readiness snapshots (total, functional, score) |
@@ -349,7 +357,7 @@ Group membership and `VIEW` placement happen to coincide for six of these seven 
 - **Login Page** → Orbital-style landing with 3D globe, theme toggle, inline login form
 - **Dashboard** (`/dashboard`) → Welcome card, stats grid (4 stat cards with animated counters, readiness inside a ring), equipment preview (top 5), activity feed (last 8 events)
 - **Equipment** (`/equipment`) → Full equipment table with search/filter (by serial, type, status), expandable inline history rows, action modals (Report Fault with fault type picker + "other", Transfer with person/location toggle, Assign Owner with user search), Verification Form, full History modal
-- **Maintenance** (`/maintenance`) → Ticket management: 4 summary stat cards, filter tabs (All/Open/In Progress/Closed), ticket cards with equipment name + fault type + dates, manager "close & fix" action
+- **Maintenance** (`/maintenance`) → Ticket management: 4 summary stat cards, filter tabs (All/Open/In Progress/Closed), ticket cards with equipment name + fault type + dates, manager actions: take an Open ticket or release an In Progress one (DATA-M22; a taken ticket shows who has it and since when, and every ticket lists its ended takes, DATA-M22-2), and "close ticket" (one ticket; the item turns Functional with its last, DATA-M21)
 - **Reports** (`/reports`) → `GET /reports/query` with dynamic filters → table display, CSV export, print support
 - **Admin** (`/admin`) → User search, group assignment
 - **Fault-type approval** (`/catalog`) → Pending fault types with an Approve button; approving one adds it to the Report Fault dropdown
@@ -385,6 +393,7 @@ Every image the repository pulls is named by tag and digest (`name:tag@sha256:�
 | `VITE_API_URL` | `docker-compose.yml` (dev server); `--build-arg` (image) | Backend URL for frontend Axios. Read when the JavaScript is built: the dev server reads it at start, the image has it fixed at `docker build` |
 | `SEED_ENABLED` | shell, per-run | Must be `1` for `seed_data.py` to run at all |
 | `BOOTSTRAP_ADMIN_ENABLED` | shell, per-run | Must be `1` for `bootstrap_admin.py` to create the first MASTER |
+| `BOOTSTRAP_ROOT_TIMEZONE` | shell, per-run | Optional. The zone of the `ROOT` group `bootstrap_admin.py` creates when there is none; unset or empty means `Asia/Jerusalem`, an unknown name stops the run |
 
 ---
 
@@ -427,7 +436,7 @@ Every image the repository pulls is named by tag and digest (`name:tag@sha256:�
 
 16. **`FaultTypeQueuePage.tsx` (`/catalog`) is the only frontend caller of `GET /setup/fault_types/pending` and `PUT /setup/fault_types/{id}/approve`** (API-H6). `DashboardPage.tsx` does not call either route, whatever older notes say. `DELETE /setup/fault_types/{id}` still has no frontend caller.
 
-17. **The `reports.py` endpoint returns a plain dict** matching the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
+17. **Both `reports.py` endpoints declare a response model.** `/reports/daily_movement` has `MovementReport` (since DATA-M9-2: the group, its zone, the date, the day's UTC `start` and `end`, and `items`), each item a `MovementReportItem` (since DATA-M8-2), mirrored by the shared frontend `MovementReport` and `MovementReportItem` in `types/index.ts` and held to them by `tests/test_movement_report.py`; its names come from eager-loaded `TransactionLog` relationships (`actor`, from/to holder, owner and group), so its query count does not grow with its length. `/reports/query` has `List[InventoryReportItem]` (since DATA-M7), mirrored by the shared frontend `InventoryReportItem` interface in `types/index.ts` (`id`, `item_type`, `unit_association`, `designated_owner`, `actual_location`, `serial_number`, `reporting_status`, `last_reporter`, `last_verified_at`). `reporting_status` is a `ComplianceLevel` (GOOD / WARNING / SEVERE), and the report page shows Hebrew labels for it. Equipment type = `item.catalog_item.name`, NOT `item.item_name`. Since H1-11, `unit_association` is the **group's name** (`item.group.name`) — the path columns it used to read are gone, and the eager load on `Equipment.group` is required or the report is an N+1.
 
 18. **`tailwind.config.cjs` and `postcss.config.cjs` MUST use `.cjs` extension and CommonJS syntax** (`module.exports` + `require()`). The `package.json` has `"type": "module"` (ESM mode), which makes `.js` files ESM by default. But Tailwind v3's internal `jiti` loader doesn't support ESM features like top-level `await`, and `require()` is unavailable in ESM. Using `.cjs` forces CommonJS mode where `require()` works. Don't rename them back to `.js`.
 
