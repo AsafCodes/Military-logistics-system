@@ -65,7 +65,7 @@ RUN npm run build
 # --- the image ---------------------------------------------------------------
 # The tag names a release. This was `nginx:alpine`, which names none; on
 # 2026-10-12 the two tags had this one digest, and the image reported 1.31.6.
-FROM nginx:1.31.6-alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+FROM nginx:1.31.7-alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # INF-H4. --chown because a COPY from another stage keeps the owner the files
