@@ -47,7 +47,7 @@ def listed(client, who, serial):
 def condition_report(item, reported_status="Functional", findings=None):
     return {
         "equipment_id": item.id,
-        "verification_type": "daily",
+        "verification_type": "condition_report",
         "reported_status": reported_status,
         "findings": findings,
         "action_required": False,

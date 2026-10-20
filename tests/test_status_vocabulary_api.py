@@ -37,7 +37,7 @@ test_audit_trail.py, which asserts the bare literals on the columns.
 import pytest
 
 from backend import audit_trail, models
-from backend.enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus
+from backend.enums import ChangeReason, EquipmentStatus, Sensitivity, TicketStatus, VerificationType
 
 REPORT_FAULT = {"fault_name": "Vocabulary Fault", "description": "will not fire"}
 
@@ -61,7 +61,12 @@ def _open_ticket(client, token, equipment_id):
 # Every enum now reachable from a response field. A member leaking as its repr
 # would put one of these class names into the body, so the blanket check below
 # covers fields these tests do not name individually.
-LEAKED_REPRS = ("EquipmentStatus.", "TicketStatus.", "ChangeReason.", "Sensitivity.")
+LEAKED_REPRS = (
+    "EquipmentStatus.", "TicketStatus.", "ChangeReason.", "Sensitivity.",
+    # Could reach VerificationResponse through the column it is stored in, if
+    # a writer ever stored str(member) rather than the value (API-M5).
+    "VerificationType.",
+)
 
 
 def _assert_no_member_repr_leaked(response):
@@ -128,7 +133,7 @@ def test_the_verification_and_history_payloads_are_still_bare_strings(
         "/verifications/",
         json={
             "equipment_id": item_id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "cracked stock",
             "action_required": True,
@@ -561,6 +566,8 @@ PINNED_ELSEWHERE = {
     ("EquipmentCreate", "sensitivity"),
     ("SetSensitivityRequest", "sensitivity"),
     ("VerificationCreate", "reported_status"),
+    # API-M5, pinned by tests/test_verification_types.py.
+    ("VerificationCreate", "verification_type"),
 }
 
 
@@ -585,7 +592,7 @@ def test_every_vocabulary_typed_field_in_the_file_is_accounted_for():
 
     from backend import schemas
 
-    vocabularies = (EquipmentStatus, TicketStatus, ChangeReason, Sensitivity)
+    vocabularies = (EquipmentStatus, TicketStatus, ChangeReason, Sensitivity, VerificationType)
     found = set()
     for model_name, obj in vars(schemas).items():
         if not (

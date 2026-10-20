@@ -6,6 +6,7 @@ from datetime import datetime
 from . import clock
 from .enums import (
     ChangeReason, ClaimOutcome, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus,
+    VerificationType,
 )
 
 # --- Integers a request carries ---
@@ -473,7 +474,9 @@ class InventoryReportItem(BaseModel):
 # --- Verification & Status History ---
 class VerificationCreate(BaseModel):
     equipment_id: DbInt
-    verification_type: str
+    # API-M5. A closed list with one member, so it may be left out; anything
+    # else, a presence check above all, is refused with 422. See the enum.
+    verification_type: VerificationType = VerificationType.CONDITION_REPORT
     reported_status: EquipmentStatus
     findings: Optional[str] = None
     action_required: bool = False
@@ -482,6 +485,7 @@ class VerificationCreate(BaseModel):
 class VerificationResponse(BaseModel):
     id: int
     equipment_id: int
+    # A str, not VerificationType: rows from before API-M5 hold other values.
     verification_type: str
     # DATA-H12-2. VerificationCreate.reported_status above has been the enum
     # since DATA-H3-1 and this was still `str`, so one route validated a

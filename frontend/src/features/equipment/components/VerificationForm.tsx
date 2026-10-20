@@ -11,7 +11,6 @@ interface VerificationFormProps {
 
 export default function VerificationForm({ equipmentId, currentStatus, isOpen, onClose, onSuccess }: VerificationFormProps) {
     const [formData, setFormData] = useState({
-        verification_type: 'presence_check',
         reported_status: currentStatus,
         findings: '',
         action_required: false
@@ -25,8 +24,13 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
         setError(null);
 
         try {
+            // API-M5. The only type the route accepts. This form had a type
+            // select that defaulted to a presence check, which is the holder's
+            // own report ("דווח נוכחות"), not something a condition report
+            // filed under a wider gate may claim.
             await api.post('/verifications/', {
                 equipment_id: equipmentId,
+                verification_type: 'condition_report',
                 ...formData
             });
             onSuccess();
@@ -59,21 +63,6 @@ export default function VerificationForm({ equipmentId, currentStatus, isOpen, o
                             {error}
                         </div>
                     )}
-
-                    <div>
-                        <label className="block text-sm font-medium text-foreground mb-1">סוג דיווח</label>
-                        <select
-                            value={formData.verification_type}
-                            onChange={(e) => setFormData({ ...formData, verification_type: e.target.value })}
-                            className="w-full px-3 py-2 rounded-lg border border-border/50
-                                       bg-background text-foreground
-                                       focus:ring-2 focus:ring-primary/50 outline-none transition-colors"
-                        >
-                            <option value="presence_check">בדיקת נוכחות</option>
-                            <option value="condition_report">דיווח מצב</option>
-                            <option value="transfer_verification">אימות העברה</option>
-                        </select>
-                    </div>
 
                     <div>
                         <label className="block text-sm font-medium text-foreground mb-1">סטטוס מדווח</label>

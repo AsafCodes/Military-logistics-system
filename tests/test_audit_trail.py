@@ -613,7 +613,7 @@ def test_a_verification_that_moves_nothing_writes_no_history_row(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
             "findings": "all good",
             "action_required": False,
@@ -652,7 +652,7 @@ def test_a_status_change_records_both_ends_and_its_verification(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "cracked stock",
             "action_required": True,
@@ -1059,7 +1059,7 @@ def test_an_absent_status_is_refused_however_it_is_spelled(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "x",
             "action_required": False,
@@ -1083,7 +1083,7 @@ def test_verifying_an_unchanged_status_still_advances_the_clock(
 
     last_verified_at is advanced by set_last_verified_at, called unconditionally
     beside set_status in create_verification, and a refactor that tucked it
-    inside the status-changed branch would make a clean daily verification stop
+    inside the status-changed branch would make a clean condition report stop
     counting as a verification -- silently degrading compliance for every item
     that is working correctly, which is most of them.
     """
@@ -1098,7 +1098,7 @@ def test_verifying_an_unchanged_status_still_advances_the_clock(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
             "findings": None,
             "action_required": False,
@@ -1884,7 +1884,7 @@ def test_a_condition_report_is_not_the_daily_verification(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
             "findings": "no change",
             "action_required": False,
@@ -1928,7 +1928,7 @@ def test_a_refused_condition_report_writes_neither_table(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "daily",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
             "findings": "should not be recorded",
             "action_required": True,

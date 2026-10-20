@@ -195,6 +195,26 @@ class ClaimOutcome(str, enum.Enum):
     CLOSED = "Closed"
 
 
+class VerificationType(str, enum.Enum):
+    """What POST /verifications/ accepts as a verification_type. API-M5.
+
+    One member, and on purpose no presence check. That route is
+    require_status_authority's, possession OR REPORT_STATUS, and it advances
+    the compliance clock. "I have this item" is equipment.verify_equipment_daily's
+    to record, and that route is the holder's alone (SYSTEM_MAP.md, the
+    possession note). The form used to offer "presence_check" here, by
+    default, which let a commander confirm presence of kit they do not hold
+    through the wider gate. "transfer_verification" went with it: read as
+    "the receiver has it", it was the same claim under another word, and
+    nothing read either value.
+
+    Input only. The column has no CHECK, and rows written before this hold
+    whatever the form or a caller sent ("presence_check", "daily", ...), so
+    VerificationResponse reads it back as a plain string.
+    """
+    CONDITION_REPORT = "condition_report"
+
+
 class EventType(str, enum.Enum):
     """What a transaction_logs row says happened.
 
@@ -289,7 +309,8 @@ class EventType(str, enum.Enum):
     CONDITION_REPORT = "CONDITION_REPORT"
     # verifications.create_verification (DATA-H4-3). NOT VERIFICATION, which is
     # taken four members up by the daily presence confirmation -- two acts with
-    # two gates do not share a string.
+    # two gates do not share a string. VerificationType above keeps the same
+    # line on the route's input: it accepts no presence check (API-M5).
     #
     # Unconditional, beside a set_status call that is not. Before DATA-H4-3 a
     # verification CONFIRMING the status wrote nothing into either audit table:

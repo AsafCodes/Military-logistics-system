@@ -123,7 +123,7 @@ CASES = {
         lambda v, r: f"/setup/fault_types/{v}", None),
     ("POST", "/verifications/", "body", "equipment_id"): (
         lambda v, r: "/verifications/",
-        lambda v, r: {"equipment_id": v, "verification_type": "Daily", "reported_status": "Functional"}),
+        lambda v, r: {"equipment_id": v, "verification_type": "condition_report", "reported_status": "Functional"}),
     ("GET", "/verifications/equipment/{equipment_id}", "path", "equipment_id"): (
         lambda v, r: f"/verifications/equipment/{v}", None),
     ("GET", "/equipment/{equipment_id}/history", "path", "equipment_id"): (

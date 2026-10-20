@@ -417,7 +417,7 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         "/verifications/",
         json={
             "equipment_id": item.id,
-            "verification_type": "Routine",
+            "verification_type": "condition_report",
             "reported_status": "Malfunctioning",
         },
         headers=token_master,

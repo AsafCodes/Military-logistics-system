@@ -82,7 +82,7 @@ async def create_verification(
     # coincidence two edits from now.
     verification = models.Verification(
         equipment_id=equipment.id,
-        verification_type=data.verification_type,
+        verification_type=data.verification_type.value,
         reported_status=reported_status,
         findings=data.findings,
         action_required=data.action_required,

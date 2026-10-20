@@ -243,7 +243,7 @@ def test_a_cross_company_verification_is_refused_through_the_route(
         "/verifications/",
         json={
             "equipment_id": item_b.id,
-            "verification_type": "DAILY",
+            "verification_type": "condition_report",
             "reported_status": "Functional",
         },
         headers=create_auth_header("u_soldier_a"),

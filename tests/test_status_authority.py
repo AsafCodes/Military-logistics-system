@@ -61,7 +61,7 @@ def submit_verification(client, who, equipment_id, status="Malfunctioning"):
         "/verifications/",
         json={
             "equipment_id": equipment_id,
-            "verification_type": "DAILY",
+            "verification_type": "condition_report",
             "reported_status": status,
         },
         headers=create_auth_header(who),
