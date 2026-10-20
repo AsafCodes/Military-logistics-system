@@ -1,7 +1,7 @@
 import enum
 from datetime import timedelta
 
-from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import relationship
 
 # Imported for its side effect: it registers the group algebra tables on
@@ -15,7 +15,15 @@ from . import (
     clock,
 )
 from .database import Base  # Use shared Base from backend package
-from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus
+from .enums import (
+    ChangeReason,
+    ClaimOutcome,
+    ComplianceLevel,
+    EquipmentStatus,
+    EventType,
+    Sensitivity,
+    TicketStatus,
+)
 
 
 def _one_of(column: str, values: type[enum.Enum], name: str) -> CheckConstraint:
@@ -425,7 +433,9 @@ class MaintenanceLog(Base):
 
     # DATA-M22. Who took the ticket, and when. Set by start, cleared by
     # release, and left alone by a close, so a closed ticket says who worked
-    # it (here) and who closed it (technician_id).
+    # it (here) and who closed it (technician_id). The current claim only:
+    # every take, released ones included, is a row in ticket_claims
+    # (DATA-M22-2), and the routes write the two in one transaction.
     assigned_to_id = Column(
         Integer, _restrict('maintenance_logs', 'assigned_to_id', 'users'), nullable=True, index=True
     )
@@ -435,6 +445,60 @@ class MaintenanceLog(Base):
     fault_type = relationship("FaultType")
     # foreign_keys, because technician_id is a second key to users.
     assignee = relationship("User", foreign_keys=[assigned_to_id])
+    # Newest first, the order the API returns them in. id breaks a tie
+    # between two takes in the same instant.
+    claims = relationship(
+        "TicketClaim",
+        order_by=lambda: (TicketClaim.started_at.desc(), TicketClaim.id.desc()),
+        viewonly=True,
+    )
+
+
+class TicketClaim(Base):
+    """One take of a maintenance ticket. DATA-M22-2.
+
+    start_ticket inserts the row; release_ticket ends it as RELEASED, and a
+    close (close_ticket or fix_equipment) ends it as CLOSED. So a ticket that
+    changed hands keeps who held it, from when to when, and who ended each
+    take, which maintenance_logs.assigned_to_id alone could not: a release
+    cleared it.
+
+    At most one claim of a ticket is open (ended_at IS NULL), enforced by
+    uq_ticket_claims_open_ticket, a partial unique index. While a ticket is In
+    Progress its open claim's user_id is the ticket's assigned_to_id; the
+    routes keep the two in step, and tests/test_ticket_claims.py checks it
+    after each of them.
+    """
+    __tablename__ = 'ticket_claims'
+
+    __table_args__ = (
+        _one_of('outcome', ClaimOutcome, 'ck_ticket_claims_outcome'),
+        CheckConstraint(
+            "(ended_at IS NULL AND ended_by_id IS NULL AND outcome IS NULL)"
+            " OR (ended_at IS NOT NULL AND ended_by_id IS NOT NULL AND outcome IS NOT NULL)",
+            name='ck_ticket_claims_ended',
+        ),
+        Index(
+            'uq_ticket_claims_open_ticket', 'ticket_id', unique=True,
+            sqlite_where=text('ended_at IS NULL'),
+            postgresql_where=text('ended_at IS NULL'),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(
+        Integer, _restrict('ticket_claims', 'ticket_id', 'maintenance_logs'), nullable=False, index=True
+    )
+    # Who took it.
+    user_id = Column(Integer, _restrict('ticket_claims', 'user_id', 'users'), nullable=False, index=True)
+    started_at = Column(clock.UtcDateTime, nullable=False)
+    ended_at = Column(clock.UtcDateTime, nullable=True)
+    # Who released or closed it, who need not be user_id.
+    ended_by_id = Column(Integer, _restrict('ticket_claims', 'ended_by_id', 'users'), nullable=True, index=True)
+    outcome = Column(String, nullable=True)
+
+    user = relationship("User", foreign_keys=[user_id])
+    ended_by = relationship("User", foreign_keys=[ended_by_id])
 
 # --- Solution Types ---
 class SolutionType(Base):

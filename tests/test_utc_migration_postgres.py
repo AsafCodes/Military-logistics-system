@@ -687,14 +687,17 @@ def test_the_index_revision_builds_re_runs_and_reverses_on_postgres(pg_schema):
     # to head, and adds indexes of its own, which its downgrade removes.
     # 3c6a0f8e2d71 (DATA-M9-2) replaces another with a composite, and its
     # downgrade puts it back. 7a2f5c9d1e38 (DATA-M22) adds one on
-    # maintenance_logs.
+    # maintenance_logs. 5e8b1d4f7c29 (DATA-M22-2) creates ticket_claims with
+    # its indexes, and its downgrade drops the table.
     dropped = {"ix_transaction_logs_involved_location_id", "ix_transaction_logs_timestamp"}
     history = script.get_revision("b7e3d91c4f2a").module
     day = script.get_revision("3c6a0f8e2d71").module
     assignee = script.get_revision("7a2f5c9d1e38").module
+    claims = script.get_revision("5e8b1d4f7c29").module
     added_later = {f"ix_transaction_logs_{column}" for column, _referred in history.ID_COLUMNS}
     added_later |= set(day.NEW_INDEXES)
     added_later.add(assignee.INDEX_NAME)
+    added_later |= set(claims.INDEXES) | {claims.OPEN_INDEX}
 
     _migrate(pg_schema, "head")
     at_head = _indexes(pg_schema)

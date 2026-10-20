@@ -111,9 +111,12 @@ BASELINE_STAMP = "e5f1b8d24a07"
 #
 # DATA-M22's ticket assignee adds two columns, a key and an index, each
 # checked by name.
+#
+# DATA-M22-2's ticket claims add a table and its indexes, each checked by
+# name, and backfill it with INSERTs that skip a ticket already claimed.
 IDEMPOTENT_SCHEMA_REVISIONS = frozenset(
     {"d3a9c17be540", "f4d81b2c6a93", "a8c2e5f19b47", "b7e3d91c4f2a", "9d4e2b7c1a60",
-     "3c6a0f8e2d71", "7a2f5c9d1e38"}
+     "3c6a0f8e2d71", "7a2f5c9d1e38", "5e8b1d4f7c29"}
 )
 
 # (table, column) for every column a revision after BASELINE_STAMP adds.
@@ -145,6 +148,17 @@ ADDED_AFTER_BASELINE = frozenset(
     ("maintenance_logs", "assigned_to_id"),
     ("maintenance_logs", "started_at"),
 }
+
+# Every table a revision after BASELINE_STAMP creates, for the reason
+# ADDED_AFTER_BASELINE lists columns: a pre-Alembic database lacks such a
+# table by definition, and the revision that creates it runs only after the
+# stamp, so describe_drift would otherwise refuse every database the baseline
+# path exists for. DATA-M22-2 (ticket_claims, one row per take of a ticket)
+# is the first.
+#
+# Kept in step with the chain by the same test as ADDED_AFTER_BASELINE, which
+# compares the tables head has and the stamp lacks with this list.
+TABLES_ADDED_AFTER_BASELINE = frozenset({"ticket_claims"})
 
 
 def alembic_config() -> Config:
@@ -186,7 +200,9 @@ def describe_drift(conn) -> list:
 
     A missing column in ADDED_AFTER_BASELINE is not counted either, for the
     reason the index is not: the revision that adds it runs after the stamp.
-    See that constant.
+    See that constant. Nor is a missing table in TABLES_ADDED_AFTER_BASELINE,
+    or an index of one: compare_metadata reports the indexes of a missing
+    table as missing too, and the unique one would count.
     """
     context = MigrationContext.configure(conn)
     return [
@@ -194,6 +210,8 @@ def describe_drift(conn) -> list:
         if d[0] in BEHIND
         and not (d[0] == "add_index" and not d[1].unique)
         and not (d[0] == "add_column" and (d[2], d[3].name) in ADDED_AFTER_BASELINE)
+        and not (d[0] == "add_table" and d[1].name in TABLES_ADDED_AFTER_BASELINE)
+        and not (d[0] == "add_index" and d[1].table.name in TABLES_ADDED_AFTER_BASELINE)
     ]
 
 

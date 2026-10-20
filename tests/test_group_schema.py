@@ -1081,31 +1081,37 @@ def test_a_legacy_row_holding_null_does_not_block_the_upgrade(tmp_path):
 
 
 def test_the_columns_added_after_the_baseline_are_exactly_the_exempt_ones(tmp_path):
-    """migrations.ADDED_AFTER_BASELINE, derived from the chain rather than trusted.
+    """migrations.ADDED_AFTER_BASELINE and TABLES_ADDED_AFTER_BASELINE, derived
+    from the chain rather than trusted.
 
-    describe_drift skips a missing column on that list, because the revision
-    that adds it runs after the stamp. A column missing from the list refuses
+    describe_drift skips a missing column or table on those lists, because the
+    revision that adds it runs after the stamp. One missing from a list refuses
     every pre-Alembic database that predates it; an extra entry hides real
     drift. So: migrate one database to the stamp and one to head, and the
-    columns head has and the stamp lacks must be exactly the list.
+    tables head has and the stamp lacks must be exactly the one list, and the
+    columns it adds to the tables both have exactly the other (DATA-M22-2:
+    a new table's columns come with it and are not listed).
     """
     at_stamp = create_engine(f"sqlite:///{tmp_path / 'stamp.db'}")
     _upgrade(at_stamp, migrations.BASELINE_STAMP)
     at_head = create_engine(f"sqlite:///{tmp_path / 'head.db'}")
     _upgrade(at_head, "head")
 
-    def columns(engine):
+    def columns(engine, tables):
         insp = inspect(engine)
         return {
             (table, column["name"])
-            for table in insp.get_table_names()
+            for table in tables
             for column in insp.get_columns(table)
         }
 
-    added = columns(at_head) - columns(at_stamp)
+    stamp_tables = set(inspect(at_stamp).get_table_names())
+    added_tables = set(inspect(at_head).get_table_names()) - stamp_tables
+    added = columns(at_head, stamp_tables) - columns(at_stamp, stamp_tables)
     at_stamp.dispose()
     at_head.dispose()
 
+    assert added_tables == migrations.TABLES_ADDED_AFTER_BASELINE
     assert added == migrations.ADDED_AFTER_BASELINE
 
 
@@ -1129,12 +1135,14 @@ def test_a_pre_alembic_database_lacking_the_later_columns_is_stamped_and_given_t
 
     present = {(t, c) for t, c in migrations.ADDED_AFTER_BASELINE
                if c in {col["name"] for col in inspect(engine).get_columns(t)}}
+    tables = set(inspect(engine).get_table_names())
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     engine.dispose()
 
     assert version == ScriptDirectory.from_config(migrations.alembic_config()).get_current_head()
     assert present == migrations.ADDED_AFTER_BASELINE
+    assert migrations.TABLES_ADDED_AFTER_BASELINE <= tables
 
 
 def allowlisted_in_chain_order(script):

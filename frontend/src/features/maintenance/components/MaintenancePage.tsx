@@ -20,6 +20,20 @@ interface Ticket {
     // DATA-M22. Who took the ticket and when; null while it is Open.
     assigned_to_name?: string | null;
     started_at?: string | null;
+    // DATA-M22-2. Every take, newest first, the open one included.
+    claims?: Claim[];
+}
+
+// One take of a ticket. The three end fields are null while it is open.
+interface Claim {
+    id: number;
+    user_id: number;
+    user_name?: string | null;
+    started_at: string;
+    ended_at?: string | null;
+    ended_by_id?: number | null;
+    ended_by_name?: string | null;
+    outcome?: 'Released' | 'Closed' | null;
 }
 
 // DATA-M22: start takes an Open ticket, release puts an In Progress one back.
@@ -292,6 +306,29 @@ export default function MaintenancePage() {
                                         </p>
                                     )}
 
+                                    {/* DATA-M22-2. The takes that have ended, newest first as
+                                        the list sends them; the open one is the line above. Each
+                                        name and date in a <bdi>, so a Latin name or a date's
+                                        digits cannot pull the dash or the next field across. */}
+                                    {endedClaims(ticket).length > 0 && (
+                                        <div className="text-xs text-muted-foreground">
+                                            <p className="font-medium">היסטוריית טיפול:</p>
+                                            <ul className="space-y-0.5">
+                                                {endedClaims(ticket).map(c => (
+                                                    <li key={c.id}>
+                                                        <bdi>{c.user_name ?? '—'}</bdi>
+                                                        {' · '}<bdi>{formatDate(c.started_at)}</bdi>
+                                                        {' – '}<bdi>{formatDate(c.ended_at)}</bdi>
+                                                        {' · '}{c.outcome === 'Closed' ? 'נסגר' : 'שוחרר'}
+                                                        {c.ended_by_id !== c.user_id && (
+                                                            <> ע״י <bdi>{c.ended_by_name ?? '—'}</bdi></>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
                                     {/* Dates */}
                                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                                         <span>📅 נפתח: {formatDate(ticket.opened_at)}</span>
@@ -340,6 +377,11 @@ export default function MaintenancePage() {
             )}
         </div>
     );
+}
+
+// The claims that have ended, in the order the API sends them (newest first).
+function endedClaims(ticket: Ticket): Claim[] {
+    return (ticket.claims ?? []).filter(c => c.ended_at);
 }
 
 // ============================================================

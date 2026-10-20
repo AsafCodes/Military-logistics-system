@@ -148,6 +148,9 @@ def _expect_not_revived(db, item_id):
         (TicketStatus.CLOSED.value, None, None),
         (TicketStatus.OPEN.value, None, None),
     ]
+    # DATA-M22-2. Nor a claim: the claim is written only once the ticket has
+    # moved, so a start that waited and lost leaves no take behind.
+    assert db.query(models.TicketClaim).count() == 0
 
 
 def _close_first(client, item_id, first):

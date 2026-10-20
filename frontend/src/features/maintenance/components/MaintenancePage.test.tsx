@@ -181,3 +181,98 @@ describe('MaintenancePage takes and releases a ticket (DATA-M22)', () => {
         expect(cardOf('Radio').textContent).toContain('בטיפול אצל —');
     });
 });
+
+// DATA-M22-2. Every take is kept, and the card lists the ended ones.
+const CLAIMED_TICKET = {
+    ...TAKEN_TICKET,
+    assigned_to_name: 'Dana',
+    claims: [
+        // Newest first, as the API sends them; this one is still open.
+        { id: 13, user_id: 7, user_name: 'Dana', started_at: '2026-01-04T08:00:00Z' },
+        {
+            id: 12, user_id: 5, user_name: 'יוסי', started_at: '2026-01-03T08:00:00Z',
+            ended_at: '2026-01-03T12:30:00Z', ended_by_id: 6, ended_by_name: 'רון', outcome: 'Released',
+        },
+        {
+            id: 11, user_id: 6, user_name: 'רון', started_at: '2026-01-02T08:00:00Z',
+            ended_at: '2026-01-02T15:00:00Z', ended_by_id: 6, ended_by_name: 'רון', outcome: 'Released',
+        },
+    ],
+};
+
+function historyOf(equipmentName: string): string[] {
+    return Array.from(cardOf(equipmentName).querySelectorAll('li')).map(li => li.textContent ?? '');
+}
+
+describe('MaintenancePage shows who held a ticket (DATA-M22-2)', () => {
+    it('lists the ended takes newest first, and not the open one', async () => {
+        renderWithCapabilities(TEST_CAPABILITIES_NONE, [CLAIMED_TICKET]);
+        await screen.findByText('Radio');
+
+        expect(cardOf('Radio').textContent).toContain('היסטוריית טיפול:');
+        const lines = historyOf('Radio');
+        expect(lines).toHaveLength(2);
+        expect(lines[0]).toMatch(/^יוסי · .+ – .+ · שוחרר ע״י רון$/);
+        expect(lines[1]).toMatch(/^רון · .+ – .+ · שוחרר$/);
+        // The open take is the בטיפול אצל line, once.
+        expect(cardOf('Radio').textContent?.match(/Dana/g)).toHaveLength(1);
+    });
+
+    it('isolates each name and date in its own <bdi>', async () => {
+        renderWithCapabilities(TEST_CAPABILITIES_NONE, [CLAIMED_TICKET]);
+        await screen.findByText('Radio');
+
+        const items = Array.from(cardOf('Radio').querySelectorAll('li'));
+        const isolated = items.map(li => Array.from(li.querySelectorAll('bdi')).map(b => b.textContent));
+        // Taker, start, end, and the ender only where someone else ended it.
+        expect(isolated).toEqual([
+            ['יוסי', expect.any(String), expect.any(String), 'רון'],
+            ['רון', expect.any(String), expect.any(String)],
+        ]);
+        for (const [, started, ended] of isolated) {
+            expect(started).toMatch(/\d/);
+            expect(ended).toMatch(/\d/);
+        }
+    });
+
+    it('says a take ended with the close', async () => {
+        renderWithCapabilities(TEST_CAPABILITIES_NONE, [{
+            ...OPEN_TICKET, status: 'Closed', closed_at: '2026-01-02T15:00:00Z',
+            claims: [{
+                id: 11, user_id: 5, user_name: 'Tech Co A', started_at: '2026-01-02T08:00:00Z',
+                ended_at: '2026-01-02T15:00:00Z', ended_by_id: 6, ended_by_name: 'Master Admin', outcome: 'Closed',
+            }],
+        }]);
+        await screen.findByText('Rifle');
+
+        expect(historyOf('Rifle')).toEqual([
+            expect.stringMatching(/^Tech Co A · .+ – .+ · נסגר ע״י Master Admin$/),
+        ]);
+    });
+
+    it('shows no history for a ticket whose only take is open, or that was never taken', async () => {
+        renderWithCapabilities(TEST_CAPABILITIES_NONE, [
+            { ...OPEN_TICKET, claims: [] },
+            { ...TAKEN_TICKET, claims: [{ id: 1, user_id: 5, user_name: 'Tech Co A', started_at: '2026-01-02T08:30:00Z' }] },
+        ]);
+        await screen.findByText('Radio');
+
+        for (const name of ['Rifle', 'Radio']) {
+            expect(cardOf(name).textContent).not.toContain('היסטוריית טיפול');
+            expect(historyOf(name)).toEqual([]);
+        }
+    });
+
+    it('a take by or ended by someone with no name still shows', async () => {
+        renderWithCapabilities(TEST_CAPABILITIES_NONE, [{
+            ...OPEN_TICKET,
+            claims: [{
+                id: 11, user_id: 5, user_name: null, started_at: '2026-01-02T08:00:00Z',
+                ended_at: '2026-01-02T15:00:00Z', ended_by_id: 6, ended_by_name: null, outcome: 'Released',
+            }],
+        }]);
+        await screen.findByText('Rifle');
+
+        expect(historyOf('Rifle')).toEqual([expect.stringMatching(/^— · .+ – .+ · שוחרר ע״י —$/)]);
+    });
+});

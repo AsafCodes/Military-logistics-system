@@ -4,7 +4,9 @@ import datetime as dt
 from datetime import datetime
 
 from . import clock
-from .enums import ChangeReason, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus
+from .enums import (
+    ChangeReason, ClaimOutcome, ComplianceLevel, EquipmentStatus, EventType, Sensitivity, TicketStatus,
+)
 
 # --- Integers a request carries ---
 #
@@ -339,6 +341,23 @@ class FaultTypeResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class TicketClaimResponse(BaseModel):
+    """One take of a ticket, as TicketResponse.claims lists it. DATA-M22-2.
+
+    The three end fields are null while the claim is open, and set together
+    once it ends (ck_ticket_claims_ended). The names are Optional because
+    users.full_name is nullable (DATA-L11).
+    """
+    id: int
+    user_id: int
+    user_name: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    ended_by_id: Optional[int] = None
+    ended_by_name: Optional[str] = None
+    outcome: Optional[ClaimOutcome] = None
+
+
 class TicketResponse(BaseModel):
     id: int
     equipment_id: int
@@ -376,6 +395,11 @@ class TicketResponse(BaseModel):
     assigned_to_id: Optional[int] = None
     assigned_to_name: Optional[str] = None
     started_at: Optional[datetime] = None
+
+    # DATA-M22-2. Every take of the ticket, newest first, the open one
+    # included. The three fields above are the open claim's, kept on the
+    # ticket so the list needs no join to say who has it.
+    claims: List[TicketClaimResponse] = []
 
     # DATA-H2, named not fixed: neither exists on MaintenanceLog and neither is
     # ever passed, so both are constants presented as data -- the same falsehood

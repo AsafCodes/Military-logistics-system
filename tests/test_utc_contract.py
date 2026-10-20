@@ -430,6 +430,12 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
         headers=token_master,
     )
     assert report.status_code == 200, report.text
+    # DATA-M22-2: taken before the fix, so the ticket carries a claim with
+    # both ends set.
+    take = client.post(
+        f"/maintenance/tickets/{report.json()['ticket_id']}/start", headers=token_master
+    )
+    assert take.status_code == 200, take.text
     fix = client.post(f"/maintenance/fix/{item.id}", headers=token_master)
     assert fix.status_code == 200, fix.text
 
@@ -471,6 +477,11 @@ def test_every_timestamp_bearing_endpoint_emits_one_aware_utc_format(
     # TicketResponse declared two aliases for the column and not the column.
     collected += [t["closed_at"] for t in tickets.json() if t["closed_at"]]
     collected += [t["opened_at"] for t in tickets.json() if t["opened_at"]]
+    collected += [t["started_at"] for t in tickets.json() if t["started_at"]]
+    claims = [c for t in tickets.json() for c in t["claims"]]
+    assert claims, "the taken ticket's claim is missing from the sweep"
+    collected += [c["started_at"] for c in claims]
+    collected += [c["ended_at"] for c in claims if c["ended_at"]]
 
     assert len(collected) >= 8, f"expected timestamps from every endpoint, got {collected}"
 

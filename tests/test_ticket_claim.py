@@ -326,8 +326,9 @@ def test_an_assigned_user_cannot_be_deleted_out_from_under_the_ticket(
     assert start(client, tid, who="u_bat_tech").status_code == 200
     bat_tech = user_named(db_session, "u_bat_tech").id
     # Everything else that names this account, so the only thing left to
-    # refuse the delete is the ticket.
-    for table in ("group_memberships", "grants"):
+    # refuse the delete is the ticket. ticket_claims since DATA-M22-2, whose
+    # own RESTRICT is tests/test_ticket_claims.py's.
+    for table in ("group_memberships", "grants", "ticket_claims"):
         db_session.execute(text(f"DELETE FROM {table} WHERE user_id = :u"), {"u": bat_tech})
     db_session.commit()
 

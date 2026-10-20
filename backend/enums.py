@@ -174,6 +174,27 @@ class TicketStatus(str, enum.Enum):
     CLOSED = "Closed"
 
 
+class ClaimOutcome(str, enum.Enum):
+    """How a ticket_claims row ended. DATA-M22-2.
+
+    A claim is one take of a ticket: start_ticket opens it, and it ends one
+    of two ways:
+
+      - RELEASED: release_ticket put the ticket back in the queue. ended_by is
+        whoever released it, who need not be the person who took it.
+      - CLOSED: the ticket was closed while it was taken, by close_ticket or
+        fix_equipment (both through maintenance._close_tickets). ended_by is
+        the closer.
+
+    An open claim has no outcome, and ck_ticket_claims_ended keeps the three
+    end columns empty or filled together. The column is `outcome`, not
+    `status`, so that test_audit_trail.py's guard, which reads every `status`
+    write as an equipment status, has nothing to say about it.
+    """
+    RELEASED = "Released"
+    CLOSED = "Closed"
+
+
 class EventType(str, enum.Enum):
     """What a transaction_logs row says happened.
 

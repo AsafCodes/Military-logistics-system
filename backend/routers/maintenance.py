@@ -1,8 +1,8 @@
 """Maintenance Router - Tickets and fix endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload, selectinload
+from typing import Callable, List, Optional
 
 from ..database import get_db
 from ..dependencies import (
@@ -11,7 +11,7 @@ from ..dependencies import (
     scope_equipment_derived_query,
     require_status_authority,
 )
-from ..enums import Capability, ChangeReason, EquipmentStatus, EventType, TicketStatus
+from ..enums import Capability, ChangeReason, ClaimOutcome, EquipmentStatus, EventType, TicketStatus
 from .. import audit_trail
 from .. import authz
 from .. import clock
@@ -51,6 +51,12 @@ def get_tickets(
             joinedload(models.MaintenanceLog.equipment),
             joinedload(models.MaintenanceLog.fault_type),
             joinedload(models.MaintenanceLog.assignee),
+            # DATA-M22-2. One query for every ticket's claims, with both
+            # names joined in, rather than one per ticket.
+            selectinload(models.MaintenanceLog.claims).options(
+                joinedload(models.TicketClaim.user),
+                joinedload(models.TicketClaim.ended_by),
+            ),
         ),
         models.MaintenanceLog,
         current_user,
@@ -86,6 +92,19 @@ def _ticket_response(t: models.MaintenanceLog) -> schemas.TicketResponse:
         assigned_to_id=t.assigned_to_id,
         assigned_to_name=t.assignee.full_name if t.assignee else None,
         started_at=t.started_at,
+        claims=[
+            schemas.TicketClaimResponse(
+                id=c.id,
+                user_id=c.user_id,
+                user_name=c.user.full_name if c.user else None,
+                started_at=c.started_at,
+                ended_at=c.ended_at,
+                ended_by_id=c.ended_by_id,
+                ended_by_name=c.ended_by.full_name if c.ended_by else None,
+                outcome=c.outcome,
+            )
+            for c in t.claims
+        ],
     )
 
 
@@ -160,6 +179,23 @@ def _update_tickets(db: Session, *criteria, status: TicketStatus, **columns) -> 
     ).update({"status": status.value, **columns}, synchronize_session=False)
 
 
+def _end_claims(db: Session, ticket_ids, *, actor: models.User, outcome: ClaimOutcome, at) -> int:
+    """End the open claim of each ticket in `ticket_ids`. Returns how many. DATA-M22-2.
+
+    `ticket_ids` is a list or a SELECT of maintenance_logs.id. A ticket with
+    no open claim, an Open one, is simply not matched. ended_by is `actor`,
+    who released, closed or (over a hand-edited leftover, see start_ticket)
+    took the ticket, and need not be who took the claim being ended.
+    """
+    return db.query(models.TicketClaim).filter(
+        models.TicketClaim.ended_at.is_(None),
+        models.TicketClaim.ticket_id.in_(ticket_ids),
+    ).update(
+        {"ended_at": at, "ended_by_id": actor.id, "outcome": outcome.value},
+        synchronize_session=False,
+    )
+
+
 def _close_tickets(db: Session, *criteria, actor: models.User) -> int:
     """Close the matching tickets that are not closed yet. Returns how many.
 
@@ -167,13 +203,25 @@ def _close_tickets(db: Session, *criteria, actor: models.User) -> int:
     was in the first schema and nothing wrote it before. assigned_to_id and
     started_at are left as they are (DATA-M22): a ticket someone took says
     who worked it as well as who closed it.
+
+    A taken ticket's open claim ends here too, as CLOSED by the closer at the
+    ticket's closed_at (DATA-M22-2). Before the tickets' UPDATE, because the
+    claims are found through the tickets that are not closed yet.
     """
+    now = clock.utcnow()
+    _end_claims(
+        db,
+        select(models.MaintenanceLog.id).where(*criteria, _not_closed()),
+        actor=actor,
+        outcome=ClaimOutcome.CLOSED,
+        at=now,
+    )
     return _update_tickets(
         db,
         *criteria,
         _not_closed(),
         status=TicketStatus.CLOSED,
-        closed_at=clock.utcnow(),
+        closed_at=now,
         technician_id=actor.id,
     )
 
@@ -187,13 +235,15 @@ def _transition(
     status: TicketStatus,
     columns: dict,
     conflict: str,
+    claim: Callable[[models.MaintenanceLog], None],
 ) -> schemas.TicketResponse:
     """Move one ticket from `expected` to `status`, writing `columns` with it.
     DATA-M22.
 
     start_ticket and release_ticket, in close_ticket's order: resolve within
     the caller's scope (404), gate on RESOLVE_FAULT over the item's group,
-    take the item lock, then write.
+    take the item lock, then write. `claim` writes the ticket_claims side
+    (DATA-M22-2) once the ticket has moved, in the same transaction.
 
     The write names `expected` as a criterion, and a write that matched no
     row is the 409. That is the status check, made by the UPDATE itself
@@ -207,8 +257,8 @@ def _transition(
     before and after), and transaction_logs records acts on the item, which a
     take is not. FAULT is different: EventType writes it unconditionally
     because a report is about the item. Who holds a ticket and since when is
-    on the ticket itself. The cost is that the ticket keeps only the current
-    claim, so a release leaves no trace of who held it.
+    on the ticket itself, and every take, released ones included, is a row
+    in ticket_claims (DATA-M22-2).
     """
     ticket = scope_equipment_derived_query(
         db.query(models.MaintenanceLog).filter(models.MaintenanceLog.id == ticket_id),
@@ -230,6 +280,7 @@ def _transition(
     )
     if moved == 0:
         raise HTTPException(status_code=409, detail=conflict)
+    claim(ticket)
     db.commit()
     db.refresh(ticket)
     return _ticket_response(ticket)
@@ -487,15 +538,30 @@ def start_ticket(
     RESOLVE_FAULT, the verb that closes it. Taking a ticket is the first half
     of resolving it, and a verb of its own would be held by exactly the rows
     that hold this one (see Capability's docstring).
+
+    Opens a claim (DATA-M22-2) starting at the ticket's started_at.
+
+    An Open ticket has no open claim unless the database was edited by hand
+    (a status set back to Open), and a second open claim would break
+    uq_ticket_claims_open_ticket with a 500, which release cannot clear since
+    it refuses an Open ticket. So a leftover open claim is ended first, as a
+    release by the taker would end it: Released, at the new claim's start.
     """
+    now = clock.utcnow()
+
+    def claim(ticket):
+        _end_claims(db, [ticket.id], actor=current_user, outcome=ClaimOutcome.RELEASED, at=now)
+        db.add(models.TicketClaim(ticket_id=ticket.id, user_id=current_user.id, started_at=now))
+
     return _transition(
         db,
         ticket_id,
         current_user,
         expected=TicketStatus.OPEN,
         status=TicketStatus.IN_PROGRESS,
-        columns={"assigned_to_id": current_user.id, "started_at": clock.utcnow()},
+        columns={"assigned_to_id": current_user.id, "started_at": now},
         conflict="Ticket is not open",
+        claim=claim,
     )
 
 
@@ -511,6 +577,9 @@ def release_ticket(
 
     Any RESOLVE_FAULT holder over the item may release it, not only whoever
     took it, so a ticket someone took and walked away from can be freed.
+
+    Ends the open claim as RELEASED by the caller (DATA-M22-2), which is what
+    keeps who held the ticket once the two columns are cleared.
     """
     return _transition(
         db,
@@ -520,4 +589,7 @@ def release_ticket(
         status=TicketStatus.OPEN,
         columns={"assigned_to_id": None, "started_at": None},
         conflict="Ticket is not in progress",
+        claim=lambda ticket: _end_claims(
+            db, [ticket.id], actor=current_user, outcome=ClaimOutcome.RELEASED, at=clock.utcnow()
+        ),
     )
